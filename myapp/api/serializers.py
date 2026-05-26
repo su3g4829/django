@@ -1,4 +1,4 @@
-"""REST Framework Serializer 定義。
+﻿"""REST Framework Serializer 定義。
 
 這個檔案集中放置 API 請求與回應用的 Serializer。
 目前專案仍以本地 JSON 與 service layer 為核心，
@@ -938,3 +938,69 @@ class StaffReviewDashboardSerializer(serializers.Serializer):
     """
     pending_products = ProductSerializer(many=True)
     seller_requests = DemoUserSerializer(many=True)
+
+
+class NewebpaySandboxPaymentPrepareSerializer(serializers.Serializer):
+    """藍新正式 sandbox 支付準備參數。"""
+
+    item_desc_override = serializers.CharField(required=False, allow_blank=True)
+    email = serializers.EmailField(required=False, allow_blank=True)
+    notify_url = serializers.CharField(required=False, allow_blank=True)
+    return_url = serializers.CharField(required=False, allow_blank=True)
+    client_back_url = serializers.CharField(required=False, allow_blank=True)
+
+
+class NewebpaySandboxPaymentPreparedSerializer(serializers.Serializer):
+    """藍新 sandbox form post payload。"""
+
+    provider = serializers.CharField()
+    mode = serializers.CharField()
+    order_id = serializers.IntegerField()
+    buyer_username = serializers.CharField()
+    gateway_url = serializers.CharField()
+    form_method = serializers.CharField()
+    merchant_order_no = serializers.CharField()
+    trade_info_params = serializers.DictField()
+    form_fields = serializers.DictField()
+    note = serializers.CharField()
+
+
+class NewebpaySandboxPaymentCallbackSerializer(serializers.Serializer):
+    """藍新支付 sandbox callback 原始欄位。"""
+
+    Status = serializers.CharField()
+    MerchantID = serializers.CharField()
+    TradeInfo = serializers.CharField()
+    TradeSha = serializers.CharField()
+
+
+class NewebpaySandboxLogisticsPrepareSerializer(serializers.Serializer):
+    """藍新物流 sandbox scaffold 參數。"""
+
+    logistics_type = serializers.CharField(required=False, allow_blank=True)
+    shipment_note = serializers.CharField(required=False, allow_blank=True)
+
+
+class NewebpaySandboxLogisticsPreparedSerializer(serializers.Serializer):
+    """藍新物流 sandbox scaffold 回傳資料。"""
+
+    provider = serializers.CharField()
+    mode = serializers.CharField()
+    order_id = serializers.IntegerField()
+    seller_username = serializers.CharField()
+    logistics_type = serializers.CharField()
+    callback_url = serializers.CharField(required=False, allow_blank=True)
+    create_url = serializers.CharField(required=False, allow_blank=True)
+    status_url = serializers.CharField(required=False, allow_blank=True)
+    suggested_payload = serializers.DictField()
+    note = serializers.CharField()
+
+
+class NewebpaySandboxLogisticsCallbackSerializer(serializers.Serializer):
+    """藍新物流 sandbox callback 收件資料。"""
+
+    MerchantID = serializers.CharField(required=False, allow_blank=True)
+    LogisticsID = serializers.CharField(required=False, allow_blank=True)
+    MerchantOrderNo = serializers.CharField(required=False, allow_blank=True)
+    Status = serializers.CharField(required=False, allow_blank=True)
+    Message = serializers.CharField(required=False, allow_blank=True)

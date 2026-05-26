@@ -77,6 +77,7 @@ CSRF_TRUSTED_ORIGINS = _env_list(
 FRONTEND_ORIGIN = os.getenv("STORE_FRONTEND_ORIGIN", "http://localhost:3000").rstrip("/")
 
 
+
 # Django 內建與第三方 app 註冊清單。
 INSTALLED_APPS = [
     "django.contrib.admin",

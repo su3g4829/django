@@ -1,4 +1,4 @@
-"""DRF API 視圖層。
+﻿"""DRF API 視圖層。
 
 這個模組負責把 HTTP 請求轉交給既有 service / repository，
 並使用 DRF `Response` 回傳統一的 JSON 格式。
@@ -25,7 +25,9 @@ from ..services import cart as cart_service
 from ..services import community as community_service
 from ..services import customer_center
 from ..services import newebpay_logistics as newebpay_logistics_service
+from ..services import newebpay_logistics_real as newebpay_logistics_real_service
 from ..services import newebpay_payment as newebpay_payment_service
+from ..services import newebpay_payment_real as newebpay_payment_real_service
 from ..services import orders as order_service
 from ..services import personalization as personalization_service
 from ..services import price_compare as price_compare_service
@@ -881,6 +883,109 @@ class NewebpayLogisticsCallbackApi(APIView):
         except ValueError as exc:
             return _error(str(exc), status.HTTP_404_NOT_FOUND)
         return Response({"detail": "NewebPay logistics mock callback processed.", "record": record})
+
+
+class BuyerNewebpaySandboxPaymentPrepareApi(APIView):
+    """準備藍新正式 sandbox 支付 form payload。
+
+    這支 API 不直接向藍新送單，而是回傳前端需要 POST 到藍新 gateway 的欄位資料。
+    """
+
+    permission_classes = [IsDemoAuthenticated]
+
+    def get(self, request, order_id: int):
+        """回傳藍新 sandbox 支付設定摘要。"""
+        return Response(newebpay_payment_real_service.get_runtime_summary())
+
+    def post(self, request, order_id: int):
+        """依訂單內容組出藍新支付 sandbox form payload。"""
+        user = get_demo_user(request)
+        payload = _validated(sz.NewebpaySandboxPaymentPrepareSerializer, request.data)
+        try:
+            prepared = newebpay_payment_real_service.prepare_checkout(
+                order_id,
+                user["username"],
+                item_desc_override=str(payload.get("item_desc_override", "")),
+                email=str(payload.get("email", "")),
+                notify_url=str(payload.get("notify_url", "")),
+                return_url=str(payload.get("return_url", "")),
+                client_back_url=str(payload.get("client_back_url", "")),
+            )
+        except newebpay_payment_real_service.NewebpayConfigurationError as exc:
+            return _error(str(exc), status.HTTP_503_SERVICE_UNAVAILABLE)
+        except newebpay_payment_real_service.NewebpayDependencyError as exc:
+            return _error(str(exc), status.HTTP_503_SERVICE_UNAVAILABLE)
+        except ValueError as exc:
+            return _error(str(exc), status.HTTP_404_NOT_FOUND)
+        return Response(prepared)
+
+
+class NewebpaySandboxPaymentCallbackApi(APIView):
+    """接收藍新正式 sandbox payment callback。"""
+
+    permission_classes = [AllowAny]
+    authentication_classes: list = []
+
+    def post(self, request):
+        """驗證 TradeSha 並解密 TradeInfo。"""
+        payload = _validated(sz.NewebpaySandboxPaymentCallbackSerializer, request.data)
+        try:
+            record = newebpay_payment_real_service.handle_callback(
+                status=str(payload["Status"]),
+                merchant_id=str(payload["MerchantID"]),
+                trade_info=str(payload["TradeInfo"]),
+                trade_sha=str(payload["TradeSha"]),
+            )
+        except newebpay_payment_real_service.NewebpayConfigurationError as exc:
+            return _error(str(exc), status.HTTP_503_SERVICE_UNAVAILABLE)
+        except newebpay_payment_real_service.NewebpayDependencyError as exc:
+            return _error(str(exc), status.HTTP_503_SERVICE_UNAVAILABLE)
+        except ValueError as exc:
+            return _error(str(exc), status.HTTP_400_BAD_REQUEST)
+        return Response({"detail": "NewebPay sandbox payment callback processed.", "record": record})
+
+
+class SellerNewebpaySandboxLogisticsPrepareApi(APIView):
+    """建立藍新物流 sandbox scaffold 資料。"""
+
+    permission_classes = [IsSellerOrAdminDemoUser]
+
+    def get(self, request, order_id: int):
+        """回傳藍新物流 scaffold 設定摘要。"""
+        return Response(newebpay_logistics_real_service.get_runtime_summary())
+
+    def post(self, request, order_id: int):
+        """把賣家訂單整理成物流 sandbox scaffold payload。"""
+        user = get_demo_user(request)
+        payload = _validated(sz.NewebpaySandboxLogisticsPrepareSerializer, request.data)
+        try:
+            prepared = newebpay_logistics_real_service.prepare_logistics_request(
+                order_id,
+                user["username"],
+                logistics_type=str(payload.get("logistics_type", "")) or "UNIMARTC2C",
+                shipment_note=str(payload.get("shipment_note", "")),
+            )
+        except newebpay_logistics_real_service.NewebpayLogisticsConfigurationError as exc:
+            return _error(str(exc), status.HTTP_503_SERVICE_UNAVAILABLE)
+        except ValueError as exc:
+            return _error(str(exc), status.HTTP_404_NOT_FOUND)
+        return Response(prepared)
+
+
+class NewebpaySandboxLogisticsCallbackApi(APIView):
+    """接收藍新物流 sandbox callback 原始資料。"""
+
+    permission_classes = [AllowAny]
+    authentication_classes: list = []
+
+    def post(self, request):
+        """目前先原樣收件，供後續對照物流規格欄位。"""
+        _validated(sz.NewebpaySandboxLogisticsCallbackSerializer, request.data)
+        try:
+            record = newebpay_logistics_real_service.handle_callback(dict(request.data))
+        except newebpay_logistics_real_service.NewebpayLogisticsConfigurationError as exc:
+            return _error(str(exc), status.HTTP_503_SERVICE_UNAVAILABLE)
+        return Response({"detail": "NewebPay sandbox logistics callback processed.", "record": record})
 
 
 class SellerOrderDetailApi(APIView):

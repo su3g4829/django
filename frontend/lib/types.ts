@@ -355,10 +355,14 @@ export type Order = {
   display_name: string
   status: string
   status_label?: string
+  seller_status?: string
+  seller_status_label?: string
   created_at: string
   created_at_display?: string
   /** 訂單金額彙總。 */
   totals?: Record<string, string>
+  /** ?????????? */
+  seller_totals?: Record<string, string>
   /** 訂單項目。 */
   items?: Array<{
     id: number
@@ -398,6 +402,85 @@ export type Order = {
       line_total: string
     }>
   }>
+}
+
+/**
+ * 藍新支付 sandbox 設定摘要。
+ *
+ * 用途：
+ * - 顯示後端是否已填好 MerchantID / HashKey / HashIV
+ * - 顯示目前沙箱 gateway 與 callback URL 設定
+ */
+export type NewebpaySandboxPaymentSummary = {
+  provider: string
+  mode: string
+  gateway_url: string
+  has_crypto_dependency: boolean
+  configured: boolean
+  missing_settings: string[]
+  merchant_id?: string
+  notify_url?: string
+  return_url?: string
+  client_back_url?: string
+}
+
+/**
+ * 藍新支付 sandbox 準備結果。
+ *
+ * 用途：
+ * - 前端可把 form_fields 組成 HTML form 後 POST 到 gateway_url
+ * - 現階段也可直接顯示 payload，方便人工檢查
+ */
+export type NewebpaySandboxPaymentPrepared = {
+  provider: string
+  mode: string
+  order_id: number
+  buyer_username: string
+  gateway_url: string
+  form_method: string
+  merchant_order_no: string
+  trade_info_params: Record<string, string | number>
+  form_fields: Record<string, string | number>
+  note: string
+}
+
+/**
+ * 藍新物流 sandbox scaffold 設定摘要。
+ *
+ * 用途：
+ * - 顯示物流測試所需的 merchant 與 callback 設定
+ * - 若 configured 為 false，可直接提示缺少哪些設定
+ */
+export type NewebpaySandboxLogisticsSummary = {
+  provider: string
+  mode: string
+  configured: boolean
+  missing_settings?: string[]
+  merchant_id?: string
+  callback_url?: string
+  create_url?: string
+  status_url?: string
+  note?: string
+}
+
+/**
+ * 藍新物流 sandbox scaffold 準備結果。
+ *
+ * 用途：
+ * - 顯示訂單被整理後，建議送往物流 API 的 payload
+ * - 現階段仍是 scaffold，不直接向藍新送件
+ */
+export type NewebpaySandboxLogisticsPrepared = {
+  provider: string
+  mode: string
+  order_id: number
+  seller_username: string
+  logistics_type: string
+  callback_url?: string
+  create_url?: string
+  status_url?: string
+  suggested_payload: Record<string, string | number>
+  note: string
 }
 
 /**

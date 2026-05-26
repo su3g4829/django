@@ -15,7 +15,7 @@ import type { NextRequest } from 'next/server'
  * 預設打本機 Django 開發伺服器；
  * 若前後端分開部署，可改由環境變數 `DJANGO_API_ORIGIN` 指向實際後端。
  */
-const BACKEND_ORIGIN = process.env.DJANGO_API_ORIGIN ?? 'http://127.0.0.1:8000'
+const BACKEND_ORIGIN = process.env.DJANGO_API_ORIGIN ?? 'http://127.0.0.1:8080'
 
 /**
  * 將 Next.js 收到的 API 請求代理到 Django。
@@ -78,7 +78,21 @@ async function proxy(request: NextRequest, pathSegments: string[]) {
   }
 
   /** Django 回傳的原始 response。 */
-  const upstream = await fetch(upstreamUrl, init)
+  let upstream: Response
+  try {
+    upstream = await fetch(upstreamUrl, init)
+  } catch (error) {
+    const detail =
+      error instanceof Error
+        ? `Django backend unavailable: ${BACKEND_ORIGIN}`
+        : `Django backend unavailable: ${BACKEND_ORIGIN}`
+    return new Response(JSON.stringify({ detail }), {
+      status: 503,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    })
+  }
   /** 先以文字讀出 response body，再原樣包裝回前端 response。 */
   const body = await upstream.text()
   /** 回傳給前端頁面或元件的 Next.js Response。 */

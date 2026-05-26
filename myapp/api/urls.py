@@ -32,11 +32,21 @@ urlpatterns = [
     path("me/orders/<int:order_id>/cancel-request/", views.BuyerCancelRequestApi.as_view(), name="api-buyer-order-cancel-request"),
     path("me/orders/<int:order_id>/refund-request/", views.BuyerRefundRequestApi.as_view(), name="api-buyer-order-refund-request"),
     path("me/orders/<int:order_id>/newebpay-payment/", views.BuyerNewebpayPaymentApi.as_view(), name="api-buyer-newebpay-payment"),
+    path(
+        "me/orders/<int:order_id>/newebpay-payment/sandbox/",
+        views.BuyerNewebpaySandboxPaymentPrepareApi.as_view(),
+        name="api-buyer-newebpay-payment-sandbox",
+    ),
     path("me/sales/", views.SellerOrdersApi.as_view(), name="api-seller-orders"),
     path("me/sales/report/", views.SellerSalesReportApi.as_view(), name="api-seller-sales-report"),
     path("me/sales/<int:order_id>/", views.SellerOrderDetailApi.as_view(), name="api-seller-order-detail"),
     path("me/sales/<int:order_id>/update/", views.SellerOrderUpdateApi.as_view(), name="api-seller-order-update"),
     path("me/sales/<int:order_id>/newebpay-logistics/", views.SellerNewebpayLogisticsApi.as_view(), name="api-seller-newebpay-logistics"),
+    path(
+        "me/sales/<int:order_id>/newebpay-logistics/sandbox/",
+        views.SellerNewebpaySandboxLogisticsPrepareApi.as_view(),
+        name="api-seller-newebpay-logistics-sandbox",
+    ),
 
     # 賣家商品管理
     path("me/products/", views.SellerProductsApi.as_view(), name="api-seller-products"),
@@ -52,6 +62,16 @@ urlpatterns = [
     path("checkout/confirm/", views.CheckoutConfirmApi.as_view(), name="api-checkout-confirm"),
     path("integrations/newebpay/payment/callback/", views.NewebpayPaymentCallbackApi.as_view(), name="api-newebpay-payment-callback"),
     path("integrations/newebpay/logistics/callback/", views.NewebpayLogisticsCallbackApi.as_view(), name="api-newebpay-logistics-callback"),
+    path(
+        "integrations/newebpay/payment/sandbox/callback/",
+        views.NewebpaySandboxPaymentCallbackApi.as_view(),
+        name="api-newebpay-payment-sandbox-callback",
+    ),
+    path(
+        "integrations/newebpay/logistics/sandbox/callback/",
+        views.NewebpaySandboxLogisticsCallbackApi.as_view(),
+        name="api-newebpay-logistics-sandbox-callback",
+    ),
 
     # 後台管理
     path("staff/reviews/", views.StaffReviewDashboardApi.as_view(), name="api-admin-review-dashboard"),

@@ -74,7 +74,7 @@ npm install
 範例：
 
 ```env
-DJANGO_API_ORIGIN=http://127.0.0.1:8000
+DJANGO_API_ORIGIN=http://127.0.0.1:8080
 ```
 
 ## 啟動方式
@@ -101,7 +101,7 @@ npm run dev
 
 後端預設會跑在：
 
-- `http://127.0.0.1:8000`
+- `http://127.0.0.1:8080`
 
 ## 常用指令
 

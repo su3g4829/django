@@ -1,4 +1,4 @@
-"""å°æ¡æ¸¬è©¦éåã
+﻿"""å°æ¡æ¸¬è©¦éåã
 
 éè£¡ä¸»è¦ä½¿ç¨ `SimpleTestCase` æ­é
 æ¬å° JSON fixtureï¼
@@ -2179,3 +2179,30 @@ class ProductFeatureTests(SimpleTestCase):
         )
         self.assertEqual(callback_response.status_code, 200)
         self.assertEqual(callback_response.json()["record"]["status"], "picked_up")
+
+    def test_newebpay_payment_sandbox_prepare_requires_configuration(self):
+        self._login(username="buyer")
+        self._add_product_to_cart("acme-mug", qty=1)
+        order_id = self._confirm_checkout().json()["id"]
+
+        config_response = self.client.get(f"/api/v1/me/orders/{order_id}/newebpay-payment/sandbox/")
+        self.assertEqual(config_response.status_code, 200)
+        self.assertFalse(config_response.json()["configured"])
+
+        prepare_response = self._post_json(f"/api/v1/me/orders/{order_id}/newebpay-payment/sandbox/", {})
+        self.assertEqual(prepare_response.status_code, 503)
+
+    def test_newebpay_logistics_sandbox_prepare_requires_configuration(self):
+        self._write_products(build_seller_order_products())
+        self._login(username="buyer")
+        self._add_product_to_cart("alice-mug", qty=1)
+        order_id = self._confirm_checkout().json()["id"]
+        self._logout()
+
+        self._login(username="alice")
+        config_response = self.client.get(f"/api/v1/me/sales/{order_id}/newebpay-logistics/sandbox/")
+        self.assertEqual(config_response.status_code, 200)
+        self.assertFalse(config_response.json()["configured"])
+
+        prepare_response = self._post_json(f"/api/v1/me/sales/{order_id}/newebpay-logistics/sandbox/", {})
+        self.assertEqual(prepare_response.status_code, 503)
