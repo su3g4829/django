@@ -14,6 +14,7 @@
  */
 
 import { FormEvent, useEffect, useMemo, useState } from 'react'
+import { useParams } from 'next/navigation'
 
 import { apiFetch } from '@/lib/api'
 import type { Product } from '@/lib/types'
@@ -23,7 +24,8 @@ type EditableProduct = Product & {
   variants_text?: string
 }
 
-export default function SellerProductEditPage({ params }: { params: { slug: string } }) {
+export default function SellerProductEditPage() {
+  const params = useParams<{ slug: string }>()
   /** 從動態路由解析出的商品 slug。 */
   const slug = useMemo(() => params.slug, [params.slug])
   /** 後端載入的原始商品資料。 */

@@ -23,6 +23,7 @@
  */
 
 import Link from 'next/link'
+import { useParams } from 'next/navigation'
 import { useEffect, useMemo, useState } from 'react'
 
 import { apiFetch } from '@/lib/api'
@@ -41,7 +42,8 @@ type RecommendationPayload = {
 type ReviewListPayload = { items: Review[] }
 type QuestionListPayload = { items: Question[] }
 
-export default function ProductDetailPage({ params }: { params: { slug: string } }) {
+export default function ProductDetailPage() {
+  const params = useParams<{ slug: string }>()
   /** 目前頁面的商品 slug。 */
   const slug = useMemo(() => params.slug, [params.slug])
 

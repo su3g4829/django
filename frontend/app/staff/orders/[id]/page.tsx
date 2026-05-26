@@ -13,11 +13,13 @@
  */
 
 import { useEffect, useMemo, useState } from 'react'
+import { useParams } from 'next/navigation'
 
 import { apiFetch } from '@/lib/api'
 import type { Order } from '@/lib/types'
 
-export default function AdminOrderDetailPage({ params }: { params: { id: string } }) {
+export default function AdminOrderDetailPage() {
+  const params = useParams<{ id: string }>()
   /** 從動態路由解析出的訂單編號。 */
   const orderId = useMemo(() => params.id, [params.id])
   /** 訂單詳情資料。 */

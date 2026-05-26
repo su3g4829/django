@@ -14,6 +14,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react'
+import { useParams } from 'next/navigation'
 
 import { apiFetch } from '@/lib/api'
 import type {
@@ -32,7 +33,8 @@ const INITIAL_LOGISTICS_FORM: SandboxLogisticsFormState = {
   shipment_note: '',
 }
 
-export default function SellerOrderDetailPage({ params }: { params: { id: string } }) {
+export default function SellerOrderDetailPage() {
+  const params = useParams<{ id: string }>()
   /** 目前瀏覽中的賣家訂單 ID。 */
   const orderId = useMemo(() => params.id, [params.id])
   /** 賣家可見的訂單明細。 */
