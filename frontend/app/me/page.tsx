@@ -1,14 +1,22 @@
+'use client'
+
 /**
- * 會員入口頁
- *
- * 功能：
- * - 將 `/me` 轉址到會員中心首頁 `/me/dashboard`
+ * `/me` 是會員中心入口轉址頁。
+ * 改成 client-side redirect，避免 Next.js 15 prerender 純 redirect page 的問題。
  */
 
-import { redirect } from 'next/navigation'
+import { useEffect } from 'react'
+import { useRouter } from 'next/navigation'
 
-/** 會員中心根路徑轉址頁。 */
+/** 將 `/me` 導向真正的會員儀表板 `/me/dashboard`。 */
 export default function MeRootPage() {
-  /** 純轉址頁，將 `/me` 統一導向會員中心首頁。 */
-  redirect('/me/dashboard')
+  const router = useRouter()
+
+  /** 掛載後立即導向會員儀表板。 */
+  useEffect(() => {
+    router.replace('/me/dashboard')
+  }, [router])
+
+  /** 轉址期間顯示簡單提示。 */
+  return <p className="text-muted">Redirecting to member dashboard...</p>
 }
