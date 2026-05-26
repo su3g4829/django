@@ -1,0 +1,20 @@
+[
+  {
+    "id": 1,
+    "topic": "general",
+    "author": "Nora",
+    "title": "Best mug for office use?",
+    "body": "I want something easy to clean and good for daily coffee.",
+    "tags": ["mug", "office"],
+    "votes": 3,
+    "created_at": "2026-04-25T09:00:00+08:00",
+    "replies": [
+      {
+        "id": 1,
+        "author": "Store Team",
+        "body": "The ACME Mug is our most common office pick because it is compact and dishwasher safe.",
+        "created_at": "2026-04-25T09:45:00+08:00"
+      }
+    ]
+  }
+]

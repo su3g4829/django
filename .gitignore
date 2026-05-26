@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+db.sqlite3
+store/.env
+frontend/.env.local
+frontend/node_modules/
+node_modules/
+frontend/.next/
+.vscode/
+media/
+staticfiles/
+var/
+tmp_unicode.txt

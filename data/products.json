@@ -1,0 +1,5 @@
+﻿[
+  {"id": 1, "slug": "acme-mug", "name": "ACME Mug", "price": 12.9, "brand":"ACME", "category":"kitchen", "tags":["mug","ceramic"], "images":[], "specs":{"capacity_ml":350}},
+  {"id": 2, "slug": "acme-tee", "name":"ACME Tee", "price": 24.0, "brand":"ACME", "category":"apparel", "tags":["shirt"], "images":[], "specs":{"size":"M"}},
+  {"id": 3, "slug": "acme-bottle", "name":"ACME Bottle", "price": 18.5, "brand":"ACME", "category":"outdoor", "tags":["bottle","stainless"], "images":[], "specs":{"capacity_ml":750}}
+]

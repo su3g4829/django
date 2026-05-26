@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+<!--
+  頁面說明：
+  1. 顯示目前 API canonical 路由與 legacy alias 對照。
+  2. 方便確認哪些路由已經由 DRF 接手。
+-->
+
+{% block title %}API 路由紀錄{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center flex-wrap gap-3 mb-4">
+  <div>
+    <h1 class="h3 mb-1">API 路由紀錄</h1>
+    <p class="text-secondary mb-0">列出 canonical DRF 路由、legacy alias 與對應 view。</p>
+  </div>
+  <a href="/api/v1/schema/swagger-ui/" class="btn btn-outline-primary">開啟 Swagger UI</a>
+</div>
+
+<div class="row g-4 mb-4">
+  <div class="col-md-6">
+    <div class="card shadow-sm h-100">
+      <div class="card-body">
+        <h2 class="h6 text-secondary">Canonical DRF 路由</h2>
+        <div class="display-6">{{ summary.canonical_count }}</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-6">
+    <div class="card shadow-sm h-100">
+      <div class="card-body">
+        <h2 class="h6 text-secondary">Legacy Alias 路由</h2>
+        <div class="display-6">{{ summary.aliased_count }}</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% for group in route_groups %}
+  <section class="mb-4">
+    <h2 class="h4 mb-3">{{ group.group }}</h2>
+    <div class="row g-4">
+      {% for route in group.routes %}
+        <div class="col-12">
+          <article class="card shadow-sm">
+            <div class="card-body">
+              <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+                <strong>{{ route.name }}</strong>
+                <span class="badge {% if route.status == 'canonical' %}text-bg-primary{% else %}text-bg-secondary{% endif %}">
+                  {% if route.status == "canonical" %}canonical{% else %}legacy alias{% endif %}
+                </span>
+              </div>
+
+              <dl class="row mb-0 mt-3">
+                <dt class="col-sm-2">Canonical</dt>
+                <dd class="col-sm-10"><code>{{ route.canonical }}</code></dd>
+
+                {% if route.legacy %}
+                  <dt class="col-sm-2">Legacy</dt>
+                  <dd class="col-sm-10"><code>{{ route.legacy }}</code></dd>
+                {% endif %}
+
+                <dt class="col-sm-2">View</dt>
+                <dd class="col-sm-10"><code>{{ route.view }}</code></dd>
+
+                <dt class="col-sm-2">備註</dt>
+                <dd class="col-sm-10">{{ route.notes }}</dd>
+              </dl>
+            </div>
+          </article>
+        </div>
+      {% endfor %}
+    </div>
+  </section>
+{% endfor %}
+{% endblock %}

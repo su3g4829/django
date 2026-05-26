@@ -1,0 +1,18 @@
+[
+  {
+    "id": 1,
+    "product_id": 1,
+    "author": "Eva",
+    "title": "Can this go in the dishwasher?",
+    "body": "I want to use it every day and need easy cleaning.",
+    "created_at": "2026-04-20T10:15:00+08:00",
+    "answers": [
+      {
+        "id": 1,
+        "author": "Store Team",
+        "body": "Yes. The mug is safe for regular dishwasher use.",
+        "created_at": "2026-04-20T11:00:00+08:00"
+      }
+    ]
+  }
+]

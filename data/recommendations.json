@@ -1,0 +1,17 @@
+[
+  {
+    "product_id": 1,
+    "similar_ids": [3, 2],
+    "also_bought_ids": [2]
+  },
+  {
+    "product_id": 2,
+    "similar_ids": [1],
+    "also_bought_ids": [3]
+  },
+  {
+    "product_id": 3,
+    "similar_ids": [1],
+    "also_bought_ids": [2]
+  }
+]

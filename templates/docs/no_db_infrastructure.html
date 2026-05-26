@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+<!--
+  頁面說明：
+  1. 彙整目前在不使用資料庫前提下導入的上線級基礎設施。
+  2. 包含環境設定、快取、限流、健康檢查與 logging。
+-->
+
+{% block title %}No-DB 基礎設施{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+  <h1 class="h3 mb-2">No-DB 基礎設施</h1>
+  <p class="text-secondary mb-0">
+    這份頁面用來說明在尚未導入 ORM / 資料庫前，專案已補上的 production-oriented 基礎能力。
+  </p>
+</div>
+
+<div class="row g-4 mb-4">
+  <div class="col-md-3">
+    <div class="card shadow-sm h-100">
+      <div class="card-body">
+        <h2 class="h6 text-secondary">Environment</h2>
+        <div><code>{{ summary.environment }}</code></div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card shadow-sm h-100">
+      <div class="card-body">
+        <h2 class="h6 text-secondary">Debug</h2>
+        <div><code>{{ summary.debug }}</code></div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card shadow-sm h-100">
+      <div class="card-body">
+        <h2 class="h6 text-secondary">Cache Backend</h2>
+        <div><code>{{ summary.cache_backend }}</code></div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card shadow-sm h-100">
+      <div class="card-body">
+        <h2 class="h6 text-secondary">Rate Limit</h2>
+        <div><code>{{ summary.rate_limit_enabled }}</code></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card shadow-sm mb-4">
+  <div class="card-body">
+    <h2 class="h5">已導入能力</h2>
+    <ul class="mb-0">
+      <li>環境變數控制 `DEBUG`、`ALLOWED_HOSTS`、Cookie 安全、HSTS 與 proxy header。</li>
+      <li>快取支援 `locmem` / `filebased`，後續可再切換 Redis。</li>
+      <li>靜態檔、上傳、快取與 log 目錄會自動建立。</li>
+      <li>每個 request 會附帶 `X-Request-ID`，並寫入 access log。</li>
+      <li>`/api/v1/` 與登入相關寫入有 cache-based rate limiting。</li>
+      <li>提供 liveness / readiness health check。</li>
+    </ul>
+  </div>
+</div>
+
+<div class="card shadow-sm mb-4">
+  <div class="card-body">
+    <h2 class="h5">健康檢查路由</h2>
+    <ul class="mb-0">
+      {% for route in health_routes %}
+        <li><code>{{ route.path }}</code>：{{ route.purpose }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+</div>
+
+<div class="card shadow-sm mb-4">
+  <div class="card-body">
+    <h2 class="h5">目錄與 Session</h2>
+    <ul class="mb-0">
+      <li>Log 目錄：<code>{{ summary.log_dir }}</code></li>
+      <li>Cache 目錄：<code>{{ summary.cache_dir }}</code></li>
+      <li>Session Engine：<code>{{ summary.session_engine }}</code></li>
+    </ul>
+  </div>
+</div>
+
+<div class="card shadow-sm">
+  <div class="card-body">
+    <h2 class="h5">重要環境變數</h2>
+    <div class="table-responsive">
+      <table class="table align-middle mb-0">
+        <thead class="table-light">
+          <tr>
+            <th>Name</th>
+            <th>Default</th>
+            <th>Purpose</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in env_items %}
+            <tr>
+              <td><code>{{ item.name }}</code></td>
+              <td><code>{{ item.default }}</code></td>
+              <td>{{ item.purpose }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+<!--
+  頁面說明：
+  1. 記錄舊 HTML write route 已如何退役。
+  2. 對照新的 canonical DRF API 與目前 router 狀態。
+-->
+
+{% block title %}HTML 寫入遷移紀錄{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center flex-wrap gap-3 mb-4">
+  <div>
+    <h1 class="h3 mb-1">HTML 寫入遷移紀錄</h1>
+    <p class="text-secondary mb-0">追蹤哪些舊寫入表單已改由 DRF API 接手。</p>
+  </div>
+  <a href="/docs/api-routes/" class="btn btn-outline-primary">查看 API 路由總覽</a>
+</div>
+
+<div class="row g-4 mb-4">
+  <div class="col-md-4">
+    <div class="card shadow-sm h-100">
+      <div class="card-body">
+        <h2 class="h6 text-secondary">遷移筆數</h2>
+        <div class="display-6">{{ summary.migration_count }}</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card shadow-sm h-100">
+      <div class="card-body">
+        <h2 class="h6 text-secondary">模組數</h2>
+        <div class="display-6">{{ summary.group_count }}</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card shadow-sm h-100">
+      <div class="card-body">
+        <h2 class="h6 text-secondary">已移除 Router</h2>
+        <div class="display-6">{{ summary.removed_count }}</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% for group in migration_groups %}
+  <section class="mb-4">
+    <h2 class="h4 mb-3">{{ group.group }}</h2>
+    <div class="row g-4">
+      {% for item in group.items %}
+        <div class="col-12">
+          <article class="card shadow-sm">
+            <div class="card-body">
+              <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+                <strong>{{ item.name }}</strong>
+                <span class="badge text-bg-secondary">HTML retired → DRF canonical</span>
+              </div>
+
+              <dl class="row mb-0 mt-3">
+                <dt class="col-sm-2">Template</dt>
+                <dd class="col-sm-10"><code>{{ item.template }}</code></dd>
+
+                <dt class="col-sm-2">Legacy HTML</dt>
+                <dd class="col-sm-10"><code>{{ item.legacy_route }}</code></dd>
+
+                <dt class="col-sm-2">DRF API</dt>
+                <dd class="col-sm-10"><code>{{ item.canonical_api }}</code></dd>
+
+                <dt class="col-sm-2">Router</dt>
+                <dd class="col-sm-10"><code>{{ item.router_status|default:"active" }}</code></dd>
+
+                <dt class="col-sm-2">備註</dt>
+                <dd class="col-sm-10">{{ item.notes }}</dd>
+              </dl>
+            </div>
+          </article>
+        </div>
+      {% endfor %}
+    </div>
+  </section>
+{% endfor %}
+{% endblock %}
