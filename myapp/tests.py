@@ -3001,6 +3001,27 @@ class ProductFeatureTests(SimpleTestCase):
         prepare_response = self._post_json(f"/api/v1/me/orders/{order_id}/newebpay-payment/sandbox/", {})
         self.assertEqual(prepare_response.status_code, 503)
 
+    def test_newebpay_payment_sandbox_prepare_uses_underscore_merchant_order_no(self):
+        self._login(username="buyer")
+        self._add_product_to_cart("acme-mug", qty=1)
+        order_id = self._confirm_checkout().json()["id"]
+
+        env = {
+            "NEWEBPAY_MERCHANT_ID": "MS123456789",
+            "NEWEBPAY_HASH_KEY": "12345678901234567890123456789012",
+            "NEWEBPAY_HASH_IV": "1234567890123456",
+            "NEWEBPAY_PAYMENT_NOTIFY_URL": "https://backend.example/api/v1/integrations/newebpay/payment/sandbox/callback/",
+            "NEWEBPAY_PAYMENT_RETURN_URL": "https://backend.example/api/v1/integrations/newebpay/payment/sandbox/return/",
+            "NEWEBPAY_PAYMENT_CLIENT_BACK_URL": "https://frontend.example/orders/1",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            prepare_response = self._post_json(f"/api/v1/me/orders/{order_id}/newebpay-payment/sandbox/", {})
+
+        self.assertEqual(prepare_response.status_code, 200)
+        merchant_order_no = prepare_response.json()["merchant_order_no"]
+        self.assertRegex(merchant_order_no, rf"^ORDER{order_id}_[0-9]+$")
+        self.assertNotIn("-", merchant_order_no)
+
     def test_newebpay_logistics_sandbox_prepare_requires_configuration(self):
         self._write_products(build_seller_order_products())
         self._login(username="buyer")

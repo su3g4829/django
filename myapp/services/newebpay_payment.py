@@ -114,7 +114,7 @@ def create_payment_request(
     amount = _serialize_amount(order.get("totals", {}).get("total", order.get("total_amount", "0.00")))
     now = _now_iso()
     trade_no = _build_trade_no(order_id)
-    merchant_order_no = f"ORDER-{order_id}-{timezone.localtime().strftime('%H%M%S')}"
+    merchant_order_no = f"ORDER{order_id}_{timezone.localtime().strftime('%H%M%S')}"
     record = {
         "provider": PROVIDER_NAME,
         "mode": MODE_NAME,

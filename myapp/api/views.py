@@ -452,10 +452,7 @@ class AdminBannerReorderApi(APIView):
 
 def _parse_order_id_from_merchant_order_no(merchant_order_no: str) -> int | None:
     """從藍新 MerchantOrderNo 取回原始訂單 ID。"""
-    if not merchant_order_no.startswith("ORDER"):
-        return None
-    raw = merchant_order_no[5:].split("-", 1)[0]
-    return int(raw) if raw.isdigit() else None
+    return newebpay_payment_real_service.parse_order_id_from_merchant_order_no(merchant_order_no)
 
 
 def _payload_from_request(request) -> PayloadAdapter:

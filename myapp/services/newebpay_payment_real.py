@@ -30,6 +30,7 @@ MODE_NAME = "sandbox"
 DEFAULT_GATEWAY_URL = "https://ccore.newebpay.com/MPG/mpg_gateway"
 DEFAULT_VERSION = "2.2"
 DEFAULT_RESPOND_TYPE = "JSON"
+MERCHANT_ORDER_PREFIX = "ORDER"
 
 
 class NewebpayConfigurationError(RuntimeError):
@@ -189,6 +190,23 @@ def _build_trade_sha(cipher_hex: str, *, hash_key: str, hash_iv: str) -> str:
     return hashlib.sha256(raw.encode('utf-8')).hexdigest().upper()
 
 
+def _build_merchant_order_no(order_id: int) -> str:
+    """Build a NewebPay-compatible MerchantOrderNo.
+
+    NewebPay MPG accepts only letters, digits, and underscores, with a max
+    length of 30 characters.
+    """
+    return f"{MERCHANT_ORDER_PREFIX}{order_id}_{_now_timestamp()}"
+
+
+def parse_order_id_from_merchant_order_no(merchant_order_no: str) -> int | None:
+    """Extract the local order id from a NewebPay MerchantOrderNo."""
+    if not merchant_order_no.startswith(MERCHANT_ORDER_PREFIX):
+        return None
+    raw = merchant_order_no[len(MERCHANT_ORDER_PREFIX):].split('_', 1)[0]
+    return int(raw) if raw.isdigit() else None
+
+
 def prepare_checkout(
     order_id: int,
     username: str,
@@ -206,7 +224,7 @@ def prepare_checkout(
 
     item_names = [item.get('name', '') for item in order.get('items', []) if item.get('name')]
     item_desc = item_desc_override.strip() or ', '.join(item_names) or f'Order {order_id}'
-    merchant_order_no = f'ORDER{order_id}-{_now_timestamp()}'
+    merchant_order_no = _build_merchant_order_no(order_id)
     amount = _normalize_amount(order.get('totals', {}).get('total', order.get('total_amount', '0')))
 
     resolved_notify_url = notify_url.strip() or config.notify_url
@@ -350,8 +368,7 @@ def persist_callback_record(record: Dict[str, Any]) -> Dict[str, Any]:
     if not amount and isinstance(decoded, dict):
         amount = str(decoded.get('Amt', '')).strip()
 
-    raw_id = merchant_order_no[5:].split('-', 1)[0] if merchant_order_no.startswith('ORDER') else ''
-    order_id = int(raw_id) if raw_id.isdigit() else None
+    order_id = parse_order_id_from_merchant_order_no(merchant_order_no)
     buyer_username = ''
     if order_id is not None:
         order = local_store.get_order_by_id(order_id)
