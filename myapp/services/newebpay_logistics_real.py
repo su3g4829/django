@@ -253,6 +253,7 @@ def prepare_store_map(
     timestamp = _now_timestamp()
 
     plain_params = {
+        "MerchantID": config.merchant_id,
         "MerchantOrderNo": merchant_order_no,
         "LgsType": "C2C",
         "ShipType": ship_type,
@@ -279,6 +280,8 @@ def prepare_store_map(
         "return_url": resolved_return_url,
         "plain_params": plain_params,
         "form_fields": {
+            "MerchantID_": config.merchant_id,
+            "PostData_": cipher_hex,
             "UID_": config.merchant_id,
             "Version_": config.version,
             "RespondType_": config.respond_type,
