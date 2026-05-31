@@ -59,6 +59,7 @@ SHIPPING_METHOD_CHOICES = [
     {"value": SHIPPING_METHOD_CONVENIENCE_STORE, "label": "超商取貨"},
 ]
 SHIPPING_METHOD_LABELS = {item["value"]: item["label"] for item in SHIPPING_METHOD_CHOICES}
+LOGISTICS_CHECKOUT_ENABLED = False
 
 PAYMENT_METHOD_NEWEBPAY_CREDIT = "newebpay_credit"
 
@@ -76,6 +77,26 @@ CONVENIENCE_STORE_BRAND_CHOICES = [
     {"value": "FAMI", "label": "全家"},
 ]
 CONVENIENCE_STORE_BRAND_LABELS = {item["value"]: item["label"] for item in CONVENIENCE_STORE_BRAND_CHOICES}
+
+
+def get_checkout_shipping_methods() -> List[Dict[str, str]]:
+    """Return shipping methods currently enabled for buyer checkout."""
+    if not LOGISTICS_CHECKOUT_ENABLED:
+        return [dict(SHIPPING_METHOD_CHOICES[0])]
+    if not LOGISTICS_CHECKOUT_ENABLED:
+        return [dict(SHIPPING_METHOD_CHOICES[0])]
+    return [dict(item) for item in SHIPPING_METHOD_CHOICES]
+
+
+def is_checkout_shipping_method_enabled(shipping_method: str) -> bool:
+    return shipping_method in {item["value"] for item in get_checkout_shipping_methods()}
+
+
+def normalize_checkout_shipping_method(shipping_method: str) -> str:
+    candidate = (shipping_method or "").strip()
+    if is_checkout_shipping_method_enabled(candidate):
+        return candidate
+    return SHIPPING_METHOD_HOME_DELIVERY
 
 
 def _shipping_decimal(value: Any, default: str = "0.00") -> Decimal:
@@ -146,6 +167,8 @@ def _available_shipping_methods_for_group(
     seller_rules: Dict[str, Any],
 ) -> List[Dict[str, str]]:
     """Return shipping methods that every product in one seller group supports."""
+    if not LOGISTICS_CHECKOUT_ENABLED:
+        return [{"value": SHIPPING_METHOD_HOME_DELIVERY, "label": SHIPPING_METHOD_LABELS[SHIPPING_METHOD_HOME_DELIVERY]}]
     available: list[dict[str, str]] = []
     can_use_home = bool(seller_rules.get("home_delivery_enabled", True))
     can_use_store = bool(seller_rules.get("convenience_store_enabled", True))
@@ -243,6 +266,7 @@ def build_checkout_totals(
     shipping_method: str,
 ) -> Dict[str, Any]:
     """Build marketplace checkout totals using per-seller shipping groups."""
+    shipping_method = normalize_checkout_shipping_method(shipping_method)
     cart = cart_service.get_cart(session)
     items = list(cart.get("items", {}).values())
     subtotal = sum((Decimal(str(item["price"])) * int(item["qty"]) for item in items), Decimal("0.00")).quantize(Decimal("0.01"))
@@ -570,7 +594,8 @@ def create_order_from_cart(
     if not items:
         raise ValueError("Your cart is empty.")
 
-    if shipping_method not in SHIPPING_METHOD_LABELS:
+    shipping_method = normalize_checkout_shipping_method(shipping_method)
+    if not is_checkout_shipping_method_enabled(shipping_method):
         raise ValueError("Invalid shipping method.")
     if payment_method not in PAYMENT_METHOD_LABELS:
         raise ValueError("Invalid payment method.")
@@ -684,6 +709,8 @@ def get_checkout_payment_methods() -> List[Dict[str, str]]:
 
 def get_convenience_store_brands() -> List[Dict[str, str]]:
     """回傳 checkout 可選的超商品牌。"""
+    if not LOGISTICS_CHECKOUT_ENABLED:
+        return []
     return [dict(item) for item in CONVENIENCE_STORE_BRAND_CHOICES]
 
 

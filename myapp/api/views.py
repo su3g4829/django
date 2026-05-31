@@ -204,9 +204,9 @@ def _build_cart_response(session, detail: str = "", *, shipping_method: str = ""
         item["line_total"] = round(float(item["price"]) * int(item["qty"]), 2)
         items.append(item)
 
-    selected_shipping_method = str(shipping_method or order_service.SHIPPING_METHOD_HOME_DELIVERY).strip()
-    if selected_shipping_method not in order_service.SHIPPING_METHOD_LABELS:
-        selected_shipping_method = order_service.SHIPPING_METHOD_HOME_DELIVERY
+    selected_shipping_method = order_service.normalize_checkout_shipping_method(
+        str(shipping_method or order_service.SHIPPING_METHOD_HOME_DELIVERY).strip()
+    )
 
     cart_pricing = order_service.build_checkout_totals(
         session,
@@ -241,9 +241,10 @@ def _build_checkout_preview_payload(request) -> Dict[str, Any]:
     """建立結帳預覽回應。"""
     user = get_demo_user(request)
     payload = _build_cart_response(request.session)
-    selected_shipping_method = str(
-        request.query_params.get("shipping_method") or order_service.SHIPPING_METHOD_HOME_DELIVERY
-    ).strip() or order_service.SHIPPING_METHOD_HOME_DELIVERY
+    selected_shipping_method = order_service.normalize_checkout_shipping_method(
+        str(request.query_params.get("shipping_method") or order_service.SHIPPING_METHOD_HOME_DELIVERY).strip()
+        or order_service.SHIPPING_METHOD_HOME_DELIVERY
+    )
     try:
         checkout_pricing = order_service.build_checkout_totals(
             request.session,

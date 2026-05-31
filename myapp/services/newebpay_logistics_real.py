@@ -33,13 +33,7 @@ DEFAULT_RESPOND_TYPE = "JSON"
 STORE_MAP_SELECTION_TTL_SECONDS = 2 * 60 * 60
 STORE_MAP_LGS_TYPE = "B2C"
 
-# Temporary credential override for NewebPay logistics debugging.
-# Remove this block after verifying whether env loading is the cause of 4104.
-HARDCODED_LOGISTICS_DEBUG_CREDENTIALS = {
-    "merchant_id": "MS159267158",
-    "hash_key": "XajEySms8TLasmEmC7KAWP6UXpnr4zZO",
-    "hash_iv": "CqD8t17qvdICnRDP",
-}
+HARDCODED_LOGISTICS_DEBUG_CREDENTIALS: Dict[str, str] = {}
 
 STORE_BRAND_TO_SHIP_TYPE = {
     "UNIMART": "1",
