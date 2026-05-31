@@ -15,6 +15,8 @@ from django.middleware.csrf import get_token
 from django.http import HttpResponseRedirect, QueryDict
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import ensure_csrf_cookie
+from drf_spectacular.utils import OpenApiResponse, extend_schema, inline_serializer
+from rest_framework import serializers
 from rest_framework import status
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
@@ -1679,6 +1681,19 @@ class LoginApi(APIView):
 
     permission_classes = [AllowAny]
 
+    @extend_schema(
+        request=sz.LoginRequestSerializer,
+        responses={
+            200: inline_serializer(
+                name="LoginResponse",
+                fields={
+                    "detail": serializers.CharField(),
+                    "user": sz.DemoUserSerializer(),
+                },
+            ),
+            400: OpenApiResponse(description="Invalid username or password."),
+        },
+    )
     def post(self, request):
         """登入會員並寫入 session。"""
         payload = _validated(sz.LoginRequestSerializer, request.data)
@@ -1939,6 +1954,24 @@ class AdminCheckoutStoreMapDebugApi(APIView):
 
     permission_classes = [IsAdminDemoUser]
 
+    @extend_schema(
+        request=sz.CheckoutStoreMapPrepareSerializer,
+        responses={
+            200: inline_serializer(
+                name="AdminCheckoutStoreMapDebugResponse",
+                fields={
+                    "provider": serializers.CharField(),
+                    "mode": serializers.CharField(),
+                    "runtime": serializers.DictField(),
+                    "prepared": serializers.DictField(),
+                    "checks": serializers.DictField(),
+                },
+            ),
+            400: OpenApiResponse(description="Invalid convenience-store brand or request payload."),
+            403: OpenApiResponse(description="Admin session required."),
+            503: OpenApiResponse(description="NewebPay logistics configuration or crypto dependency is unavailable."),
+        },
+    )
     def post(self, request):
         """Return the exact store-map plain params and generated form fields."""
         user = get_demo_user(request)
