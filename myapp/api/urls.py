@@ -69,6 +69,11 @@ urlpatterns = [
         name="api-checkout-store-map-prepare",
     ),
     path(
+        "staff/integrations/newebpay/logistics/store-map/debug/",
+        views.AdminCheckoutStoreMapDebugApi.as_view(),
+        name="api-admin-checkout-store-map-debug",
+    ),
+    path(
         "checkout/logistics/store-selection/",
         views.BuyerCheckoutStoreSelectionApi.as_view(),
         name="api-checkout-store-selection",

@@ -3099,3 +3099,37 @@ class ProductFeatureTests(SimpleTestCase):
                 f"/api/v1/checkout/logistics/store-selection/?token={prepared['selection_token']}"
             )
             self.assertEqual(selection_response.status_code, 404)
+
+    def test_admin_checkout_store_map_debug_api_returns_generated_payload_summary(self):
+        self._login(username="storeteam")
+        env = {
+            "NEWEBPAY_LOGISTICS_MERCHANT_ID": "MS123456789",
+            "NEWEBPAY_LOGISTICS_HASH_KEY": "12345678901234567890123456789012",
+            "NEWEBPAY_LOGISTICS_HASH_IV": "1234567890123456",
+            "NEWEBPAY_LOGISTICS_STORE_MAP_REPLY_URL": "https://backend.example/api/v1/integrations/newebpay/logistics/store-map/callback/",
+            "NEWEBPAY_LOGISTICS_STORE_MAP_RETURN_URL": "https://frontend.example/checkout",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            response = self._post_json(
+                "/api/v1/staff/integrations/newebpay/logistics/store-map/debug/",
+                {
+                    "pickup_store_brand": "UNIMART",
+                    "payment_method": "newebpay_credit",
+                    "return_url": "https://frontend.example/checkout",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["runtime"]["merchant_id"], env["NEWEBPAY_LOGISTICS_MERCHANT_ID"])
+        self.assertEqual(payload["runtime"]["hash_key_length"], 32)
+        self.assertEqual(payload["runtime"]["hash_iv_length"], 16)
+        self.assertTrue(payload["checks"]["has_encrypt_data_field"])
+        self.assertTrue(payload["checks"]["has_hash_data_field"])
+        self.assertTrue(payload["checks"]["has_post_data_field"])
+        self.assertTrue(payload["checks"]["merchant_id_matches_uid"])
+        self.assertTrue(payload["checks"]["post_data_matches_encrypt_data"])
+        self.assertEqual(
+            payload["prepared"]["plain_params"]["MerchantID"],
+            env["NEWEBPAY_LOGISTICS_MERCHANT_ID"],
+        )

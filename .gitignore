@@ -12,3 +12,4 @@ media/
 staticfiles/
 var/
 tmp_unicode.txt
+django.env

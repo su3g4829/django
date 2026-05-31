@@ -1934,6 +1934,31 @@ class BuyerCheckoutStoreMapPrepareApi(APIView):
         return Response(prepared, status=status.HTTP_201_CREATED)
 
 
+class AdminCheckoutStoreMapDebugApi(APIView):
+    """Expose a staff-only debug summary for NewebPay store-map payload generation."""
+
+    permission_classes = [IsAdminDemoUser]
+
+    def post(self, request):
+        """Return the exact store-map plain params and generated form fields."""
+        user = get_demo_user(request)
+        payload = _validated(sz.CheckoutStoreMapPrepareSerializer, request.data)
+        try:
+            debug_payload = newebpay_logistics_real_service.build_store_map_debug_payload(
+                user["username"],
+                pickup_store_brand=str(payload.get("pickup_store_brand", "")),
+                payment_method=str(payload.get("payment_method", "")),
+                return_url=str(payload.get("return_url", "")),
+            )
+        except newebpay_logistics_real_service.NewebpayLogisticsConfigurationError as exc:
+            return _error(str(exc), status.HTTP_503_SERVICE_UNAVAILABLE)
+        except newebpay_logistics_real_service.NewebpayLogisticsDependencyError as exc:
+            return _error(str(exc), status.HTTP_503_SERVICE_UNAVAILABLE)
+        except ValueError as exc:
+            return _error(str(exc))
+        return Response(debug_payload)
+
+
 class BuyerCheckoutStoreSelectionApi(APIView):
     """Fetch a previously selected convenience-store for checkout."""
 

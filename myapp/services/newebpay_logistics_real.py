@@ -166,6 +166,14 @@ def _build_hash_data(cipher_hex: str, *, hash_key: str, hash_iv: str) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest().upper()
 
 
+def _mask_secret(value: str, *, head: int = 4, tail: int = 4) -> str:
+    if not value:
+        return ""
+    if len(value) <= head + tail:
+        return "*" * len(value)
+    return f"{value[:head]}{'*' * max(len(value) - head - tail, 1)}{value[-tail:]}"
+
+
 def _prune_store_map_selections(items: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
     cutoff = _now_timestamp() - STORE_MAP_SELECTION_TTL_SECONDS
     pruned: list[Dict[str, Any]] = []
@@ -291,6 +299,62 @@ def prepare_store_map(
         "note": "Submit form_fields to NewebPay storeMap to let the buyer choose a pickup store.",
     }
     return prepared
+
+
+def build_store_map_debug_payload(
+    username: str,
+    *,
+    pickup_store_brand: str,
+    payment_method: str = "",
+    return_url: str = "",
+) -> Dict[str, Any]:
+    config = _load_runtime_config()
+    prepared = prepare_store_map(
+        username,
+        pickup_store_brand=pickup_store_brand,
+        payment_method=payment_method,
+        return_url=return_url,
+    )
+    form_fields = dict(prepared["form_fields"])
+    plain_params = dict(prepared["plain_params"])
+    return {
+        "provider": PROVIDER_NAME,
+        "mode": MODE_NAME,
+        "runtime": {
+            "merchant_id": config.merchant_id,
+            "hash_key_length": len(config.hash_key),
+            "hash_iv_length": len(config.hash_iv),
+            "hash_key_preview": _mask_secret(config.hash_key),
+            "hash_iv_preview": _mask_secret(config.hash_iv),
+            "store_map_url": config.store_map_url,
+            "store_map_reply_url": config.store_map_reply_url,
+            "store_map_return_url": config.store_map_return_url,
+            "version": config.version,
+            "respond_type": config.respond_type,
+        },
+        "prepared": {
+            "selection_token": prepared["selection_token"],
+            "merchant_order_no": prepared["merchant_order_no"],
+            "pickup_store_brand": prepared["pickup_store_brand"],
+            "pickup_store_brand_label": prepared["pickup_store_brand_label"],
+            "payment_method": prepared["payment_method"],
+            "action_url": prepared["action_url"],
+            "callback_url": prepared["callback_url"],
+            "return_url": prepared["return_url"],
+            "plain_params": plain_params,
+            "plain_params_encoded": urlencode(plain_params),
+            "form_fields": form_fields,
+        },
+        "checks": {
+            "has_merchant_id_field": bool(form_fields.get("MerchantID_")),
+            "has_post_data_field": bool(form_fields.get("PostData_")),
+            "has_encrypt_data_field": bool(form_fields.get("EncryptData_")),
+            "has_hash_data_field": bool(form_fields.get("HashData_")),
+            "merchant_id_matches_uid": form_fields.get("MerchantID_") == form_fields.get("UID_"),
+            "post_data_matches_encrypt_data": form_fields.get("PostData_") == form_fields.get("EncryptData_"),
+            "merchant_id_in_plain_params": plain_params.get("MerchantID") == config.merchant_id,
+        },
+    }
 
 
 def persist_store_map_prepare(prepared: Dict[str, Any]) -> Dict[str, Any]:
