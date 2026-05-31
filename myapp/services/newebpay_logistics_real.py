@@ -98,6 +98,11 @@ def _append_query(url: str, values: Dict[str, str]) -> str:
     return urlunparse(parsed._replace(query=urlencode(params)))
 
 
+def _replace_path(url: str, path: str) -> str:
+    parsed = urlparse(url)
+    return urlunparse(parsed._replace(path=path, params="", query="", fragment=""))
+
+
 def _derive_store_map_reply_url(callback_url: str) -> str:
     cleaned = callback_url.strip()
     if cleaned.endswith("/api/v1/integrations/newebpay/logistics/sandbox/callback/"):
@@ -110,6 +115,10 @@ def _derive_store_map_reply_url(callback_url: str) -> str:
 def _default_store_map_return_url() -> str:
     frontend_origin = (os.getenv("STORE_FRONTEND_ORIGIN", "") or "").rstrip("/")
     return f"{frontend_origin}/checkout" if frontend_origin else ""
+
+
+def _build_store_map_gateway_return_url(reply_url: str, selection_token: str) -> str:
+    return _replace_path(reply_url, f"/sm/{selection_token}/")
 
 
 def _load_runtime_config() -> NewebpayLogisticsRuntimeConfig:
@@ -199,7 +208,7 @@ def _save_store_map_records(items: list[Dict[str, Any]]) -> None:
 
 
 def _generate_selection_token(username: str) -> str:
-    return f"cvs-{username}-{secrets.token_hex(8)}"
+    return secrets.token_hex(5)
 
 
 def _generate_merchant_order_no() -> str:
@@ -252,13 +261,13 @@ def prepare_store_map(
     selection_token = _generate_selection_token(username)
     merchant_order_no = _generate_merchant_order_no()
     base_return_url = return_url.strip() or config.store_map_return_url
-    resolved_return_url = _append_query(
+    client_return_url = _append_query(
         base_return_url,
         {
             "store_map_token": selection_token,
-            "store_map": "return",
         },
     )
+    gateway_return_url = _build_store_map_gateway_return_url(config.store_map_reply_url, selection_token)
     timestamp = _now_timestamp()
     normalized_payment_method = payment_method.strip().lower()
     is_collection = "Y" if normalized_payment_method in {"convenience_store_cod", "cod", "pickup_cod"} else "N"
@@ -270,7 +279,7 @@ def prepare_store_map(
         "ShipType": ship_type,
         "IsCollection": is_collection,
         "ServerReplyURL": config.store_map_reply_url,
-        "ReturnURL": resolved_return_url,
+        "ReturnURL": gateway_return_url,
         "TimeStamp": str(timestamp),
         "ExtraData": selection_token,
     }
@@ -289,7 +298,8 @@ def prepare_store_map(
         "action_url": config.store_map_url,
         "form_method": "POST",
         "callback_url": config.store_map_reply_url,
-        "return_url": resolved_return_url,
+        "return_url": client_return_url,
+        "gateway_return_url": gateway_return_url,
         "plain_params": plain_params,
         "form_fields": {
             "MerchantID_": config.merchant_id,
@@ -386,6 +396,7 @@ def persist_store_map_prepare(prepared: Dict[str, Any]) -> Dict[str, Any]:
             "updated_at_iso": now_iso,
             "reply_payload": {},
             "return_url": str(prepared["return_url"]),
+            "gateway_return_url": str(prepared.get("gateway_return_url", "")),
             "callback_url": str(prepared["callback_url"]),
         }
         records.append(record)
@@ -401,6 +412,7 @@ def persist_store_map_prepare(prepared: Dict[str, Any]) -> Dict[str, Any]:
                 "updated_at": now_ts,
                 "updated_at_iso": now_iso,
                 "return_url": str(prepared["return_url"]),
+                "gateway_return_url": str(prepared.get("gateway_return_url", "")),
                 "callback_url": str(prepared["callback_url"]),
             }
         )
@@ -479,6 +491,16 @@ def get_store_selection(selection_token: str, username: str) -> Optional[Dict[st
         "merchant_order_no": str(record.get("merchant_order_no", "")),
         "updated_at": str(record.get("updated_at_iso", "")),
     }
+
+
+def get_store_map_client_return_url(selection_token: str) -> str:
+    token = selection_token.strip()
+    if not token:
+        return _default_store_map_return_url()
+    record = next((item for item in _load_store_map_records() if item.get("selection_token") == token), None)
+    if record is None:
+        return _default_store_map_return_url()
+    return str(record.get("return_url") or _default_store_map_return_url())
 
 
 def prepare_logistics_request(

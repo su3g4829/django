@@ -15,6 +15,7 @@ from . import views
 from .api import views as api_views
 
 urlpatterns = [
+    path("sm/<slug:selection_token>/", api_views.NewebpayStoreMapReturnRelayView.as_view(), name="newebpay_store_map_return_relay"),
     # ===== Next.js 前端入口 =====
     path("", views.FrontendRedirectView.as_view(frontend_path="/"), name="frontend-root"),
     path("index/", views.FrontendRedirectView.as_view(frontend_path="/"), name="home"),

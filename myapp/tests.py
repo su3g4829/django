@@ -3043,6 +3043,10 @@ class ProductFeatureTests(SimpleTestCase):
             self.assertEqual(prepared["callback_url"], env["NEWEBPAY_LOGISTICS_STORE_MAP_REPLY_URL"])
             self.assertEqual(prepared["plain_params"]["LgsType"], "B2C")
             self.assertEqual(prepared["plain_params"]["IsCollection"], "N")
+            self.assertLessEqual(len(prepared["selection_token"]), 20)
+            self.assertLessEqual(len(prepared["plain_params"]["ExtraData"]), 20)
+            self.assertIn("/sm/", prepared["plain_params"]["ReturnURL"])
+            self.assertLessEqual(len(prepared["plain_params"]["ReturnURL"]), 50)
 
             callback_response = self._post_json(
                 "/api/v1/integrations/newebpay/logistics/store-map/callback/",
@@ -3137,3 +3141,5 @@ class ProductFeatureTests(SimpleTestCase):
         )
         self.assertEqual(payload["prepared"]["plain_params"]["LgsType"], "B2C")
         self.assertEqual(payload["prepared"]["plain_params"]["IsCollection"], "N")
+        self.assertLessEqual(len(payload["prepared"]["plain_params"]["ExtraData"]), 20)
+        self.assertLessEqual(len(payload["prepared"]["plain_params"]["ReturnURL"]), 50)

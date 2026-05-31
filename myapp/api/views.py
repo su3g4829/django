@@ -2027,6 +2027,17 @@ class NewebpayStoreMapCallbackApi(APIView):
         return Response({"detail": "NewebPay store-map callback processed.", "record": record})
 
 
+class NewebpayStoreMapReturnRelayView(APIView):
+    """Relay NewebPay store-map browser return through a short backend URL."""
+
+    permission_classes = [AllowAny]
+    authentication_classes: list = []
+
+    def get(self, request, selection_token: str):
+        """Redirect NewebPay back to the final frontend checkout URL."""
+        return HttpResponseRedirect(newebpay_logistics_real_service.get_store_map_client_return_url(selection_token))
+
+
 class SellerProductsApi(APIView):
     """提供賣家商品列表與建立的 API。"""
 
