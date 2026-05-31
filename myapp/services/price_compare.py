@@ -1,50 +1,77 @@
-"""模擬比價 / 模擬爬蟲結果服務。
-
-這個模組的目的不是做真正的外站爬蟲，而是先把「比價功能」需要的
-資料流、API、前端呈現方式定義好。
-
-目前資料來源：
-- `data/competitor_prices.json`
-
-未來若要接正式來源，可把這個模組內部替換成：
-- 官方 API
-- 合作 feed
-- 真正的 crawler pipeline
-
-對外介面盡量維持不變，這樣前端與 DRF API 不需要重寫。
-"""
-
 from __future__ import annotations
 
+import re
 from decimal import Decimal
+from html.parser import HTMLParser
 from typing import Any, Dict, List
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 from django.utils import timezone
 
-from ..repositories import local_store
 
-DEFAULT_COMPETITOR_SITES = [
-    {
-        "site": "momo",
-        "site_label": "momo 購物網",
-        "currency": "TWD",
-        "status": "matched",
-        "note": "模擬資料：示範比價來源。",
-        "price_multiplier": Decimal("0.96"),
-    },
-    {
-        "site": "pchome",
-        "site_label": "PChome 24h",
-        "currency": "TWD",
-        "status": "matched",
-        "note": "模擬資料：示範比價來源。",
-        "price_multiplier": Decimal("1.05"),
-    },
-]
+SUPPORTED_PRODUCTS: dict[str, dict[str, str]] = {
+    "new-forcepolo": {
+        "momo_url": (
+            "https://www.momoshop.com.tw/goods/GoodsDetail.jsp"
+            "?i_code=15219838&Area=search&mdiv=403&oid=1_1"
+            "&cid=index&kw=%E4%B8%8A%E8%A1%A3"
+        ),
+        "pchome_url": "https://24h.pchome.com.tw/prod/DIAIYD-A900K04WD",
+    }
+}
+
+
+class ProductPageParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.title = ""
+        self.meta: Dict[str, str] = {}
+        self._in_title = False
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attr_map = dict(attrs)
+        if tag == "title":
+            self._in_title = True
+            return
+        if tag == "meta":
+            key = attr_map.get("property") or attr_map.get("name")
+            value = attr_map.get("content")
+            if key and value:
+                self.meta[key] = value
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "title":
+            self._in_title = False
+
+    def handle_data(self, data: str) -> None:
+        if self._in_title:
+            self.title += data
+
+
+def supports_price_comparison(product: Dict[str, Any] | str) -> bool:
+    slug = product if isinstance(product, str) else str(product.get("slug", ""))
+    return slug in SUPPORTED_PRODUCTS
+
+
+def _require_supported_product(product: Dict[str, Any]) -> dict[str, str]:
+    slug = str(product.get("slug", ""))
+    config = SUPPORTED_PRODUCTS.get(slug)
+    if not config:
+        raise ValueError("Price comparison is not enabled for this product.")
+    return config
+
+
+def _clean_price(value: str) -> str:
+    return value.replace(",", "").replace("$", "").strip()
+
+
+def _to_decimal(value: Any) -> Decimal:
+    return Decimal(str(value)).quantize(Decimal("0.01"))
 
 
 def _format_datetime(value: str) -> str:
-    """將 ISO 時間字串轉成較適合前端顯示的格式。"""
     try:
         parsed = timezone.datetime.fromisoformat(value)
     except ValueError:
@@ -54,96 +81,163 @@ def _format_datetime(value: str) -> str:
     return timezone.localtime(parsed).strftime("%Y-%m-%d %H:%M")
 
 
-def _to_decimal(value: Any) -> Decimal:
-    """將輸入值轉為兩位小數 Decimal。"""
-    return Decimal(str(value)).quantize(Decimal("0.01"))
+def _fetch_html(url: str) -> str:
+    hostname = (urlparse(url).hostname or "").lower()
+    referer = "https://www.momoshop.com.tw/" if "momoshop.com.tw" in hostname else "https://24h.pchome.com.tw/"
+    request = Request(
+        url,
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/136.0.0.0 Safari/537.36"
+            ),
+            "Accept": (
+                "text/html,application/xhtml+xml,application/xml;q=0.9,"
+                "image/avif,image/webp,image/apng,*/*;q=0.8"
+            ),
+            "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+            "Sec-Ch-Ua": '"Chromium";v="136", "Google Chrome";v="136", "Not.A/Brand";v="99"',
+            "Sec-Ch-Ua-Mobile": "?0",
+            "Sec-Ch-Ua-Platform": '"Windows"',
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Sec-Fetch-User": "?1",
+            "Upgrade-Insecure-Requests": "1",
+            "Referer": referer,
+        },
+    )
+    with urlopen(request, timeout=20) as response:
+        return response.read().decode("utf-8", errors="replace")
 
 
-def _build_default_entry(product: Dict[str, Any]) -> Dict[str, Any]:
-    """為尚未配置比價資料的商品建立一份預設 mock 紀錄。"""
-    now = timezone.now().isoformat()
-    base_price = _to_decimal(product["price"])
-    competitors = []
-    for site in DEFAULT_COMPETITOR_SITES:
-        competitor_price = (base_price * site["price_multiplier"]).quantize(Decimal("0.01"))
-        competitors.append(
-            {
-                "site": site["site"],
-                "site_label": site["site_label"],
-                "title": f"{product['name']} - {site['site_label']} 模擬結果",
-                "url": f"https://example.com/{site['site']}/{product['slug']}",
-                "price": float(competitor_price),
-                "currency": site["currency"],
-                "captured_at": now,
-                "status": site["status"],
-                "note": site["note"],
-                "mock_rank": len(competitors) + 1,
-            }
-        )
+def _parse_meta(html: str) -> ProductPageParser:
+    parser = ProductPageParser()
+    parser.feed(html)
+    return parser
+
+
+def _first_match(pattern: str, text: str, flags: int = 0) -> str:
+    match = re.search(pattern, text, flags)
+    return match.group(1).strip() if match else ""
+
+
+def _extract_momo(html: str, url: str) -> Dict[str, Any]:
+    parser = _parse_meta(html)
+    title = (parser.meta.get("og:title") or parser.title or "").split("-momo")[0].strip()
+    sale_price = _clean_price(parser.meta.get("product:price:amount", ""))
+    if not sale_price:
+        sale_price = _clean_price(_first_match(r"salePrice\s*=\s*'([0-9,]+)'", html, re.I))
+    original_price = _clean_price(
+        _first_match(r"<li class='' priceTitle='[^']*' price='([0-9,]+)'>", html, re.I)
+    )
     return {
-        "our_product_slug": product["slug"],
-        "our_product_name": product["name"],
-        "our_product_id": product["id"],
-        "competitors": competitors,
-        "last_refreshed_at": now,
-        "source_type": "mock",
+        "site": "momo",
+        "site_label": "momo",
+        "title": title,
+        "url": url,
+        "original_price": original_price,
+        "sale_price": sale_price,
+        "currency": "TWD",
+        "note": "Fetched from fixed momo product URL.",
     }
 
 
-def _ensure_entry(product: Dict[str, Any]) -> Dict[str, Any]:
-    """確保指定商品一定有一筆模擬比價資料。"""
-    items = local_store.get_competitor_prices()
-    for item in items:
-        if item.get("our_product_slug") == product["slug"]:
-            return item
+def _extract_pchome(html: str, url: str) -> Dict[str, Any]:
+    parser = _parse_meta(html)
+    title = (parser.meta.get("og:title") or parser.title or "").replace(" - PChome 24h購物", "").strip()
+    sale_price = _clean_price(_first_match(r'o-prodPrice__price[^>]*>\$([0-9,]+)</div>', html, re.I))
+    original_price = _clean_price(_first_match(r'o-prodPrice__originalPrice[^>]*>\$([0-9,]+)</div>', html, re.I))
+    return {
+        "site": "pchome",
+        "site_label": "PChome 24h",
+        "title": title,
+        "url": url,
+        "original_price": original_price,
+        "sale_price": sale_price,
+        "currency": "TWD",
+        "note": "Fetched from fixed PChome 24h product URL.",
+    }
 
-    new_item = _build_default_entry(product)
-    local_store.save_competitor_prices(items + [new_item])
-    return new_item
+
+def _safe_scrape(site: str, url: str) -> Dict[str, Any]:
+    now = timezone.now().isoformat()
+    try:
+        html = _fetch_html(url)
+        raw = _extract_momo(html, url) if site == "momo" else _extract_pchome(html, url)
+        raw["status"] = "matched"
+        raw["captured_at"] = now
+        return raw
+    except (HTTPError, URLError, TimeoutError, ValueError) as exc:
+        return {
+            "site": site,
+            "site_label": "momo" if site == "momo" else "PChome 24h",
+            "title": "",
+            "url": url,
+            "original_price": "",
+            "sale_price": "",
+            "currency": "TWD",
+            "status": "failed",
+            "captured_at": now,
+            "note": f"Fetch failed: {exc}",
+        }
 
 
-def _serialize_entry(product: Dict[str, Any], raw_entry: Dict[str, Any]) -> Dict[str, Any]:
-    """把原始 mock 資料整理成前端可直接顯示的 payload。"""
+def _build_competitors(product: Dict[str, Any]) -> List[Dict[str, Any]]:
+    config = _require_supported_product(product)
+    return [
+        _safe_scrape("momo", config["momo_url"]),
+        _safe_scrape("pchome", config["pchome_url"]),
+    ]
+
+
+def _serialize_item(our_price: Decimal, competitor: Dict[str, Any]) -> Dict[str, Any]:
+    sale_price_text = competitor.get("sale_price", "")
+    original_price_text = competitor.get("original_price", "")
+    sale_price = _to_decimal(sale_price_text) if sale_price_text else Decimal("0.00")
+    diff_amount = (sale_price - our_price).quantize(Decimal("0.01")) if sale_price_text else Decimal("0.00")
+    diff_percent = Decimal("0.00")
+    if sale_price_text and our_price > 0:
+        diff_percent = ((diff_amount / our_price) * Decimal("100")).quantize(Decimal("0.01"))
+    return {
+        "site": competitor.get("site", ""),
+        "site_label": competitor.get("site_label", ""),
+        "title": competitor.get("title", ""),
+        "url": competitor.get("url", ""),
+        "price": float(sale_price) if sale_price_text else 0.0,
+        "original_price": float(_to_decimal(original_price_text)) if original_price_text else None,
+        "sale_price": float(sale_price) if sale_price_text else None,
+        "currency": competitor.get("currency", "TWD"),
+        "captured_at": competitor.get("captured_at", ""),
+        "captured_at_display": _format_datetime(competitor.get("captured_at", "")),
+        "status": competitor.get("status", "matched"),
+        "note": competitor.get("note", ""),
+        "diff_amount": float(diff_amount),
+        "diff_percent": float(diff_percent),
+        "is_cheaper_than_our_price": bool(sale_price_text and sale_price < our_price),
+        "is_same_as_our_price": bool(sale_price_text and sale_price == our_price),
+    }
+
+
+def _serialize_payload(product: Dict[str, Any], competitors: List[Dict[str, Any]]) -> Dict[str, Any]:
     our_price = _to_decimal(product["price"])
-    items: List[Dict[str, Any]] = []
-
-    for competitor in raw_entry.get("competitors", []):
-        competitor_price = _to_decimal(competitor["price"])
-        diff_amount = (competitor_price - our_price).quantize(Decimal("0.01"))
-        diff_percent = Decimal("0.00")
-        if our_price > 0:
-            diff_percent = ((diff_amount / our_price) * Decimal("100")).quantize(Decimal("0.01"))
-
-        items.append(
-            {
-                "site": competitor.get("site", ""),
-                "site_label": competitor.get("site_label") or competitor.get("site", ""),
-                "title": competitor.get("title", ""),
-                "url": competitor.get("url", ""),
-                "price": float(competitor_price),
-                "currency": competitor.get("currency", "TWD"),
-                "captured_at": competitor.get("captured_at", ""),
-                "captured_at_display": _format_datetime(competitor.get("captured_at", "")),
-                "status": competitor.get("status", "matched"),
-                "note": competitor.get("note", ""),
-                "diff_amount": float(diff_amount),
-                "diff_percent": float(diff_percent),
-                "is_cheaper_than_our_price": competitor_price < our_price,
-                "is_same_as_our_price": competitor_price == our_price,
-            }
-        )
-
-    lowest_price = min([_to_decimal(item["price"]) for item in items] + [our_price])
+    items = [_serialize_item(our_price, competitor) for competitor in competitors]
+    valid_prices = [Decimal(str(item["sale_price"])) for item in items if item.get("sale_price") is not None]
+    lowest_price = min(valid_prices + [our_price]) if valid_prices else our_price
+    last_refreshed_at = max((competitor.get("captured_at", "") for competitor in competitors), default="")
     return {
         "our_product_slug": product["slug"],
         "our_product_name": product["name"],
         "our_product_id": product["id"],
         "our_price": float(our_price),
         "currency": "TWD",
-        "is_mock": True,
-        "source_type": raw_entry.get("source_type", "mock"),
-        "last_refreshed_at": raw_entry.get("last_refreshed_at", ""),
-        "last_refreshed_at_display": _format_datetime(raw_entry.get("last_refreshed_at", "")),
+        "is_mock": False,
+        "source_type": "fixed_live_urls",
+        "last_refreshed_at": last_refreshed_at,
+        "last_refreshed_at_display": _format_datetime(last_refreshed_at) if last_refreshed_at else "",
         "lowest_price": float(lowest_price),
         "our_store_is_lowest": our_price <= lowest_price,
         "items": items,
@@ -151,46 +245,12 @@ def _serialize_entry(product: Dict[str, Any], raw_entry: Dict[str, Any]) -> Dict
 
 
 def get_price_comparison(product: Dict[str, Any]) -> Dict[str, Any]:
-    """取得單一商品的模擬比價結果。"""
-    entry = _ensure_entry(product)
-    return _serialize_entry(product, entry)
+    return _serialize_payload(product, _build_competitors(product))
 
 
 def refresh_mock_price_comparison(product: Dict[str, Any]) -> Dict[str, Any]:
-    """模擬重新抓價。
+    return _serialize_payload(product, _build_competitors(product))
 
-    這個動作會：
-    - 更新抓取時間
-    - 依來源站點做微小價格浮動
 
-    目的不是模擬真實市場，而是讓前端可以演示：
-    - 手動刷新
-    - 更新時間改變
-    - 比價結果重新計算
-    """
-    items = local_store.get_competitor_prices()
-    target = None
-    for item in items:
-        if item.get("our_product_slug") == product["slug"]:
-            target = item
-            break
-
-    if target is None:
-        target = _build_default_entry(product)
-        items.append(target)
-
-    now = timezone.now().isoformat()
-    our_price = _to_decimal(product["price"])
-    for index, competitor in enumerate(target.get("competitors", []), start=1):
-        current_price = _to_decimal(competitor.get("price", product["price"]))
-        # 這裡做極小幅 mock 浮動，方便示範「重新抓價」效果。
-        step = Decimal("0.50") * Decimal(index)
-        next_price = current_price + step if current_price <= our_price else current_price - step
-        if next_price <= 0:
-            next_price = current_price
-        competitor["price"] = float(next_price.quantize(Decimal("0.01")))
-        competitor["captured_at"] = now
-
-    target["last_refreshed_at"] = now
-    local_store.save_competitor_prices(items)
-    return _serialize_entry(product, target)
+def scrape_test_competitors(product: Dict[str, Any]) -> List[Dict[str, Any]]:
+    return _build_competitors(product)

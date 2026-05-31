@@ -1,44 +1,33 @@
 'use client'
 
-/**
- * 管理者會員列表頁
- *
- * 功能：
- * - 查詢會員
- * - 更新會員狀態
- *
- * 主要 API：
- * - GET `/api/v1/staff/users/`
- * - POST `/api/v1/staff/users/:username/status/`
- */
-
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 import { apiFetch, toQueryString } from '@/lib/api'
-import type { DemoUser } from '@/lib/types'
 
-type UserListPayload = {
-  items: DemoUser[]
+type AdminUser = {
+  id: number
+  username: string
+  display_name: string
+  role: string
+  account_status?: string
+  email?: string
+  created_at?: string
 }
 
+type UserListPayload = {
+  items: AdminUser[]
+}
+
+type UserSortKey = 'created_desc' | 'created_asc' | 'username_asc' | 'username_desc'
+
 export default function AdminUsersPage() {
-  /** 管理端會員列表。 */
-  const [items, setItems] = useState<DemoUser[]>([])
-  /** 會員查詢與篩選條件。 */
+  const [items, setItems] = useState<AdminUser[]>([])
   const [filters, setFilters] = useState({ q: '', role: '', account_status: '' })
-  /** 初次載入列表時的狀態。 */
+  const [sortBy, setSortBy] = useState<UserSortKey>('created_desc')
   const [loading, setLoading] = useState(true)
-  /** 更新會員狀態時的提交狀態。 */
   const [submitting, setSubmitting] = useState(false)
-  /** API 錯誤訊息。 */
   const [error, setError] = useState('')
 
-  /**
-   * 載入會員列表。
-   *
-   * nextFilters:
-   * - 要送給後端的篩選條件；未傳入時會沿用目前 `filters` state。
-   */
   async function loadUsers(nextFilters = filters) {
     setLoading(true)
     try {
@@ -46,24 +35,36 @@ export default function AdminUsersPage() {
       setItems(payload.items)
       setError('')
     } catch (err) {
-      setError(err instanceof Error ? err.message : '載入會員資料失敗，請稍後再試。')
+      setError(err instanceof Error ? err.message : '讀取會員列表失敗。')
     } finally {
       setLoading(false)
     }
   }
 
   useEffect(() => {
-    loadUsers()
+    void loadUsers()
   }, [])
 
-  /**
-   * 更新會員狀態。
-   *
-   * username:
-   * - 目標會員帳號。
-   * accountStatus:
-   * - 要更新成的帳號狀態，目前支援 `active` 與 `suspended`。
-   */
+  const sortedItems = useMemo(() => {
+    const next = [...items]
+    switch (sortBy) {
+      case 'created_asc':
+        next.sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')))
+        break
+      case 'username_asc':
+        next.sort((a, b) => a.username.localeCompare(b.username))
+        break
+      case 'username_desc':
+        next.sort((a, b) => b.username.localeCompare(a.username))
+        break
+      case 'created_desc':
+      default:
+        next.sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
+        break
+    }
+    return next
+  }, [items, sortBy])
+
   async function updateStatus(username: string, accountStatus: 'active' | 'suspended') {
     try {
       setSubmitting(true)
@@ -71,9 +72,9 @@ export default function AdminUsersPage() {
         method: 'POST',
         body: JSON.stringify({ account_status: accountStatus }),
       })
-      await loadUsers()
+      await loadUsers(filters)
     } catch (err) {
-      setError(err instanceof Error ? err.message : '更新會員狀態失敗，請稍後再試。')
+      setError(err instanceof Error ? err.message : '更新會員狀態失敗。')
     } finally {
       setSubmitting(false)
     }
@@ -81,25 +82,50 @@ export default function AdminUsersPage() {
 
   return (
     <section className="card stack">
-      {/* 會員查詢與篩選區：關鍵字、角色與帳號狀態。 */}
-      <h1>會員列表</h1>
+      <h1>會員管理</h1>
+
       <div className="grid grid-3">
         <label className="field">
-          <span>關鍵字</span>
-          <input value={filters.q} onChange={(event) => setFilters((prev) => ({ ...prev, q: event.target.value }))} />
+          <span>搜尋關鍵字</span>
+          <input
+            value={filters.q}
+            onChange={(event) => setFilters((prev) => ({ ...prev, q: event.target.value }))}
+            placeholder="帳號、顯示名稱"
+          />
         </label>
         <label className="field">
           <span>角色</span>
-          <input value={filters.role} onChange={(event) => setFilters((prev) => ({ ...prev, role: event.target.value }))} />
+          <select value={filters.role} onChange={(event) => setFilters((prev) => ({ ...prev, role: event.target.value }))}>
+            <option value="">全部角色</option>
+            <option value="member">會員</option>
+            <option value="seller">賣家</option>
+            <option value="admin">管理者</option>
+          </select>
         </label>
         <label className="field">
           <span>帳號狀態</span>
-          <input value={filters.account_status} onChange={(event) => setFilters((prev) => ({ ...prev, account_status: event.target.value }))} />
+          <select
+            value={filters.account_status}
+            onChange={(event) => setFilters((prev) => ({ ...prev, account_status: event.target.value }))}
+          >
+            <option value="">全部狀態</option>
+            <option value="active">啟用中</option>
+            <option value="suspended">已停權</option>
+          </select>
+        </label>
+        <label className="field">
+          <span>排序</span>
+          <select value={sortBy} onChange={(event) => setSortBy(event.target.value as UserSortKey)}>
+            <option value="created_desc">建立時間：新到舊</option>
+            <option value="created_asc">建立時間：舊到新</option>
+            <option value="username_asc">帳號：A 到 Z</option>
+            <option value="username_desc">帳號：Z 到 A</option>
+          </select>
         </label>
       </div>
+
       <div className="row">
-        {/* 套用篩選條件並重新查詢。 */}
-        <button className="btn btn-secondary" onClick={() => loadUsers(filters)} type="button">
+        <button className="btn btn-secondary" onClick={() => void loadUsers(filters)} type="button">
           套用篩選
         </button>
       </div>
@@ -107,35 +133,47 @@ export default function AdminUsersPage() {
       {error ? <div className="notice">{error}</div> : null}
 
       {loading ? (
-        <div className="muted">載入會員資料中…</div>
-      ) : !items.length ? (
+        <div className="muted">正在讀取會員資料...</div>
+      ) : !sortedItems.length ? (
         <div className="muted">目前沒有符合條件的會員。</div>
       ) : (
         <table className="table">
-          {/* 表頭：會員識別、角色、狀態與操作。 */}
           <thead>
             <tr>
               <th>帳號</th>
               <th>顯示名稱</th>
               <th>角色</th>
+              <th>Email</th>
+              <th>建立時間</th>
               <th>狀態</th>
               <th>操作</th>
             </tr>
           </thead>
           <tbody>
-            {/* 每列可直接對會員執行啟用或停權。 */}
-            {items.map((item) => (
+            {sortedItems.map((item) => (
               <tr key={item.username}>
                 <td>@{item.username}</td>
                 <td>{item.display_name}</td>
                 <td>{item.role}</td>
-                <td>{item.account_status ?? 'active'}</td>
+                <td>{item.email || '-'}</td>
+                <td>{item.created_at ? item.created_at.slice(0, 16).replace('T', ' ') : '-'}</td>
+                <td>{item.account_status || 'active'}</td>
                 <td>
                   <div className="row">
-                    <button className="btn btn-secondary" disabled={submitting} onClick={() => updateStatus(item.username, 'active')} type="button">
+                    <button
+                      className="btn btn-secondary"
+                      disabled={submitting}
+                      onClick={() => void updateStatus(item.username, 'active')}
+                      type="button"
+                    >
                       啟用
                     </button>
-                    <button className="btn btn-secondary" disabled={submitting} onClick={() => updateStatus(item.username, 'suspended')} type="button">
+                    <button
+                      className="btn btn-secondary"
+                      disabled={submitting}
+                      onClick={() => void updateStatus(item.username, 'suspended')}
+                      type="button"
+                    >
                       停權
                     </button>
                   </div>

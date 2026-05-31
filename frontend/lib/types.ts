@@ -30,6 +30,15 @@ export type DemoUser = {
   seller_request_status?: string
   /** 電子郵件。 */
   email?: string
+  shipping_rules?: SellerShippingRules
+}
+
+export type SellerShippingRules = {
+  home_delivery_enabled: boolean
+  home_delivery_fee: string
+  convenience_store_enabled: boolean
+  convenience_store_fee: string
+  free_shipping_threshold: string
 }
 
 /**
@@ -44,6 +53,37 @@ export type AppBootstrapPayload = {
   cart_count: number
   compare_count: number
   favorite_count: number
+}
+
+export type Banner = {
+  id: number
+  title?: string
+  copy_text?: string
+  image_path: string
+  link_url?: string
+  starts_at?: string
+  ends_at?: string
+  position?: string
+  position_label?: string
+  note?: string
+  sort_order: number
+  status?: string
+  status_label?: string
+  is_active: boolean
+  rejection_reason?: string
+  applicant_user_id?: number | null
+  applicant_username?: string
+  applicant_display_name?: string
+  reviewed_at?: string
+  reviewed_by_username?: string
+  reviewed_by_display_name?: string
+  created_at?: string
+  updated_at?: string
+  is_currently_visible?: boolean
+}
+
+export type BannerListPayload = {
+  items: Banner[]
 }
 
 /**
@@ -74,6 +114,8 @@ export type Product = {
   stock?: number | null
   /** 庫存狀態字串，例如 in_stock / out_of_stock。 */
   stock_status?: string
+  /** 目前 session 是否已收藏此商品。 */
+  is_favorite?: boolean
   /** 可用顏色選項。 */
   color_options?: string[]
   /** 可用尺寸選項。 */
@@ -88,7 +130,7 @@ export type Product = {
   status?: string
   /** 狀態的人類可讀標籤。 */
   status_label?: string
-  /** 管理員給賣家的審核備註。 */
+  /** 管理員下架商品時留下的附註。 */
   review_note?: string
   /** 前端可直接顯示的庫存文字。 */
   stock_display?: string
@@ -96,8 +138,35 @@ export type Product = {
   specs_text?: string
   /** 變體摘要文字。 */
   variants_text?: string
+  /** 商品變體清單。 */
+  variants?: ProductVariant[]
+  shipping_profile?: {
+    use_seller_rules: boolean
+    allow_home_delivery: boolean
+    allow_convenience_store: boolean
+    override_home_delivery_fee?: number | null
+    override_convenience_store_fee?: number | null
+  }
+  default_variant?: ProductVariant | null
   /** 擁有者使用者 ID。 */
   owner_user_id?: number | null
+  owner_username?: string
+  owner_display_name?: string
+}
+
+export type ProductVariant = {
+  id: string
+  name: string
+  sku?: string
+  price: number
+  compare_at_price?: number | null
+  stock: number
+  image?: string
+  image_index?: number | null
+  attributes?: {
+    color?: string
+    size?: string
+  }
 }
 
 /**
@@ -148,6 +217,8 @@ export type CompetitorPriceItem = {
   title: string
   url: string
   price: number
+  original_price?: number | null
+  sale_price?: number | null
   currency: string
   captured_at: string
   captured_at_display?: string
@@ -271,6 +342,8 @@ export type CommunityPost = {
   reply_count?: number
   /** 文章詳情頁使用的完整回覆列表。 */
   replies?: CommunityReply[]
+  can_edit?: boolean
+  can_delete?: boolean
 }
 
 /**
@@ -313,6 +386,28 @@ export type CartPayload = {
     discount: string
     total: string
   }
+  shipping_methods?: CheckoutChoice[]
+  selected_shipping_method?: string
+  seller_shipping_groups?: Array<{
+    seller_username: string
+    seller_display_name: string
+    subtotal: string
+    shipping_fee: string
+    base_shipping_fee: string
+    free_shipping_threshold: string
+    free_shipping_applied: boolean
+    selected_shipping_method: string
+    selected_shipping_method_label: string
+    selected_shipping_method_supported: boolean
+    available_shipping_methods: CheckoutChoice[]
+    items: Array<{
+      key: string
+      slug: string
+      display_name: string
+      qty: number
+      line_total: string
+    }>
+  }>
   /** 後端可選回傳補充訊息。 */
   detail?: string
 }
@@ -346,6 +441,52 @@ export type InvoiceProfile = {
 }
 
 /**
+ * checkout 選項列。
+ */
+export type CheckoutChoice = {
+  value: string
+  label: string
+}
+
+/**
+ * checkout 預覽 payload。
+ */
+export type CheckoutPreviewPayload = CartPayload & {
+  user: DemoUser | null
+  requires_login: boolean
+  can_confirm: boolean
+  addresses: Address[]
+  default_address?: Address | null
+  invoice_profile: InvoiceProfile
+  shipping_methods: CheckoutChoice[]
+  payment_methods: CheckoutChoice[]
+  convenience_store_brands: CheckoutChoice[]
+  selected_address_id?: number | null
+  selected_shipping_method?: string
+  selected_payment_method?: string
+  seller_shipping_groups?: Array<{
+    seller_username: string
+    seller_display_name: string
+    subtotal: string
+    shipping_fee: string
+    base_shipping_fee: string
+    free_shipping_threshold: string
+    free_shipping_applied: boolean
+    selected_shipping_method: string
+    selected_shipping_method_label: string
+    selected_shipping_method_supported: boolean
+    available_shipping_methods: CheckoutChoice[]
+    items: Array<{
+      key: string
+      slug: string
+      display_name: string
+      qty: number
+      line_total: string
+    }>
+  }>
+}
+
+/**
  * 訂單資料。
  */
 export type Order = {
@@ -357,11 +498,22 @@ export type Order = {
   status_label?: string
   seller_status?: string
   seller_status_label?: string
+  shipping_address?: Address
+  shipping_method?: string
+  shipping_method_label?: string
+  payment_method?: string
+  payment_method_label?: string
+  pickup_store_brand?: string
+  pickup_store_brand_label?: string
+  pickup_store_code?: string
+  pickup_store_name?: string
+  pickup_store_address?: string
+  buyer_note?: string
   created_at: string
   created_at_display?: string
   /** 訂單金額彙總。 */
   totals?: Record<string, string>
-  /** ?????????? */
+  /** 賣家視角的金額摘要 */
   seller_totals?: Record<string, string>
   /** 訂單項目。 */
   items?: Array<{
@@ -398,6 +550,26 @@ export type Order = {
     items: Array<{
       id: number
       display_name?: string
+      qty: number
+      line_total: string
+    }>
+  }>
+  seller_shipping_groups?: Array<{
+    seller_username: string
+    seller_display_name: string
+    subtotal: string
+    shipping_fee: string
+    base_shipping_fee: string
+    free_shipping_threshold: string
+    free_shipping_applied: boolean
+    selected_shipping_method: string
+    selected_shipping_method_label: string
+    selected_shipping_method_supported: boolean
+    available_shipping_methods: CheckoutChoice[]
+    items: Array<{
+      key?: string
+      slug?: string
+      display_name: string
       qty: number
       line_total: string
     }>
@@ -444,6 +616,28 @@ export type NewebpaySandboxPaymentPrepared = {
   note: string
 }
 
+export type NewebpayPaymentRecord = {
+  provider: string
+  mode: string
+  order_id: number
+  buyer_username: string
+  merchant_order_no: string
+  trade_no: string
+  status: string
+  status_label: string
+  amount: string
+  currency: string
+  payment_url: string
+  return_url?: string
+  client_back_url?: string
+  created_at: string
+  updated_at: string
+  paid_at?: string
+  note?: string
+  callback_count: number
+  raw_payload?: Record<string, unknown>
+}
+
 /**
  * 藍新物流 sandbox scaffold 設定摘要。
  *
@@ -480,7 +674,39 @@ export type NewebpaySandboxLogisticsPrepared = {
   create_url?: string
   status_url?: string
   suggested_payload: Record<string, string | number>
+  buyer_shipping_summary?: {
+    shipping_method: string
+    shipping_method_label?: string
+    payment_method: string
+    payment_method_label?: string
+    pickup_store_brand?: string
+    pickup_store_brand_label?: string
+    pickup_store_code?: string
+    pickup_store_name?: string
+    pickup_store_address?: string
+    is_convenience_store: boolean
+  }
   note: string
+}
+
+export type NewebpayLogisticsRecord = {
+  provider: string
+  mode: string
+  order_id: number
+  seller_username: string
+  merchant_order_no?: string
+  logistics_no: string
+  status: string
+  status_label: string
+  store_type: string
+  temperature: string
+  receiver_name: string
+  receiver_phone: string
+  shipment_note?: string
+  created_at: string
+  updated_at: string
+  callback_count: number
+  raw_payload?: Record<string, unknown>
 }
 
 /**
@@ -511,7 +737,7 @@ export type SalesReport = {
  * 審核中心首頁資料。
  */
 export type StaffReviewDashboard = {
-  pending_products: Product[]
+  managed_products: Product[]
   seller_requests: DemoUser[]
 }
 

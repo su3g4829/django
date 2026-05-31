@@ -1,17 +1,6 @@
 'use client'
 
-/**
- * 管理者訂單列表頁
- *
- * 功能：
- * - 顯示全站訂單
- * - 提供查詢與篩選
- *
- * 主要 API：
- * - GET `/api/v1/staff/orders/`
- */
-
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 import { apiFetch, toQueryString } from '@/lib/api'
 import type { Order } from '@/lib/types'
@@ -20,10 +9,10 @@ type OrderListPayload = {
   items: Order[]
 }
 
+type OrderSortKey = 'created_desc' | 'created_asc' | 'id_desc' | 'id_asc'
+
 export default function AdminOrdersPage() {
-  /** 管理端可見的訂單列表。 */
   const [items, setItems] = useState<Order[]>([])
-  /** 訂單搜尋與篩選條件。 */
   const [filters, setFilters] = useState({
     q: '',
     date_from: '',
@@ -31,17 +20,10 @@ export default function AdminOrdersPage() {
     status: '',
     service_status: '',
   })
-  /** 初次載入列表時的狀態。 */
+  const [sortBy, setSortBy] = useState<OrderSortKey>('created_desc')
   const [loading, setLoading] = useState(true)
-  /** API 錯誤訊息。 */
   const [error, setError] = useState('')
 
-  /**
-   * 載入管理端訂單列表。
-   *
-   * nextFilters:
-   * - 要送給後端的查詢條件；未傳入時會沿用目前 `filters` state。
-   */
   async function loadOrders(nextFilters = filters) {
     setLoading(true)
     try {
@@ -49,23 +31,43 @@ export default function AdminOrdersPage() {
       setItems(payload.items)
       setError('')
     } catch (err) {
-      setError(err instanceof Error ? err.message : '載入管理端訂單失敗，請稍後再試。')
+      setError(err instanceof Error ? err.message : '讀取平台訂單失敗。')
     } finally {
       setLoading(false)
     }
   }
 
   useEffect(() => {
-    loadOrders()
+    void loadOrders()
   }, [])
+
+  const sortedItems = useMemo(() => {
+    const next = [...items]
+    switch (sortBy) {
+      case 'created_asc':
+        next.sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')))
+        break
+      case 'id_asc':
+        next.sort((a, b) => a.id - b.id)
+        break
+      case 'id_desc':
+        next.sort((a, b) => b.id - a.id)
+        break
+      case 'created_desc':
+      default:
+        next.sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
+        break
+    }
+    return next
+  }, [items, sortBy])
 
   return (
     <section className="card stack">
-      {/* 查詢與篩選列：關鍵字、日期、訂單狀態與售後狀態。 */}
-      <h1>管理者訂單列表</h1>
+      <h1>平台訂單</h1>
+
       <div className="grid grid-3">
         <label className="field">
-          <span>關鍵字</span>
+          <span>搜尋關鍵字</span>
           <input value={filters.q} onChange={(event) => setFilters((prev) => ({ ...prev, q: event.target.value }))} />
         </label>
         <label className="field">
@@ -84,10 +86,19 @@ export default function AdminOrdersPage() {
           <span>售後狀態</span>
           <input value={filters.service_status} onChange={(event) => setFilters((prev) => ({ ...prev, service_status: event.target.value }))} />
         </label>
+        <label className="field">
+          <span>排序</span>
+          <select value={sortBy} onChange={(event) => setSortBy(event.target.value as OrderSortKey)}>
+            <option value="created_desc">建立時間：新到舊</option>
+            <option value="created_asc">建立時間：舊到新</option>
+            <option value="id_desc">訂單編號：大到小</option>
+            <option value="id_asc">訂單編號：小到大</option>
+          </select>
+        </label>
       </div>
+
       <div className="row">
-        {/* 套用篩選條件並重新查詢。 */}
-        <button className="btn btn-secondary" onClick={() => loadOrders(filters)} type="button">
+        <button className="btn btn-secondary" onClick={() => void loadOrders(filters)} type="button">
           套用篩選
         </button>
       </div>
@@ -95,12 +106,11 @@ export default function AdminOrdersPage() {
       {error ? <div className="notice">{error}</div> : null}
 
       {loading ? (
-        <div className="muted">載入管理端訂單中…</div>
-      ) : !items.length ? (
+        <div className="muted">正在讀取平台訂單...</div>
+      ) : !sortedItems.length ? (
         <div className="muted">目前沒有符合條件的訂單。</div>
       ) : (
         <table className="table">
-          {/* 表頭：訂單摘要與售後狀態。 */}
           <thead>
             <tr>
               <th>訂單編號</th>
@@ -112,8 +122,7 @@ export default function AdminOrdersPage() {
             </tr>
           </thead>
           <tbody>
-            {/* 每列可進一步查看管理端詳情頁。 */}
-            {items.map((item) => (
+            {sortedItems.map((item) => (
               <tr key={item.id}>
                 <td>#{item.id}</td>
                 <td>{item.display_name}</td>
@@ -121,7 +130,7 @@ export default function AdminOrdersPage() {
                 <td>{item.status_label ?? item.status}</td>
                 <td>{item.service_request?.status_label ?? item.service_request?.status ?? '-'}</td>
                 <td>
-                  <a href={`/staff/orders/${item.id}`}>查看詳情</a>
+                  <a href={`/staff/orders/${item.id}`}>查看訂單</a>
                 </td>
               </tr>
             ))}

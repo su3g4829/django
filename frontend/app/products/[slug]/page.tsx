@@ -1,143 +1,189 @@
 'use client'
 
-/**
- * 商品詳情頁。
- *
- * 這一頁會顯示：
- * - 商品主資訊
- * - 加入購物車
- * - 評論
- * - 問答
- * - 推薦商品
- * - 模擬比價資料
- *
- * 主要 API：
- * - GET `/api/v1/products/:slug/`
- * - GET `/api/v1/products/:slug/recommendations/`
- * - GET/POST `/api/v1/products/:slug/reviews/`
- * - GET/POST `/api/v1/products/:slug/questions/`
- * - POST `/api/v1/products/:slug/questions/:question_id/answers/`
- * - POST `/api/v1/cart/items/`
- * - GET `/api/v1/products/:slug/price-compare/`
- * - POST `/api/v1/products/:slug/price-compare/refresh/`
- */
-
 import Link from 'next/link'
-import { useParams } from 'next/navigation'
 import { useEffect, useMemo, useState } from 'react'
+import { useParams } from 'next/navigation'
 
-import { apiFetch } from '@/lib/api'
-import type { PriceComparisonPayload, PriceComparisonRefreshPayload, Product, Question, Review } from '@/lib/types'
+import { apiFetch, dispatchAppBootstrapRefresh } from '@/lib/api'
+import { toBackendAssetUrl } from '@/lib/assets'
+import { findMatchingVariant, getAvailableSizesForColor, stripManagedSizeSpecs } from '@/lib/product-variants'
+import type {
+  PriceComparisonPayload,
+  PriceComparisonRefreshPayload,
+  Product,
+  Question,
+  Review,
+} from '@/lib/types'
 
-type ProductDetailPayload = Product & {
-  variants?: Array<{ id: string; name: string; price: number; stock: number }>
-  specs?: Record<string, string>
-}
-
-type RecommendationPayload = {
+type ProductRecommendationsPayload = {
   similar: Product[]
   also_bought: Product[]
 }
 
-type ReviewListPayload = { items: Review[] }
-type QuestionListPayload = { items: Question[] }
+type ReviewListPayload = {
+  items: Review[]
+}
+
+type QuestionListPayload = {
+  items: Question[]
+}
+
+type ReviewFormState = {
+  rating: number
+  title: string
+  body: string
+}
+
+type QuestionFormState = {
+  title: string
+  body: string
+}
+
+const INITIAL_REVIEW_FORM: ReviewFormState = {
+  rating: 5,
+  title: '',
+  body: '',
+}
+
+const INITIAL_QUESTION_FORM: QuestionFormState = {
+  title: '',
+  body: '',
+}
 
 export default function ProductDetailPage() {
   const params = useParams<{ slug: string }>()
-  /** 目前頁面的商品 slug。 */
   const slug = useMemo(() => params.slug, [params.slug])
 
-  /** 商品主資料。 */
-  const [product, setProduct] = useState<ProductDetailPayload | null>(null)
-  /** 推薦商品資料。 */
-  const [recommendations, setRecommendations] = useState<RecommendationPayload | null>(null)
-  /** 評論列表。 */
+  const [product, setProduct] = useState<Product | null>(null)
   const [reviews, setReviews] = useState<Review[]>([])
-  /** 問答列表。 */
   const [questions, setQuestions] = useState<Question[]>([])
-  /** 模擬比價結果。 */
-  const [priceCompare, setPriceCompare] = useState<PriceComparisonPayload | null>(null)
+  const [recommendations, setRecommendations] = useState<ProductRecommendationsPayload>({ similar: [], also_bought: [] })
+  const [priceComparison, setPriceComparison] = useState<PriceComparisonPayload | null>(null)
 
-  /** 目前選中的變體 id。 */
-  const [variantId, setVariantId] = useState('')
-  /** 加入購物車數量。 */
-  const [qty, setQty] = useState(1)
-
-  /** 全頁訊息。 */
-  const [message, setMessage] = useState('')
-  /** 全頁錯誤訊息。 */
-  const [error, setError] = useState('')
-  /** 初始載入狀態。 */
   const [loading, setLoading] = useState(true)
-  /** 表單送出或刷新中的狀態。 */
+  const [error, setError] = useState('')
+  const [message, setMessage] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [priceRefreshing, setPriceRefreshing] = useState(false)
+  const [favoriteActive, setFavoriteActive] = useState(false)
+  const [compareActive, setCompareActive] = useState(false)
 
-  /** 評論表單。 */
-  const [reviewForm, setReviewForm] = useState({ rating: 5, title: '', body: '' })
-  /** 發問表單。 */
-  const [questionForm, setQuestionForm] = useState({ title: '', body: '' })
-  /** 回答表單，key 是 question id。 */
-  const [answerForms, setAnswerForms] = useState<Record<number, string>>({})
+  const [qty, setQty] = useState(1)
+  const [selectedColor, setSelectedColor] = useState('')
+  const [selectedSize, setSelectedSize] = useState('')
+  const [activeImage, setActiveImage] = useState('')
 
-  /**
-   * 一次載入商品頁全部需要的資料。
-   *
-   * 包含：
-   * - 商品主資料
-   * - 推薦商品
-   * - 評論
-   * - 問答
-   * - 模擬比價
-   */
-  async function loadAll() {
-    setLoading(true)
-    try {
-      const [productPayload, recommendationPayload, reviewPayload, questionPayload, comparePayload] = await Promise.all([
-        apiFetch<ProductDetailPayload>(`/products/${slug}/`),
-        apiFetch<RecommendationPayload>(`/products/${slug}/recommendations/`).catch(() => ({ similar: [], also_bought: [] })),
-        apiFetch<ReviewListPayload>(`/products/${slug}/reviews/`).catch(() => ({ items: [] })),
-        apiFetch<QuestionListPayload>(`/products/${slug}/questions/`).catch(() => ({ items: [] })),
-        apiFetch<PriceComparisonPayload>(`/products/${slug}/price-compare/`).catch(() => null),
-      ])
-
-      setProduct(productPayload)
-      setRecommendations(recommendationPayload)
-      setReviews(reviewPayload.items)
-      setQuestions(questionPayload.items)
-      setPriceCompare(comparePayload)
-      setError('')
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '載入商品資料失敗。')
-    } finally {
-      setLoading(false)
-    }
-  }
+  const [reviewForm, setReviewForm] = useState<ReviewFormState>(INITIAL_REVIEW_FORM)
+  const [questionForm, setQuestionForm] = useState<QuestionFormState>(INITIAL_QUESTION_FORM)
+  const [answerDrafts, setAnswerDrafts] = useState<Record<number, string>>({})
 
   useEffect(() => {
-    loadAll()
+    async function load() {
+      try {
+        setLoading(true)
+        setError('')
+
+        const [productPayload, reviewPayload, questionPayload, recommendationPayload] = await Promise.all([
+          apiFetch<Product>(`/products/${slug}/`),
+          apiFetch<ReviewListPayload>(`/products/${slug}/reviews/`),
+          apiFetch<QuestionListPayload>(`/products/${slug}/questions/`),
+          apiFetch<ProductRecommendationsPayload>(`/products/${slug}/recommendations/`),
+        ])
+
+        const shouldShowPriceComparison = productPayload.slug === 'new-forcepolo'
+        const nextPriceComparison = shouldShowPriceComparison
+          ? await apiFetch<PriceComparisonPayload>(`/products/${slug}/price-compare/`)
+          : null
+
+        const initialVariant = productPayload.default_variant ?? productPayload.variants?.[0] ?? null
+
+        setProduct(productPayload)
+        setReviews(reviewPayload.items ?? [])
+        setQuestions(questionPayload.items ?? [])
+        setRecommendations(recommendationPayload)
+        setPriceComparison(nextPriceComparison)
+        setFavoriteActive(Boolean(productPayload.is_favorite))
+        setCompareActive(false)
+        setQty(1)
+        setSelectedColor(initialVariant?.attributes?.color ?? productPayload.color_options?.[0] ?? '')
+        setSelectedSize(initialVariant?.attributes?.size ?? productPayload.size_options?.[0] ?? '')
+      } catch (err) {
+        setError(err instanceof Error ? err.message : '讀取商品資料失敗。')
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    void load()
   }, [slug])
 
-  /**
-   * 送出加入購物車。
-   *
-   * 送出的欄位：
-   * - `slug`: 商品 slug
-   * - `qty`: 數量
-   * - `variant_id`: 目前選中的變體 id
-   */
+  const selectedVariant = useMemo(
+    () => findMatchingVariant(product?.variants, selectedSize, selectedColor),
+    [product?.variants, selectedColor, selectedSize],
+  )
+
+  const sizeChoices = useMemo(
+    () => getAvailableSizesForColor(product?.variants, selectedColor),
+    [product?.variants, selectedColor],
+  )
+
+  const colorChoices = product?.color_options ?? []
+  const detailSpecsText = useMemo(() => stripManagedSizeSpecs(product?.specs_text ?? ''), [product?.specs_text])
+
+  const galleryImages = useMemo(() => {
+    const leadImage = selectedVariant?.image || product?.primary_image || product?.images?.[0] || ''
+    const ordered = [leadImage, ...(product?.images ?? [])].filter(Boolean)
+    return ordered.filter((image, index) => ordered.indexOf(image) === index)
+  }, [product?.images, product?.primary_image, selectedVariant?.image])
+
+  useEffect(() => {
+    if (!sizeChoices.length) {
+      return
+    }
+    if (!selectedSize || !sizeChoices.includes(selectedSize)) {
+      setSelectedSize(sizeChoices[0])
+    }
+  }, [selectedSize, sizeChoices])
+
+  useEffect(() => {
+    setActiveImage(galleryImages[0] ?? '')
+  }, [galleryImages])
+
+  const displayPrice = selectedVariant?.price ?? product?.price ?? 0
+  const displayCompareAt = selectedVariant ? (selectedVariant.compare_at_price ?? null) : (product?.compare_at_price ?? null)
+  const displayDiscountPercent =
+    displayCompareAt && displayCompareAt > displayPrice ? Math.round(((displayCompareAt - displayPrice) / displayCompareAt) * 100) : 0
+  const displayStock = selectedVariant?.stock ?? product?.stock ?? null
+  const variantId = selectedVariant?.id ?? ''
+  const variantName = selectedVariant?.name ?? ''
+  const recommendationItems = [...recommendations.similar, ...recommendations.also_bought]
+  const sellerLabel =
+    product?.owner_display_name || product?.owner_username
+      ? `${product?.owner_display_name || product?.owner_username}${product?.owner_username ? ` (@${product.owner_username})` : ''}`
+      : ''
+
+  function setSuccess(text: string) {
+    setMessage(text)
+    setError('')
+  }
+
   async function addToCart() {
     try {
       setSubmitting(true)
       setError('')
-      const payload = await apiFetch<{ detail?: string }>('/cart/items/', {
+
+      const payload = await apiFetch<{ detail?: string; item_count?: number }>('/cart/items/', {
         method: 'POST',
         body: JSON.stringify({
           slug,
           qty,
           variant_id: variantId,
+          variant_name: variantName,
         }),
       })
-      setMessage(payload.detail ?? '已加入購物車。')
+
+      dispatchAppBootstrapRefresh({ cart_count: payload.item_count })
+      setSuccess(payload.detail ?? '已加入購物車。')
     } catch (err) {
       setError(err instanceof Error ? err.message : '加入購物車失敗。')
     } finally {
@@ -145,347 +191,393 @@ export default function ProductDetailPage() {
     }
   }
 
-  /** 送出評論。 */
-  async function submitReview() {
+  async function toggleFavorite() {
     try {
-      setSubmitting(true)
-      setError('')
-      const created = await apiFetch<Review>(`/products/${slug}/reviews/`, {
+      const payload = await apiFetch<{ active: boolean; favorite_count: number }>(`/products/${slug}/favorite/`, { method: 'POST' })
+      setFavoriteActive(payload.active)
+      dispatchAppBootstrapRefresh({ favorite_count: payload.favorite_count })
+      setSuccess(payload.active ? '已加入收藏。' : '已取消收藏。')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '更新收藏失敗。')
+    }
+  }
+
+  async function toggleCompare() {
+    try {
+      const payload = await apiFetch<{ active: boolean; removed_slug?: string | null }>(`/products/${slug}/compare/`, {
+        method: 'POST',
+      })
+      setCompareActive(payload.active)
+      if (payload.removed_slug) {
+        setSuccess(`比較清單已滿，已移除 ${payload.removed_slug}。`)
+      } else {
+        setSuccess(payload.active ? '已加入比較清單。' : '已從比較清單移除。')
+      }
+      dispatchAppBootstrapRefresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '更新比較清單失敗。')
+    }
+  }
+
+  async function submitReview(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    try {
+      const payload = await apiFetch<Review>(`/products/${slug}/reviews/`, {
         method: 'POST',
         body: JSON.stringify(reviewForm),
       })
-      setReviews((prev) => [created, ...prev])
-      setReviewForm({ rating: 5, title: '', body: '' })
-      setMessage('評論已送出。')
+      setReviews((current) => [payload, ...current])
+      setReviewForm(INITIAL_REVIEW_FORM)
+      setSuccess('評論已送出。')
     } catch (err) {
       setError(err instanceof Error ? err.message : '送出評論失敗。')
-    } finally {
-      setSubmitting(false)
     }
   }
 
-  /** 送出發問。 */
-  async function submitQuestion() {
+  async function submitQuestion(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
     try {
-      setSubmitting(true)
-      setError('')
-      const created = await apiFetch<Question>(`/products/${slug}/questions/`, {
+      const payload = await apiFetch<Question>(`/products/${slug}/questions/`, {
         method: 'POST',
         body: JSON.stringify(questionForm),
       })
-      setQuestions((prev) => [created, ...prev])
-      setQuestionForm({ title: '', body: '' })
-      setMessage('問題已送出。')
+      setQuestions((current) => [payload, ...current])
+      setQuestionForm(INITIAL_QUESTION_FORM)
+      setSuccess('問題已送出。')
     } catch (err) {
       setError(err instanceof Error ? err.message : '送出問題失敗。')
-    } finally {
-      setSubmitting(false)
     }
   }
 
-  /**
-   * 送出單一問題的回答。
-   *
-   * `questionId`:
-   * - 目前正在回答的問題 id
-   */
   async function submitAnswer(questionId: number) {
+    const body = (answerDrafts[questionId] || '').trim()
+    if (!body) {
+      return
+    }
+
     try {
-      setSubmitting(true)
-      setError('')
-      const updated = await apiFetch<Question>(`/products/${slug}/questions/${questionId}/answers/`, {
+      const payload = await apiFetch<Question>(`/products/${slug}/questions/${questionId}/answers/`, {
         method: 'POST',
-        body: JSON.stringify({ body: answerForms[questionId] ?? '' }),
+        body: JSON.stringify({ body }),
       })
-      setQuestions((prev) => prev.map((item) => (item.id === questionId ? updated : item)))
-      setAnswerForms((prev) => ({ ...prev, [questionId]: '' }))
-      setMessage('回答已送出。')
+      setQuestions((current) => current.map((question) => (question.id === questionId ? payload : question)))
+      setAnswerDrafts((current) => ({ ...current, [questionId]: '' }))
+      setSuccess('回答已送出。')
     } catch (err) {
       setError(err instanceof Error ? err.message : '送出回答失敗。')
-    } finally {
-      setSubmitting(false)
     }
   }
 
-  /**
-   * 模擬重新抓價。
-   *
-   * 這支功能不會真的連到外站，而是呼叫後端 mock crawler service，
-   * 讓更新時間與模擬價格重新計算。
-   */
-  async function refreshPriceCompare() {
+  async function refreshPriceComparison() {
     try {
-      setSubmitting(true)
-      setError('')
+      setPriceRefreshing(true)
       const payload = await apiFetch<PriceComparisonRefreshPayload>(`/products/${slug}/price-compare/refresh/`, {
         method: 'POST',
       })
-      setPriceCompare(payload.result)
-      setMessage(payload.detail)
+      setPriceComparison(payload.result)
+      setSuccess(payload.detail)
     } catch (err) {
-      setError(err instanceof Error ? err.message : '模擬抓價失敗。')
+      setError(err instanceof Error ? err.message : '更新比價失敗。')
     } finally {
-      setSubmitting(false)
+      setPriceRefreshing(false)
     }
   }
 
   if (loading) {
-    return <section className="card">載入商品資料中…</section>
+    return <section className="card">讀取中...</section>
   }
 
-  const displayPrice = product?.price_range_label ?? (product ? `$${product.price.toFixed(2)}` : '')
+  if (!product) {
+    return <section className="card">找不到商品。</section>
+  }
 
   return (
     <div className="stack">
-      {/* 商品主區：圖片、基本資訊、價格與購買操作。 */}
+      <section className="card stack">
+        <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' }}>
+          <div className="stack">
+            <h1>{product.name}</h1>
+            <div className="muted">
+              {product.brand && product.brand.toLowerCase() !== 'none' ? `${product.brand} / ${product.category}` : product.category}
+            </div>
+            {sellerLabel ? <div className="muted">賣家：{sellerLabel}</div> : null}
+            {product.tags?.length ? <div className="muted">標籤：{product.tags.join('、')}</div> : null}
+          </div>
+          <div className="stack" style={{ alignItems: 'flex-end' }}>
+            <div>
+              <strong>${displayPrice.toFixed(2)}</strong>
+              {displayCompareAt ? <span className="muted"> / 原價 ${displayCompareAt.toFixed(2)}</span> : null}
+            </div>
+            {displayDiscountPercent ? <span className="badge">-{displayDiscountPercent}%</span> : null}
+          </div>
+        </div>
+
+        {error ? <div className="notice">{error}</div> : null}
+        {message ? <div className="notice success">{message}</div> : null}
+      </section>
+
       <div className="grid grid-2">
         <section className="card stack">
-          {product?.primary_image ? <img alt={product.name} className="product-image" src={product.primary_image} /> : <div className="product-image" />}
-          <div className="stack">
-            <h1>{product?.name ?? 'Loading...'}</h1>
-            <div className="muted">
-              {product?.brand} ・ {product?.category}
+          {activeImage ? <img alt={product.name} className="product-image" src={toBackendAssetUrl(activeImage)} /> : <div className="product-image" />}
+
+          {galleryImages.length > 1 ? (
+            <div className="row" style={{ gap: '0.75rem', flexWrap: 'wrap' }}>
+              {galleryImages.map((image, index) => {
+                const selected = image === activeImage
+                return (
+                  <button
+                    key={`${image}-${index}`}
+                    className="btn btn-secondary"
+                    style={{ borderWidth: selected ? '2px' : '1px' }}
+                    type="button"
+                    onClick={() => setActiveImage(image)}
+                  >
+                    圖 {index + 1}
+                  </button>
+                )
+              })}
             </div>
-            <strong>{displayPrice}</strong>
-            {product?.compare_at_price ? <span className="muted">原價 ${product.compare_at_price.toFixed(2)}</span> : null}
-            <div className="muted">庫存狀態：{product?.stock_status ?? 'unknown'}</div>
-          </div>
+          ) : null}
+
+          {selectedVariant?.image ? <div className="muted">目前顏色已切換到對應圖片。</div> : null}
+          {colorChoices.length ? <div className="muted">顏色: {colorChoices.join(', ')}</div> : null}
+          {detailSpecsText ? <pre className="muted" style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{detailSpecsText}</pre> : null}
         </section>
 
         <section className="card stack">
-          <h2>購買資訊</h2>
-          {error ? <div className="notice">{error}</div> : null}
-          {message ? <div className="notice success">{message}</div> : null}
-
-          {product?.variants?.length ? (
-            <label className="field">
-              <span>商品變體</span>
-              <select value={variantId} onChange={(event) => setVariantId(event.target.value)}>
-                <option value="">請選擇變體</option>
-                {product.variants.map((variant) => (
-                  <option key={variant.id} value={variant.id}>
-                    {variant.name} ・ ${variant.price.toFixed(2)} ・ 庫存 {variant.stock}
-                  </option>
+          {colorChoices.length ? (
+            <div className="stack">
+              <span>顏色</span>
+              <div className="row" style={{ gap: '0.75rem', flexWrap: 'wrap' }}>
+                {colorChoices.map((color) => (
+                  <button
+                    key={color}
+                    className={selectedColor === color ? 'btn-primary' : 'btn btn-secondary'}
+                    type="button"
+                    onClick={() => setSelectedColor(color)}
+                  >
+                    {color}
+                  </button>
                 ))}
-              </select>
-            </label>
+              </div>
+            </div>
           ) : null}
 
-          <label className="field">
-            <span>數量</span>
-            <input min={1} type="number" value={qty} onChange={(event) => setQty(Number(event.target.value) || 1)} />
-          </label>
-
-          <button className="btn" disabled={submitting} onClick={addToCart} type="button">
-            {submitting ? '處理中…' : '加入購物車'}
-          </button>
+          {(sizeChoices.length || product.size_options?.length) ? (
+            <div className="stack">
+              <span>尺寸</span>
+              <div className="row" style={{ gap: '0.75rem', flexWrap: 'wrap' }}>
+                {(sizeChoices.length ? sizeChoices : product.size_options ?? []).map((size) => (
+                  <button
+                    key={size}
+                    className={selectedSize === size ? 'btn-primary' : 'btn btn-secondary'}
+                    type="button"
+                    onClick={() => setSelectedSize(size)}
+                  >
+                    {size}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
 
           <div className="stack">
-            <h3>商品規格</h3>
-            {product?.specs ? (
-              <ul>
-                {Object.entries(product.specs).map(([key, value]) => (
-                  <li key={key}>
-                    {key}: {value}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="muted">目前沒有規格資料。</p>
-            )}
+            {selectedColor ? <div className="muted">目前顏色：{selectedColor}</div> : null}
+            {selectedSize ? <div className="muted">目前尺寸：{selectedSize}</div> : null}
+            {displayStock != null ? (
+              <div className="muted">庫存：{displayStock}</div>
+            ) : product.stock_display ? (
+              <div className="muted">{product.stock_display}</div>
+            ) : null}
+          </div>
+
+          <label className="stack">
+            <span>數量</span>
+            <input min={1} type="number" value={qty} onChange={(event) => setQty(Math.max(1, Number(event.target.value) || 1))} />
+          </label>
+
+          <div className="row" style={{ gap: '0.75rem', flexWrap: 'wrap' }}>
+            <button className="btn-primary" disabled={submitting} type="button" onClick={addToCart}>
+              {submitting ? '加入中...' : '加入購物車'}
+            </button>
+            <button className="btn" type="button" onClick={toggleFavorite}>
+              {favoriteActive ? '取消收藏' : '加入收藏'}
+            </button>
+            <button className="btn" type="button" onClick={toggleCompare}>
+              {compareActive ? '取消比較' : '加入比較'}
+            </button>
           </div>
         </section>
       </div>
 
-      {/* 比價區：展示 mock crawler / mock API 的外站價格比較。 */}
-      <section className="card stack">
-        <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-          <div>
+      {priceComparison ? (
+        <section className="card stack">
+          <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
             <h2>價格比較</h2>
-            <p className="muted">
-              這裡顯示的是模擬外站價格資料，用來示範 crawler / 比價功能，不代表即時真實價格。
-            </p>
+            <button className="btn" disabled={priceRefreshing} type="button" onClick={refreshPriceComparison}>
+              {priceRefreshing ? '更新中...' : '重新抓價'}
+            </button>
           </div>
-          <button className="btn btn-secondary" disabled={submitting} onClick={refreshPriceCompare} type="button">
-            模擬重新抓價
-          </button>
-        </div>
+          <div className="muted">
+            本站：{priceComparison.currency} {priceComparison.our_price} / 最低價：{priceComparison.currency} {priceComparison.lowest_price} / 更新時間：
+            {priceComparison.last_refreshed_at_display ?? priceComparison.last_refreshed_at}
+          </div>
 
-        {priceCompare ? (
-          <>
-            <div className="grid grid-3">
-              <div className="card">
-                <strong>本站價格</strong>
-                <div>${priceCompare.our_price.toFixed(2)}</div>
-              </div>
-              <div className="card">
-                <strong>最低外站價</strong>
-                <div>${priceCompare.lowest_price.toFixed(2)}</div>
-              </div>
-              <div className="card">
-                <strong>更新時間</strong>
-                <div>{priceCompare.last_refreshed_at_display || '尚未更新'}</div>
-              </div>
-            </div>
-
+          {!priceComparison.items.length ? (
+            <div className="muted">目前沒有外站比價資料。</div>
+          ) : (
             <table className="table">
               <thead>
                 <tr>
-                  <th>來源站點</th>
-                  <th>商品名稱</th>
+                  <th>平台</th>
+                  <th>商品</th>
                   <th>價格</th>
-                  <th>與本站差額</th>
-                  <th>更新時間</th>
-                  <th>備註</th>
+                  <th>價差</th>
                 </tr>
               </thead>
               <tbody>
-                {priceCompare.items.map((item) => (
-                  <tr key={item.site}>
+                {priceComparison.items.map((item) => (
+                  <tr key={`${item.site}-${item.url}`}>
                     <td>{item.site_label}</td>
                     <td>
                       <a href={item.url} rel="noreferrer" target="_blank">
                         {item.title}
                       </a>
                     </td>
-                    <td>${item.price.toFixed(2)}</td>
+                    <td>
+                      {item.currency} {item.price}
+                    </td>
                     <td>
                       {item.diff_amount > 0 ? '+' : ''}
-                      {item.diff_amount.toFixed(2)} ({item.diff_percent > 0 ? '+' : ''}
-                      {item.diff_percent.toFixed(2)}%)
+                      {item.diff_amount} ({item.diff_percent}%)
                     </td>
-                    <td>{item.captured_at_display}</td>
-                    <td>{item.note}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          </>
+          )}
+        </section>
+      ) : null}
+
+      <section className="card stack">
+        <h2>評論</h2>
+        <form className="stack" onSubmit={submitReview}>
+          <label className="stack">
+            <span>評分</span>
+            <select value={reviewForm.rating} onChange={(event) => setReviewForm((current) => ({ ...current, rating: Number(event.target.value) }))}>
+              {[5, 4, 3, 2, 1].map((rating) => (
+                <option key={rating} value={rating}>
+                  {rating}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="stack">
+            <span>標題</span>
+            <input value={reviewForm.title} onChange={(event) => setReviewForm((current) => ({ ...current, title: event.target.value }))} />
+          </label>
+          <label className="stack">
+            <span>內容</span>
+            <textarea rows={4} value={reviewForm.body} onChange={(event) => setReviewForm((current) => ({ ...current, body: event.target.value }))} />
+          </label>
+          <button className="btn" type="submit">
+            送出評論
+          </button>
+        </form>
+
+        {!reviews.length ? (
+          <div className="muted">目前還沒有評論。</div>
         ) : (
-          <p className="muted">目前沒有可顯示的比價資料。</p>
+          reviews.map((review) => (
+            <div className="card stack" key={review.id}>
+              <div className="row" style={{ justifyContent: 'space-between' }}>
+                <strong>{review.title}</strong>
+                <span className="badge">{review.rating} / 5</span>
+              </div>
+              <div className="muted">
+                {review.author} / {review.created_at_display ?? review.created_at}
+              </div>
+              <div>{review.body}</div>
+            </div>
+          ))
         )}
       </section>
 
-      {/* 評論區：左邊顯示列表，右邊送出新評論。 */}
       <section className="card stack">
-        <h2>商品評論</h2>
-        <div className="grid grid-2">
-          <div className="stack">
-            {reviews.length ? (
-              reviews.map((review) => (
-                <div className="card" key={review.id}>
-                  <div className="row" style={{ justifyContent: 'space-between' }}>
-                    <strong>{review.title}</strong>
-                    <span className="badge">{review.rating} / 5</span>
-                  </div>
-                  <div className="muted">
-                    {review.author} ・ {review.created_at_display}
-                  </div>
-                  <p>{review.body}</p>
-                </div>
-              ))
-            ) : (
-              <div className="muted">目前還沒有評論。</div>
-            )}
-          </div>
+        <h2>問答</h2>
+        <form className="stack" onSubmit={submitQuestion}>
+          <label className="stack">
+            <span>問題標題</span>
+            <input value={questionForm.title} onChange={(event) => setQuestionForm((current) => ({ ...current, title: event.target.value }))} />
+          </label>
+          <label className="stack">
+            <span>問題內容</span>
+            <textarea rows={4} value={questionForm.body} onChange={(event) => setQuestionForm((current) => ({ ...current, body: event.target.value }))} />
+          </label>
+          <button className="btn" type="submit">
+            送出問題
+          </button>
+        </form>
 
-          <div className="stack">
-            <label className="field">
-              <span>評分</span>
-              <select value={reviewForm.rating} onChange={(event) => setReviewForm((prev) => ({ ...prev, rating: Number(event.target.value) }))}>
-                {[5, 4, 3, 2, 1].map((score) => (
-                  <option key={score} value={score}>
-                    {score}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="field">
-              <span>標題</span>
-              <input value={reviewForm.title} onChange={(event) => setReviewForm((prev) => ({ ...prev, title: event.target.value }))} />
-            </label>
-            <label className="field">
-              <span>內容</span>
-              <textarea rows={5} value={reviewForm.body} onChange={(event) => setReviewForm((prev) => ({ ...prev, body: event.target.value }))} />
-            </label>
-            <button className="btn" disabled={submitting} onClick={submitReview} type="button">
-              送出評論
-            </button>
-          </div>
-        </div>
+        {!questions.length ? (
+          <div className="muted">目前還沒有問答。</div>
+        ) : (
+          questions.map((question) => (
+            <div className="card stack" key={question.id}>
+              <div className="row" style={{ justifyContent: 'space-between' }}>
+                <strong>{question.title}</strong>
+                <span className="badge">回答 {question.answer_count ?? question.answers?.length ?? 0}</span>
+              </div>
+              <div className="muted">
+                {question.author} / {question.created_at_display ?? question.created_at}
+              </div>
+              <div>{question.body}</div>
+
+              {question.answers?.length ? (
+                <div className="stack">
+                  {question.answers.map((answer) => (
+                    <div className="card" key={answer.id}>
+                      <strong>{answer.author}</strong>
+                      <div className="muted">{answer.created_at_display ?? answer.created_at}</div>
+                      <div>{answer.body}</div>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+
+              <div className="stack">
+                <textarea
+                  placeholder="輸入你的回答"
+                  rows={3}
+                  value={answerDrafts[question.id] || ''}
+                  onChange={(event) => setAnswerDrafts((current) => ({ ...current, [question.id]: event.target.value }))}
+                />
+                <button className="btn" type="button" onClick={() => void submitAnswer(question.id)}>
+                  送出回答
+                </button>
+              </div>
+            </div>
+          ))
+        )}
       </section>
 
-      {/* 問答區：左邊問題與回答，右邊是新發問表單。 */}
       <section className="card stack">
-        <h2>商品問答</h2>
-        <div className="grid grid-2">
-          <div className="stack">
-            {questions.length ? (
-              questions.map((question) => (
-                <div className="card stack" key={question.id}>
-                  <div>
-                    <strong>{question.title}</strong>
-                  </div>
-                  <div className="muted">
-                    {question.author} ・ {question.created_at_display}
-                  </div>
-                  <p>{question.body}</p>
-
-                  <div className="stack">
-                    {(question.answers ?? []).map((answer) => (
-                      <div className="card" key={answer.id}>
-                        <strong>{answer.author}</strong>
-                        <div className="muted">{answer.created_at_display}</div>
-                        <p>{answer.body}</p>
-                      </div>
-                    ))}
-                  </div>
-
-                  <label className="field">
-                    <span>新增回答</span>
-                    <textarea
-                      rows={3}
-                      value={answerForms[question.id] ?? ''}
-                      onChange={(event) => setAnswerForms((prev) => ({ ...prev, [question.id]: event.target.value }))}
-                    />
-                  </label>
-                  <button className="btn btn-secondary" disabled={submitting} onClick={() => submitAnswer(question.id)} type="button">
-                    送出回答
-                  </button>
+        <h2>推薦商品</h2>
+        {!recommendationItems.length ? (
+          <div className="muted">目前沒有推薦商品。</div>
+        ) : (
+          <div className="grid grid-2">
+            {recommendationItems.map((item) => (
+              <Link className="card stack" href={`/products/${item.slug}`} key={item.slug}>
+                <strong>{item.name}</strong>
+                <div className="muted">
+                  {item.brand} / {item.category}
                 </div>
-              ))
-            ) : (
-              <div className="muted">目前還沒有問答。</div>
-            )}
+                <div>{item.price_range_label ?? `$${item.price.toFixed(2)}`}</div>
+              </Link>
+            ))}
           </div>
-
-          <div className="stack">
-            <label className="field">
-              <span>問題標題</span>
-              <input value={questionForm.title} onChange={(event) => setQuestionForm((prev) => ({ ...prev, title: event.target.value }))} />
-            </label>
-            <label className="field">
-              <span>問題內容</span>
-              <textarea rows={5} value={questionForm.body} onChange={(event) => setQuestionForm((prev) => ({ ...prev, body: event.target.value }))} />
-            </label>
-            <button className="btn" disabled={submitting} onClick={submitQuestion} type="button">
-              送出問題
-            </button>
-          </div>
-        </div>
-      </section>
-
-      {/* 推薦商品區。 */}
-      <section className="card stack">
-        <h2>你可能也會喜歡</h2>
-        <div className="grid grid-3">
-          {recommendations?.similar?.map((item) => (
-            <Link className="card" href={`/products/${item.slug}`} key={item.slug}>
-              <strong>{item.name}</strong>
-              <div className="muted">{item.price_range_label ?? `$${item.price.toFixed(2)}`}</div>
-            </Link>
-          ))}
-        </div>
+        )}
       </section>
     </div>
   )

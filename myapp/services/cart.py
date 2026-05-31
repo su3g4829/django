@@ -1,57 +1,74 @@
-"""購物車服務模組。
+"""Session-backed cart helpers.
 
-負責在 session 中維護購物車內容、折扣碼與金額試算結果。
+The cart is stored in the Django session and scoped to the currently logged-in
+demo user. Different accounts using the same browser should not see each
+other's cart contents.
 """
+
 from __future__ import annotations
-from typing import Dict, Any, Optional
 
 from decimal import Decimal
+from typing import Any, Dict, Optional
 
 CART_KEY = "cart"
+SESSION_USER_KEY = "demo_user"
+GUEST_BUCKET_KEY = "__guest__"
+
+# Legacy single-seller defaults kept for coupon math; checkout shipping now
+# comes from order_service and seller/product shipping rules.
+SHIPPING_FEE = Decimal("60.0")
+FREE_SHIPPING_THRESHOLD = Decimal("1000.0")
+COUPONS = {
+    "SAVE10": Decimal("0.10"),
+}
+
+
+def _session_bucket_name(session) -> str:
+    user = session.get(SESSION_USER_KEY)
+    if isinstance(user, dict):
+        username = str(user.get("username", "")).strip().lower()
+        if username:
+            return username
+    return GUEST_BUCKET_KEY
+
+
+def _normalize_cart_map(session) -> Dict[str, Any]:
+    raw = session.get(CART_KEY)
+    if not isinstance(raw, dict):
+        raw = {}
+        session[CART_KEY] = raw
+        session.modified = True
+        return raw
+
+    # Older sessions stored a single cart dict directly under "cart".
+    if "items" in raw or "coupon" in raw:
+        raw = {GUEST_BUCKET_KEY: raw}
+        session[CART_KEY] = raw
+        session.modified = True
+        return raw
+
+    return raw
 
 
 def _ensure_cart(session) -> Dict[str, Any]:
-    """確保 購物車 所需的基礎資料結構已存在。
-
-    參數:
-        session: Django session 物件，用來保存登入狀態、購物車與個人化資料。
-
-    回傳:
-        依函式用途回傳對應資料。
-    """
-    cart = session.get(CART_KEY)
-    if not cart or not isinstance(cart, dict):
+    cart_map = _normalize_cart_map(session)
+    bucket_name = _session_bucket_name(session)
+    cart = cart_map.get(bucket_name)
+    if not isinstance(cart, dict):
         cart = {"items": {}, "coupon": None}
-        session[CART_KEY] = cart
+        cart_map[bucket_name] = cart
+        session[CART_KEY] = cart_map
         session.modified = True
-    # 兼容舊格式
     cart.setdefault("items", {})
     cart.setdefault("coupon", None)
     return cart
 
 
 def get_cart(session) -> Dict[str, Any]:
-    """取得 購物車 流程中指定條件的資料。
-
-    參數:
-        session: Django session 物件，用來保存登入狀態、購物車與個人化資料。
-
-    回傳:
-        整理後的資料字典；若查無資料，部分函式可能回傳 `None`。
-    """
     return _ensure_cart(session)
 
 
 def make_item_key(slug: str, variant_id: str = "") -> str:
-    """處理 購物車 相關流程。
-
-    參數:
-        slug: 商品或頁面使用的網址識別字串。
-        variant_id: 指定變體的唯一識別字串。
-
-    回傳:
-        依函式用途回傳對應資料。
-    """
     clean_variant_id = str(variant_id).strip()
     return f"{slug}__{clean_variant_id}" if clean_variant_id else slug
 
@@ -68,22 +85,6 @@ def add_item(
     variant_name: str = "",
     sku: str = "",
 ) -> None:
-    """把商品加入購物車，必要時與既有品項合併數量。
-
-    參數:
-        session: Django session 物件，用來保存登入狀態、購物車與個人化資料。
-        id: 函式執行所需的輸入資料。
-        slug: 商品或頁面使用的網址識別字串。
-        name: 名稱字串，可能是商品名稱、變體名稱或檔名來源。
-        price: 函式執行所需的輸入資料。
-        qty: 品項數量。
-        variant_id: 指定變體的唯一識別字串。
-        variant_name: 函式執行所需的輸入資料。
-        sku: 庫存管理單位，用來區分商品變體。
-
-    回傳:
-        無回傳值；函式會直接修改 session、檔案或傳入資料。
-    """
     if qty <= 0:
         return
     cart = _ensure_cart(session)
@@ -108,16 +109,6 @@ def add_item(
 
 
 def update_qty(session, item_key: str, qty: int) -> None:
-    """更新既有 購物車 資料。
-
-    參數:
-        session: Django session 物件，用來保存登入狀態、購物車與個人化資料。
-        item_key: 購物車品項鍵值，用來區分 slug 與變體組合。
-        qty: 品項數量。
-
-    回傳:
-        整理後的資料字典；若查無資料，部分函式可能回傳 `None`。
-    """
     cart = _ensure_cart(session)
     items = cart["items"]
     if item_key in items:
@@ -129,15 +120,6 @@ def update_qty(session, item_key: str, qty: int) -> None:
 
 
 def remove_item(session, item_key: str) -> None:
-    """處理 購物車 相關流程。
-
-    參數:
-        session: Django session 物件，用來保存登入狀態、購物車與個人化資料。
-        item_key: 購物車品項鍵值，用來區分 slug 與變體組合。
-
-    回傳:
-        無回傳值；函式會直接修改 session、檔案或傳入資料。
-    """
     cart = _ensure_cart(session)
     if item_key in cart["items"]:
         del cart["items"][item_key]
@@ -145,42 +127,59 @@ def remove_item(session, item_key: str) -> None:
 
 
 def clear(session) -> None:
-    """處理 購物車 相關流程。
-
-    參數:
-        session: Django session 物件，用來保存登入狀態、購物車與個人化資料。
-
-    回傳:
-        無回傳值；函式會直接修改 session、檔案或傳入資料。
-    """
-    session[CART_KEY] = {"items": {}, "coupon": None}
+    cart_map = _normalize_cart_map(session)
+    cart_map[_session_bucket_name(session)] = {"items": {}, "coupon": None}
+    session[CART_KEY] = cart_map
     session.modified = True
 
 
-# ==== 價格與折扣規則（示範） ====
-SHIPPING_FEE = Decimal("60.0")        # 運費 60（滿額免運）
-FREE_SHIPPING_THRESHOLD = Decimal("1000.0")
-COUPONS = {
-    "SAVE10": Decimal("0.10"),        # 9折（打 10% off）
-}
+def clear_guest_cart(session) -> None:
+    cart_map = _normalize_cart_map(session)
+    cart_map[GUEST_BUCKET_KEY] = {"items": {}, "coupon": None}
+    session[CART_KEY] = cart_map
+    session.modified = True
+
+
+def migrate_guest_cart(session, username: str) -> None:
+    cart_map = _normalize_cart_map(session)
+    target_bucket = username.strip().lower()
+    if not target_bucket:
+        return
+
+    guest_cart = cart_map.get(GUEST_BUCKET_KEY)
+    if not isinstance(guest_cart, dict):
+        guest_cart = {"items": {}, "coupon": None}
+    target_cart = cart_map.get(target_bucket)
+    if not isinstance(target_cart, dict):
+        target_cart = {"items": {}, "coupon": None}
+
+    guest_items = guest_cart.get("items", {})
+    target_items = target_cart.setdefault("items", {})
+    if isinstance(guest_items, dict):
+        for item_key, guest_item in guest_items.items():
+            if not isinstance(guest_item, dict):
+                continue
+            if item_key in target_items and isinstance(target_items[item_key], dict):
+                target_items[item_key]["qty"] = int(target_items[item_key].get("qty", 0)) + int(guest_item.get("qty", 0))
+            else:
+                target_items[item_key] = dict(guest_item)
+
+    if not target_cart.get("coupon") and guest_cart.get("coupon"):
+        target_cart["coupon"] = guest_cart.get("coupon")
+    else:
+        target_cart.setdefault("coupon", None)
+
+    cart_map[target_bucket] = target_cart
+    cart_map[GUEST_BUCKET_KEY] = {"items": {}, "coupon": None}
+    session[CART_KEY] = cart_map
+    session.modified = True
 
 
 def compute_totals(session) -> Dict[str, Decimal]:
-    """計算購物車小計、運費、折扣與總金額。
-
-    參數:
-        session: Django session 物件，用來保存登入狀態、購物車與個人化資料。
-
-    回傳:
-        依函式用途回傳對應資料。
-    """
     cart = _ensure_cart(session)
-    subtotal = sum((Decimal(str(i["price"])) * i["qty"] for i in cart["items"].values()), Decimal("0.0"))
-
-    # 運費規則：滿額免運
+    subtotal = sum((Decimal(str(item["price"])) * item["qty"] for item in cart["items"].values()), Decimal("0.0"))
     shipping = Decimal("0.0") if subtotal >= FREE_SHIPPING_THRESHOLD else SHIPPING_FEE if subtotal > 0 else Decimal("0.0")
 
-    # 折扣規則：符合的話以百分比折抵
     discount = Decimal("0.0")
     code = cart.get("coupon")
     if code and code in COUPONS and subtotal > 0:
@@ -196,36 +195,19 @@ def compute_totals(session) -> Dict[str, Decimal]:
 
 
 def apply_coupon(session, code: Optional[str]) -> bool:
-    """驗證並套用折扣碼，或在傳入空值時清除折扣碼。
-
-    參數:
-        session: Django session 物件，用來保存登入狀態、購物車與個人化資料。
-        code: 折扣碼字串；空值通常代表清除折扣碼。
-
-    回傳:
-        布林值，用來表示條件是否成立或操作是否成功。
-    """
     cart = _ensure_cart(session)
     if not code:
         cart["coupon"] = None
         session.modified = True
         return False
-    code = code.strip().upper()
-    if code in COUPONS:
-        cart["coupon"] = code
+    clean_code = code.strip().upper()
+    if clean_code in COUPONS:
+        cart["coupon"] = clean_code
         session.modified = True
         return True
     return False
 
 
 def count_items(session) -> int:
-    """處理 購物車 相關流程。
-
-    參數:
-        session: Django session 物件，用來保存登入狀態、購物車與個人化資料。
-
-    回傳:
-        數值結果，供後續金額或庫存流程使用。
-    """
     cart = _ensure_cart(session)
-    return sum(i["qty"] for i in cart["items"].values())
+    return sum(item["qty"] for item in cart["items"].values())

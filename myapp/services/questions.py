@@ -10,6 +10,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
 from ..repositories import local_store
+from .privacy import anonymize_public_name
 
 
 def _format_created_at(value: str) -> str:
@@ -49,12 +50,14 @@ def list_questions(product_id: int) -> List[Dict[str, Any]]:
         item = dict(question)
         item["created_at_display"] = _format_created_at(item.get("created_at", ""))
         item["author_user_id"] = _resolve_author_user_id(item.get("author_user_id"), item.get("author_username"))
+        item["author"] = anonymize_public_name(str(item.get("author", "")))
 
         answers = []
         for answer in item.get("answers", []):
             answer_item = dict(answer)
             answer_item["created_at_display"] = _format_created_at(answer_item.get("created_at", ""))
             answer_item["author_user_id"] = _resolve_author_user_id(answer_item.get("author_user_id"), answer_item.get("author_username"))
+            answer_item["author"] = anonymize_public_name(str(answer_item.get("author", "")))
             answers.append(answer_item)
         item["answers"] = answers
         item["answer_count"] = len(answers)

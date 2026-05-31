@@ -29,6 +29,14 @@ ACCOUNT_STATUS_SUSPENDED = "suspended"
 ADMIN_ROLES = {"admin", "staff"}
 SELLER_ROLES = {"seller", "admin", "staff"}
 
+DEFAULT_SHIPPING_RULES = {
+    "home_delivery_enabled": True,
+    "home_delivery_fee": "80.00",
+    "convenience_store_enabled": True,
+    "convenience_store_fee": "60.00",
+    "free_shipping_threshold": "1200.00",
+}
+
 
 def _user_snapshot(user: Dict[str, Any]) -> Dict[str, Any]:
     """建立可安全放入 session 與 API 回應的會員快照。"""
@@ -45,6 +53,20 @@ def _user_snapshot(user: Dict[str, Any]) -> Dict[str, Any]:
         "last_login_at": user.get("last_login_at", ""),
         "seller_requested_at": user.get("seller_requested_at", ""),
         "seller_reviewed_at": user.get("seller_reviewed_at", ""),
+        "shipping_rules": get_seller_shipping_rules(user["username"]),
+    }
+
+
+def _normalize_shipping_rules(shipping_rules: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    rules = dict(DEFAULT_SHIPPING_RULES)
+    if isinstance(shipping_rules, dict):
+        rules.update(shipping_rules)
+    return {
+        "home_delivery_enabled": bool(rules.get("home_delivery_enabled", True)),
+        "home_delivery_fee": str(rules.get("home_delivery_fee", "80.00")),
+        "convenience_store_enabled": bool(rules.get("convenience_store_enabled", True)),
+        "convenience_store_fee": str(rules.get("convenience_store_fee", "60.00")),
+        "free_shipping_threshold": str(rules.get("free_shipping_threshold", "1200.00")),
     }
 
 
@@ -197,6 +219,58 @@ def update_profile(username: str, display_name: str, new_password: str = "", ema
     raise ValueError("User not found.")
 
 
+def get_seller_shipping_rules(username: str) -> Dict[str, Any]:
+    """Return seller-level shipping rules with normalized defaults."""
+    user = local_store.get_user_by_username(username)
+    if not user:
+        raise ValueError("User not found.")
+    return _normalize_shipping_rules(user.get("shipping_rules"))
+
+
+def update_seller_shipping_rules(
+    username: str,
+    *,
+    home_delivery_enabled: bool,
+    home_delivery_fee: str,
+    convenience_store_enabled: bool,
+    convenience_store_fee: str,
+    free_shipping_threshold: str,
+) -> Dict[str, Any]:
+    """Persist seller-level shipping rules."""
+    if not home_delivery_enabled and not convenience_store_enabled:
+        raise ValueError("At least one shipping method must stay enabled.")
+
+    def _clean_amount(raw: str, field_label: str) -> str:
+        value = str(raw).strip()
+        if not value:
+            raise ValueError(f"{field_label} is required.")
+        try:
+            amount = float(value)
+        except ValueError:
+            raise ValueError(f"{field_label} must be a valid number.") from None
+        if amount < 0:
+            raise ValueError(f"{field_label} cannot be negative.")
+        return f"{amount:.2f}"
+
+    rules = {
+        "home_delivery_enabled": bool(home_delivery_enabled),
+        "home_delivery_fee": _clean_amount(home_delivery_fee, "Home-delivery fee"),
+        "convenience_store_enabled": bool(convenience_store_enabled),
+        "convenience_store_fee": _clean_amount(convenience_store_fee, "Convenience-store fee"),
+        "free_shipping_threshold": _clean_amount(free_shipping_threshold, "Free-shipping threshold"),
+    }
+    updated = _save_user_patch(
+        username,
+        {
+            "shipping_rules": rules,
+            "updated_at": timezone.now().isoformat(),
+        },
+    )
+    if not updated:
+        raise ValueError("User not found.")
+    return _normalize_shipping_rules(updated.get("shipping_rules"))
+
+
 def request_seller_role(username: str) -> Dict[str, Any]:
     """提出賣家資格申請。"""
     users = deepcopy(local_store.get_users())
@@ -276,13 +350,21 @@ def update_account_status(username: str, account_status: str) -> Dict[str, Any]:
 
 def login(session, user: Dict[str, Any]) -> None:
     """將會員快照寫入 session，並同步更新登入時間。"""
+    from . import cart, personalization
+
     refreshed = _mark_login(str(user["username"]))
+    cart.migrate_guest_cart(session, str(user["username"]))
+    personalization.migrate_guest_buckets(session, str(user["username"]))
     session[SESSION_USER_KEY] = _user_snapshot(refreshed or user)
     session.modified = True
 
 
 def logout(session) -> None:
     """清除目前 session 的會員資訊。"""
+    from . import cart, personalization
+
+    cart.clear_guest_cart(session)
+    personalization.clear_guest_buckets(session)
     session.pop(SESSION_USER_KEY, None)
     session.modified = True
 

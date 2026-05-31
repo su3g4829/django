@@ -6,8 +6,10 @@
 """
 
 import json
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from django.conf import settings
 from django.contrib.auth.hashers import check_password
@@ -15,6 +17,8 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, SimpleTestCase, override_settings
 
 from .repositories import local_store
+from .services import auth_demo
+from .services.privacy import anonymize_public_name
 
 
 PRODUCTS_FIXTURE = [
@@ -28,7 +32,41 @@ PRODUCTS_FIXTURE = [
         "tags": ["mug", "ceramic"],
         "images": [],
         "specs": {"capacity_ml": 350},
-    }
+        "status": "active",
+        "stock": 10,
+        "owner_username": "alice",
+        "owner_display_name": "Alice",
+    },
+    {
+        "id": 2,
+        "slug": "acme-tee",
+        "name": "ACME Tee",
+        "price": 24.0,
+        "brand": "ACME",
+        "category": "apparel",
+        "tags": ["shirt"],
+        "images": [],
+        "specs": {"size": "M"},
+        "status": "active",
+        "stock": 8,
+        "owner_username": "alice",
+        "owner_display_name": "Alice",
+    },
+    {
+        "id": 3,
+        "slug": "acme-bottle",
+        "name": "ACME Bottle",
+        "price": 18.5,
+        "brand": "ACME",
+        "category": "outdoor",
+        "tags": ["bottle", "stainless"],
+        "images": [],
+        "specs": {"capacity_ml": 750},
+        "status": "active",
+        "stock": 12,
+        "owner_username": "alice",
+        "owner_display_name": "Alice",
+    },
 ]
 
 REVIEWS_FIXTURE = [
@@ -127,6 +165,55 @@ POSTS_FIXTURE = [
     }
 ]
 
+BANNERS_FIXTURE = [
+    {
+        "id": 1,
+        "title": "Primary Banner",
+        "copy_text": "Main campaign",
+        "image_path": "/static/images/banner-1.jpg",
+        "link_url": "/products/acme-mug",
+        "starts_at": "2026-05-01",
+        "ends_at": "2026-06-30",
+        "position": "home_main",
+        "note": "seeded active banner",
+        "sort_order": 1,
+        "status": "approved",
+        "is_active": True,
+        "rejection_reason": "",
+        "applicant_user_id": 2,
+        "applicant_username": "storeteam",
+        "applicant_display_name": "Store Team",
+        "reviewed_at": "2026-05-31T10:00:00+08:00",
+        "reviewed_by_username": "storeteam",
+        "reviewed_by_display_name": "Store Team",
+        "created_at": "2026-05-31T10:00:00+08:00",
+        "updated_at": "2026-05-31T10:00:00+08:00",
+    },
+    {
+        "id": 2,
+        "title": "Hidden Banner",
+        "copy_text": "Disabled campaign",
+        "image_path": "/static/images/banner-2.jpg",
+        "link_url": "/products/acme-tee",
+        "starts_at": "2026-04-01",
+        "ends_at": "2026-04-30",
+        "position": "home_main",
+        "note": "expired banner",
+        "sort_order": 2,
+        "status": "approved",
+        "is_active": True,
+        "rejection_reason": "",
+        "applicant_user_id": 2,
+        "applicant_username": "storeteam",
+        "applicant_display_name": "Store Team",
+        "reviewed_at": "2026-05-31T11:00:00+08:00",
+        "reviewed_by_username": "storeteam",
+        "reviewed_by_display_name": "Store Team",
+        "created_at": "2026-05-31T11:00:00+08:00",
+        "updated_at": "2026-05-31T11:00:00+08:00",
+    },
+]
+
 ORDERS_FIXTURE = []
 
 USERS_FIXTURE = [
@@ -165,26 +252,34 @@ def build_extra_products():
     """
     return PRODUCTS_FIXTURE + [
         {
-            "id": 2,
-            "slug": "acme-tee",
-            "name": "ACME Tee",
-            "price": 24.0,
-            "brand": "ACME",
-            "category": "apparel",
-            "tags": ["shirt"],
+            "id": 4,
+            "slug": "beta-pan",
+            "name": "Beta Pan",
+            "price": 32.5,
+            "brand": "Beta",
+            "category": "kitchen",
+            "tags": ["pan"],
             "images": [],
-            "specs": {"size": "M"},
+            "specs": {"diameter_cm": 24},
+            "status": "active",
+            "stock": 6,
+            "owner_username": "alice",
+            "owner_display_name": "Alice",
         },
         {
-            "id": 3,
-            "slug": "acme-bottle",
-            "name": "ACME Bottle",
-            "price": 18.5,
-            "brand": "ACME",
+            "id": 5,
+            "slug": "camp-cup",
+            "name": "Camp Cup",
+            "price": 9.5,
+            "brand": "Trails",
             "category": "outdoor",
-            "tags": ["bottle", "stainless"],
+            "tags": ["mug", "camp"],
             "images": [],
-            "specs": {"capacity_ml": 750},
+            "specs": {"capacity_ml": 280},
+            "status": "active",
+            "stock": 14,
+            "owner_username": "alice",
+            "owner_display_name": "Alice",
         },
     ]
 
@@ -206,6 +301,10 @@ def build_catalog_products():
             "tags": ["mug", "ceramic"],
             "images": [],
             "specs": {"capacity_ml": 350},
+            "status": "active",
+            "stock": 10,
+            "owner_username": "alice",
+            "owner_display_name": "Alice",
         },
         {
             "id": 2,
@@ -217,6 +316,10 @@ def build_catalog_products():
             "tags": ["shirt"],
             "images": [],
             "specs": {"size": "M"},
+            "status": "active",
+            "stock": 8,
+            "owner_username": "alice",
+            "owner_display_name": "Alice",
         },
         {
             "id": 3,
@@ -228,6 +331,10 @@ def build_catalog_products():
             "tags": ["bottle", "stainless"],
             "images": [],
             "specs": {"capacity_ml": 750},
+            "status": "active",
+            "stock": 12,
+            "owner_username": "alice",
+            "owner_display_name": "Alice",
         },
         {
             "id": 4,
@@ -239,6 +346,10 @@ def build_catalog_products():
             "tags": ["pan"],
             "images": [],
             "specs": {"diameter_cm": 24},
+            "status": "active",
+            "stock": 6,
+            "owner_username": "alice",
+            "owner_display_name": "Alice",
         },
         {
             "id": 5,
@@ -250,6 +361,10 @@ def build_catalog_products():
             "tags": ["mug", "camp"],
             "images": [],
             "specs": {"capacity_ml": 280},
+            "status": "active",
+            "stock": 14,
+            "owner_username": "alice",
+            "owner_display_name": "Alice",
         },
     ]
 
@@ -440,6 +555,7 @@ class ProductFeatureTests(SimpleTestCase):
         self._write_json(data_dir / "competitor_prices.json", COMPETITOR_PRICES_FIXTURE)
         self._write_json(data_dir / "questions.json", QUESTIONS_FIXTURE)
         self._write_json(data_dir / "posts.json", POSTS_FIXTURE)
+        self._write_json(data_dir / "banners.json", BANNERS_FIXTURE)
         self._write_json(data_dir / "orders.json", ORDERS_FIXTURE)
         self._write_json(data_dir / "users.json", USERS_FIXTURE)
 
@@ -568,7 +684,32 @@ class ProductFeatureTests(SimpleTestCase):
                 Args:
                     self: ç¶åé¡å¥æ API view å¯¦ä¾ã
                 """
-        return self.client.post("/api/v1/checkout/confirm/")
+        address_id = None
+        addresses_response = self.client.get("/api/v1/me/addresses/")
+        if addresses_response.status_code == 200:
+            items = addresses_response.json().get("items", [])
+            if items:
+                address_id = items[0]["id"]
+        if address_id is None:
+            create_response = self.client.post(
+                "/api/v1/me/addresses/",
+                data=json.dumps(
+                    {
+                        "label": "Home",
+                        "recipient": "Buyer",
+                        "phone": "0912345678",
+                        "city": "Taipei",
+                        "district": "Da'an",
+                        "postal_code": "106",
+                        "address_line": "No. 1, Xinyi Rd.",
+                    }
+                ),
+                content_type="application/json",
+            )
+            if create_response.status_code == 201:
+                address_id = create_response.json()["id"]
+        payload = {"address_id": address_id} if address_id is not None else {}
+        return self.client.post("/api/v1/checkout/confirm/", data=json.dumps(payload), content_type="application/json")
 
     def test_login_page_loads(self):
         response = self.client.get("/login/")
@@ -728,10 +869,10 @@ class ProductFeatureTests(SimpleTestCase):
         )
 
         self.assertEqual(response.status_code, 201)
-        self.assertEqual(response.json()["status"], "pending")
+        self.assertEqual(response.json()["status"], "active")
         product = local_store.get_product_by_slug("seller-mug")
         self.assertEqual(product["owner_username"], "alice")
-        self.assertEqual(product["status"], "pending")
+        self.assertEqual(product["status"], "active")
         self.assertEqual(product["specs"]["material"], "ceramic")
         self.assertEqual(product["stock"], 8)
         self.assertTrue(product["images"][0].endswith(".png"))
@@ -784,28 +925,19 @@ class ProductFeatureTests(SimpleTestCase):
         self.assertEqual(edit_response.status_code, 200)
 
         updated = local_store.get_product_by_slug("seller-active-mug")
-        self.assertEqual(updated["status"], "pending")
+        self.assertEqual(updated["status"], "active")
         self.assertEqual(updated["stock"], 3)
 
         self._logout()
         self._login(username="storeteam", next_url="/staff/reviews/")
         review_response = self._post_json(
-            "/api/v1/staff/products/seller-active-mug/review/",
-            {"approved": True, "note": "Looks good."},
+            "/api/v1/staff/products/seller-active-mug/archive/",
+            {"note": "Violation report confirmed."},
         )
         self.assertEqual(review_response.status_code, 200)
 
         reviewed = local_store.get_product_by_slug("seller-active-mug")
-        self.assertEqual(reviewed["status"], "active")
-
-        self._logout()
-        self._login(next_url="/me/products/")
-
-        archive_response = self.client.post("/api/v1/me/products/seller-active-mug/archive/")
-        self.assertEqual(archive_response.status_code, 200)
-
-        archived = local_store.get_product_by_slug("seller-active-mug")
-        self.assertEqual(archived["status"], "archived")
+        self.assertEqual(reviewed["status"], "archived")
         public_response = self.client.get("/products/")
         self._assert_frontend_redirect(public_response, "/products")
 
@@ -851,7 +983,7 @@ class ProductFeatureTests(SimpleTestCase):
                 "brand": "Alice Studio",
                 "category": "kitchen",
                 "tags": "mug",
-                "status": "pending",
+                "status": "active",
                 "specs": "material:ceramic",
                 "stock": "2",
             },
@@ -860,13 +992,13 @@ class ProductFeatureTests(SimpleTestCase):
         self._login(username="storeteam", next_url="/staff/reviews/")
 
         response = self._post_json(
-            "/api/v1/staff/products/needs-review-mug/review/",
-            {"approved": False, "note": "Please add clearer photos."},
+            "/api/v1/staff/products/needs-review-mug/archive/",
+            {"note": "Please add clearer photos."},
         )
 
         self.assertEqual(response.status_code, 200)
         product = local_store.get_product_by_slug("needs-review-mug")
-        self.assertEqual(product["status"], "rejected")
+        self.assertEqual(product["status"], "archived")
         self.assertEqual(product["review_note"], "Please add clearer photos.")
 
     def test_checkout_reduces_stock_for_tracked_products(self):
@@ -1090,7 +1222,55 @@ class ProductFeatureTests(SimpleTestCase):
 
         self.assertEqual(response.status_code, 201)
         payload = response.json()
-        self.assertEqual(payload["author"], "Alice")
+        self.assertEqual(payload["author"], "A***")
+
+    def test_reviews_api_anonymizes_authors_by_rule(self):
+        custom_reviews = [
+            {
+                "id": 1,
+                "product_id": 1,
+                "author": "王小明",
+                "rating": 5,
+                "title": "中文",
+                "body": "很好用。",
+                "created_at": "2026-05-31T10:00:00+08:00",
+            },
+            {
+                "id": 2,
+                "product_id": 1,
+                "author": "David Chen",
+                "rating": 4,
+                "title": "English",
+                "body": "Nice fit.",
+                "created_at": "2026-05-31T10:05:00+08:00",
+            },
+            {
+                "id": 3,
+                "product_id": 1,
+                "author": "kaijun123",
+                "rating": 4,
+                "title": "Account",
+                "body": "值得買。",
+                "created_at": "2026-05-31T10:10:00+08:00",
+            },
+            {
+                "id": 4,
+                "product_id": 1,
+                "author": "test@gmail.com",
+                "rating": 3,
+                "title": "Email",
+                "body": "普通。",
+                "created_at": "2026-05-31T10:15:00+08:00",
+            },
+        ]
+        self._write_json(Path(self.temp_dir.name) / "data" / "reviews.json", custom_reviews)
+        local_store.clear_cache()
+
+        response = self.client.get("/api/v1/products/acme-mug/reviews/")
+
+        self.assertEqual(response.status_code, 200)
+        authors = [item["author"] for item in response.json()["items"]]
+        self.assertEqual(authors, ["te***@gmail.com", "ka***3", "D*** C***", "王**"])
 
     def test_product_list_filters_by_category(self):
         self._write_products(build_catalog_products())
@@ -1151,6 +1331,7 @@ class ProductFeatureTests(SimpleTestCase):
         )
 
         self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["author"], anonymize_public_name("Alice"))
 
         stored_questions = local_store.get_questions_by_product_id(1)
         self.assertEqual(len(stored_questions), 2)
@@ -1191,7 +1372,7 @@ class ProductFeatureTests(SimpleTestCase):
         self.assertEqual(response.status_code, 201)
         payload = response.json()
         self.assertEqual(payload["id"], 1)
-        self.assertEqual(payload["answers"][-1]["author"], "Alice")
+        self.assertEqual(payload["answers"][-1]["author"], anonymize_public_name("Alice"))
 
     def test_community_list_shows_posts(self):
         response = self.client.get("/community/")
@@ -1213,6 +1394,7 @@ class ProductFeatureTests(SimpleTestCase):
         )
 
         self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["author"], anonymize_public_name("Alice"))
 
         stored_post = local_store.get_post_by_id(2)
         self.assertIsNotNone(stored_post)
@@ -1227,6 +1409,7 @@ class ProductFeatureTests(SimpleTestCase):
         )
 
         self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["replies"][-1]["author"], anonymize_public_name("Alice"))
 
         stored_post = local_store.get_post_by_id(1)
         self.assertEqual(len(stored_post["replies"]), 2)
@@ -1264,7 +1447,130 @@ class ProductFeatureTests(SimpleTestCase):
 
         self.assertEqual(response.status_code, 201)
         payload = response.json()
-        self.assertEqual(payload["author"], "Alice")
+        self.assertEqual(payload["author"], anonymize_public_name("Alice"))
+
+    def test_community_editor_image_upload_api_saves_file(self):
+        self._login()
+        image = SimpleUploadedFile("forum.png", b"fake-image-bytes", content_type="image/png")
+
+        response = self.client.post("/api/v1/community/uploads/images/", {"image": image})
+
+        self.assertEqual(response.status_code, 201)
+        payload = response.json()
+        self.assertTrue(payload["path"].startswith("/static/uploads/community/community-"))
+        self.assertTrue(payload["path"].endswith(".png"))
+
+    def test_community_post_detail_api_reports_manage_permissions_for_author(self):
+        self._login(next_url="/community/")
+        create_response = self.client.post(
+            "/api/v1/community/posts/",
+            data=json.dumps(
+                {
+                    "topic": "tips",
+                    "title": "Storage checklist",
+                    "body": "<p>Keep lids open after washing.</p>",
+                    "tags": "care",
+                }
+            ),
+            content_type="application/json",
+        )
+        post_id = create_response.json()["id"]
+
+        response = self.client.get(f"/api/v1/community/posts/{post_id}/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["can_edit"])
+        self.assertTrue(response.json()["can_delete"])
+
+    def test_community_post_author_can_update_own_post(self):
+        self._login(next_url="/community/")
+        create_response = self.client.post(
+            "/api/v1/community/posts/",
+            data=json.dumps(
+                {
+                    "topic": "tips",
+                    "title": "Storage checklist",
+                    "body": "<p>Keep lids open after washing.</p>",
+                    "tags": "care",
+                }
+            ),
+            content_type="application/json",
+        )
+        post_id = create_response.json()["id"]
+
+        response = self.client.put(
+            f"/api/v1/community/posts/{post_id}/",
+            data=json.dumps(
+                {
+                    "topic": "care",
+                    "title": "Updated storage checklist",
+                    "body": "<p>Dry bottles upside down first.</p>",
+                    "tags": "care, bottle",
+                }
+            ),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        stored_post = local_store.get_post_by_id(post_id)
+        self.assertEqual(stored_post["topic"], "care")
+        self.assertEqual(stored_post["title"], "Updated storage checklist")
+        self.assertEqual(stored_post["tags"], ["care", "bottle"])
+
+    def test_community_post_non_author_cannot_update_post(self):
+        self._login(next_url="/community/")
+        create_response = self.client.post(
+            "/api/v1/community/posts/",
+            data=json.dumps(
+                {
+                    "topic": "tips",
+                    "title": "Storage checklist",
+                    "body": "<p>Keep lids open after washing.</p>",
+                    "tags": "care",
+                }
+            ),
+            content_type="application/json",
+        )
+        post_id = create_response.json()["id"]
+        self._logout()
+        self._login(username="buyer", next_url="/community/")
+
+        response = self.client.put(
+            f"/api/v1/community/posts/{post_id}/",
+            data=json.dumps(
+                {
+                    "topic": "care",
+                    "title": "Changed by someone else",
+                    "body": "<p>Should not work.</p>",
+                    "tags": "care",
+                }
+            ),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.json()["detail"], "You can only edit your own post.")
+
+    def test_community_post_author_can_delete_own_post(self):
+        self._login(next_url="/community/")
+        create_response = self.client.post(
+            "/api/v1/community/posts/",
+            data=json.dumps(
+                {
+                    "topic": "tips",
+                    "title": "Storage checklist",
+                    "body": "<p>Keep lids open after washing.</p>",
+                    "tags": "care",
+                }
+            ),
+            content_type="application/json",
+        )
+        post_id = create_response.json()["id"]
+
+        response = self.client.delete(f"/api/v1/community/posts/{post_id}/")
+
+        self.assertEqual(response.status_code, 204)
+        self.assertIsNone(local_store.get_post_by_id(post_id))
 
     def test_root_redirects_to_index_home(self):
         response = self.client.get("/")
@@ -1288,7 +1594,7 @@ class ProductFeatureTests(SimpleTestCase):
         self.assertEqual(response.status_code, 201)
         payload = response.json()
         self.assertEqual(payload["id"], 1)
-        self.assertEqual(payload["replies"][-1]["author"], "Alice")
+        self.assertEqual(payload["replies"][-1]["author"], anonymize_public_name("Alice"))
 
     def test_community_vote_api_updates_votes(self):
         self._login()
@@ -1314,14 +1620,14 @@ class ProductFeatureTests(SimpleTestCase):
         self._login(next_url="/checkout/preview/")
         self._add_to_cart(qty=2)
 
-        response = self.client.post("/api/v1/checkout/confirm/")
+        response = self._confirm_checkout()
 
         self.assertEqual(response.status_code, 201)
         stored_orders = local_store.get_orders_by_username("alice")
         self.assertEqual(len(stored_orders), 1)
         self.assertEqual(stored_orders[0]["display_name"], "Alice")
         self.assertEqual(stored_orders[0]["items"][0]["qty"], 2)
-        self.assertEqual(self.client.session["cart"]["items"], {})
+        self.assertEqual(self.client.session["cart"]["alice"]["items"], {})
 
     def test_order_list_shows_created_order(self):
         self._login(next_url="/checkout/preview/")
@@ -1481,6 +1787,94 @@ class ProductFeatureTests(SimpleTestCase):
         self.assertEqual(order["shipping_address"]["recipient"], "Buyer")
         self.assertEqual(order["invoice_profile"]["carrier_code"], "/BUYER99")
 
+    def test_seller_can_update_shipping_rules(self):
+        self._login(username="alice", next_url="/me/shipping-rules/")
+
+        response = self.client.put(
+            "/api/v1/me/shipping-rules/",
+            data=json.dumps(
+                {
+                    "home_delivery_enabled": True,
+                    "home_delivery_fee": "90",
+                    "convenience_store_enabled": True,
+                    "convenience_store_fee": "70",
+                    "free_shipping_threshold": "1500",
+                }
+            ),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        refreshed = local_store.get_user_by_username("alice")
+        self.assertEqual(refreshed["shipping_rules"]["home_delivery_fee"], "90.00")
+        self.assertEqual(refreshed["shipping_rules"]["convenience_store_fee"], "70.00")
+        self.assertEqual(refreshed["shipping_rules"]["free_shipping_threshold"], "1500.00")
+
+    def test_checkout_preview_calculates_shipping_per_seller_group(self):
+        self._write_products(build_seller_order_products())
+        auth_demo.update_seller_shipping_rules(
+            "alice",
+            home_delivery_enabled=True,
+            home_delivery_fee="90",
+            convenience_store_enabled=True,
+            convenience_store_fee="60",
+            free_shipping_threshold="9999",
+        )
+        auth_demo.update_seller_shipping_rules(
+            "storeteam",
+            home_delivery_enabled=True,
+            home_delivery_fee="120",
+            convenience_store_enabled=True,
+            convenience_store_fee="80",
+            free_shipping_threshold="9999",
+        )
+
+        self._login(username="buyer", next_url="/checkout/preview/")
+        self._add_product_to_cart("alice-mug", qty=1)
+        self._add_product_to_cart("team-bottle", qty=1)
+
+        response = self.client.get("/api/v1/checkout/preview/?shipping_method=home_delivery")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(f'{payload["totals"]["shipping"]:.2f}', "210.00")
+        self.assertEqual(len(payload["seller_shipping_groups"]), 2)
+        self.assertEqual(payload["seller_shipping_groups"][0]["selected_shipping_method"], "home_delivery")
+        shipping_map = {group["seller_username"]: group["shipping_fee"] for group in payload["seller_shipping_groups"]}
+        self.assertEqual(shipping_map["alice"], "90.00")
+        self.assertEqual(shipping_map["storeteam"], "120.00")
+
+    def test_product_create_persists_shipping_profile(self):
+        self._login(username="alice", next_url="/me/products/create/")
+
+        response = self.client.post(
+            "/api/v1/me/products/",
+            data=json.dumps(
+                {
+                    "name": "Shipping Test Tee",
+                    "price": "600",
+                    "brand": "Alice Studio",
+                    "category": "apparel",
+                    "tags": "tee",
+                    "status": "draft",
+                    "specs": "material:cotton",
+                    "stock": "3",
+                    "use_seller_shipping_rules": "false",
+                    "allow_home_delivery": "false",
+                    "allow_convenience_store": "true",
+                    "override_convenience_store_fee": "75",
+                }
+            ),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        product = local_store.get_product_by_slug("shipping-test-tee")
+        self.assertEqual(product["shipping_profile"]["use_seller_rules"], False)
+        self.assertEqual(product["shipping_profile"]["allow_home_delivery"], False)
+        self.assertEqual(product["shipping_profile"]["allow_convenience_store"], True)
+        self.assertEqual(product["shipping_profile"]["override_convenience_store_fee"], 75.0)
+
     def test_buyer_cancel_request_and_admin_approval_restocks_stock(self):
         self._write_products(build_seller_order_products())
         self._login(username="buyer", next_url="/checkout/preview/")
@@ -1592,6 +1986,76 @@ class ProductFeatureTests(SimpleTestCase):
         self.assertEqual(product["variants"][0]["sku"], "HD-NV-M")
         self.assertEqual(sum(variant["stock"] for variant in product["variants"]), 5)
 
+    def test_product_create_allows_variant_compare_at_prices_independent_from_base_compare_at(self):
+        self._login(next_url="/me/products/create/")
+        response = self.client.post(
+            "/api/v1/me/products/",
+            data=json.dumps(
+                {
+                    "name": "Short Sleeve Polo",
+                    "price": "800",
+                    "compare_at_price": "900",
+                    "brand": "ACC",
+                    "category": "apparel",
+                    "tags": "polo",
+                    "status": "active",
+                    "specs": "material:cotton",
+                    "stock": "0",
+                    "variants": "\n".join(
+                        [
+                            "White / M|SH-W-M|800|2|White|M||900",
+                            "Gray / M|SH-G-M|1000|3|Gray|M||1200",
+                        ]
+                    ),
+                }
+            ),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        product = local_store.get_product_by_slug("short-sleeve-polo")
+        self.assertIsNotNone(product)
+        self.assertEqual(product["compare_at_price"], 900.0)
+        self.assertEqual(product["price"], 800.0)
+        self.assertEqual(product["stock"], 5)
+        self.assertEqual(product["variants"][0]["compare_at_price"], 900.0)
+        self.assertEqual(product["variants"][1]["compare_at_price"], 1200.0)
+
+    def test_product_create_allows_chinese_color_variants_with_same_size(self):
+        self._login(next_url="/me/products/create/")
+        response = self.client.post(
+            "/api/v1/me/products/",
+            data=json.dumps(
+                {
+                    "name": "長袖上衣",
+                    "price": "800",
+                    "compare_at_price": "900",
+                    "brand": "ACC",
+                    "category": "apparel",
+                    "tags": "長袖上衣",
+                    "status": "active",
+                    "specs": "材質:棉",
+                    "stock": "0",
+                    "variants": "\n".join(
+                        [
+                            "長袖上衣-灰-M|長袖上衣-灰-M|1000|5|灰|M||",
+                            "長袖上衣-黑-M|長袖上衣-黑-M|1200|8|黑|M||",
+                        ]
+                    ),
+                }
+            ),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        created_slug = response.json()["slug"]
+        product = local_store.get_product_by_slug(created_slug)
+        self.assertIsNotNone(product)
+        self.assertEqual(len(product["variants"]), 2)
+        self.assertNotEqual(product["variants"][0]["id"], product["variants"][1]["id"])
+        self.assertEqual(product["variants"][0]["attributes"]["color"], "灰")
+        self.assertEqual(product["variants"][1]["attributes"]["color"], "黑")
+
     def test_product_detail_and_cart_support_selected_variant(self):
         self._write_products(build_variant_products())
 
@@ -1599,7 +2063,7 @@ class ProductFeatureTests(SimpleTestCase):
         self._assert_frontend_redirect(detail_response, "/products/acme-hoodie")
 
         self._add_product_to_cart("acme-hoodie", qty=1, variant_id="navy-l")
-        cart = self.client.session["cart"]
+        cart = self.client.session["cart"]["__guest__"]
         item = cart["items"]["acme-hoodie__navy-l"]
         self.assertEqual(item["variant_name"], "Navy / L")
         self.assertEqual(item["sku"], "HD-NV-L")
@@ -1730,7 +2194,7 @@ class ProductFeatureTests(SimpleTestCase):
         )
         self.assertEqual(response.status_code, 201)
         payload = response.json()
-        self.assertEqual(payload["author"], "Buyer")
+        self.assertEqual(payload["author"], anonymize_public_name("Buyer"))
 
     def test_drf_me_endpoint_returns_demo_session_user(self):
         self._login(username="buyer", next_url="/")
@@ -1773,9 +2237,91 @@ class ProductFeatureTests(SimpleTestCase):
 
         self.assertEqual(favorite_response.status_code, 200)
         self.assertTrue(favorite_response.json()["active"])
+        self.assertEqual(favorite_response.json()["favorite_count"], 1)
         self.assertEqual(compare_response.status_code, 200)
         self.assertTrue(compare_response.json()["active"])
-        self.assertIn("acme-mug", self.client.session["compare_products"])
+        self.assertIn("acme-mug", self.client.session["compare_products"]["buyer"])
+
+    def test_compare_list_is_isolated_per_logged_in_user(self):
+        self._login(username="buyer", next_url="/")
+        self.client.post("/api/v1/products/acme-mug/compare/")
+        self.client.post("/api/v1/auth/logout/")
+
+        self._login(username="storeteam", next_url="/")
+        response = self.client.get("/api/v1/products/compare/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["slugs"], [])
+        self.assertEqual(self.client.session["compare_products"]["buyer"], ["acme-mug"])
+        self.assertEqual(self.client.session["compare_products"]["storeteam"], [])
+
+    def test_favorite_list_is_isolated_per_logged_in_user(self):
+        self._login(username="buyer", next_url="/")
+        self.client.post("/api/v1/products/acme-mug/favorite/")
+        self.client.post("/api/v1/auth/logout/")
+
+        self._login(username="storeteam", next_url="/")
+        bootstrap_response = self.client.get("/api/v1/app/bootstrap/")
+        detail_response = self.client.get("/api/v1/products/acme-mug/")
+
+        self.assertEqual(bootstrap_response.status_code, 200)
+        self.assertEqual(bootstrap_response.json()["favorite_count"], 0)
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertFalse(detail_response.json()["is_favorite"])
+        self.assertEqual(self.client.session["favorite_products"]["buyer"], ["acme-mug"])
+        self.assertEqual(self.client.session["favorite_products"]["storeteam"], [])
+
+    def test_cart_is_isolated_per_logged_in_user(self):
+        self._login(username="buyer", next_url="/")
+        self._add_product_to_cart("acme-mug", qty=1)
+        self.client.post("/api/v1/auth/logout/")
+
+        self._login(username="storeteam", next_url="/")
+        response = self.client.get("/api/v1/cart/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["item_count"], 0)
+        self.assertEqual(response.json()["items"], [])
+        self.assertEqual(self.client.session["cart"]["buyer"]["items"]["acme-mug"]["qty"], 1)
+        self.assertEqual(self.client.session["cart"]["storeteam"]["items"], {})
+
+    def test_logout_clears_guest_visible_cart_favorite_and_compare_state(self):
+        self._login(username="buyer", next_url="/")
+        self._add_product_to_cart("acme-mug", qty=1)
+        self.client.post("/api/v1/products/acme-mug/favorite/")
+        self.client.post("/api/v1/products/acme-mug/compare/")
+        self.client.post("/api/v1/auth/logout/")
+
+        bootstrap_response = self.client.get("/api/v1/app/bootstrap/")
+        cart_response = self.client.get("/api/v1/cart/")
+        compare_response = self.client.get("/api/v1/products/compare/")
+        detail_response = self.client.get("/api/v1/products/acme-mug/")
+
+        self.assertEqual(bootstrap_response.status_code, 200)
+        self.assertEqual(bootstrap_response.json()["cart_count"], 0)
+        self.assertEqual(bootstrap_response.json()["favorite_count"], 0)
+        self.assertEqual(bootstrap_response.json()["compare_count"], 0)
+        self.assertEqual(cart_response.status_code, 200)
+        self.assertEqual(cart_response.json()["item_count"], 0)
+        self.assertEqual(compare_response.status_code, 200)
+        self.assertEqual(compare_response.json()["slugs"], [])
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertFalse(detail_response.json()["is_favorite"])
+        self.assertEqual(self.client.session["cart"]["buyer"]["items"]["acme-mug"]["qty"], 1)
+        self.assertEqual(self.client.session["favorite_products"]["buyer"], ["acme-mug"])
+        self.assertEqual(self.client.session["compare_products"]["buyer"], ["acme-mug"])
+        self.assertEqual(self.client.session["cart"]["__guest__"]["items"], {})
+        self.assertEqual(self.client.session["favorite_products"]["__guest__"], [])
+        self.assertEqual(self.client.session["compare_products"]["__guest__"], [])
+
+    def test_product_detail_api_reports_is_favorite_from_session(self):
+        self._login(username="buyer", next_url="/")
+        self.client.post("/api/v1/products/acme-mug/favorite/")
+
+        response = self.client.get("/api/v1/products/acme-mug/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["is_favorite"])
 
     def test_me_addresses_api_create_and_set_default(self):
         self._login(username="buyer", next_url="/")
@@ -1850,8 +2396,202 @@ class ProductFeatureTests(SimpleTestCase):
 
         self.assertEqual(dashboard_response.status_code, 200)
         self.assertIn("users", dashboard_response.json())
+        self.assertEqual(dashboard_response.json()["content"]["total"], 3)
+        self.assertTrue(dashboard_response.json()["recent_reviews"][0]["source_url"].startswith("/products/"))
         self.assertEqual(status_response.status_code, 200)
         self.assertEqual(status_response.json()["user"]["account_status"], "suspended")
+
+    def test_admin_product_management_apis_support_listing_publish_archive_and_delete(self):
+        draft_product = {
+            "id": 4,
+            "slug": "draft-tee",
+            "name": "Draft Tee",
+            "price": 19.9,
+            "brand": "Draft Lab",
+            "category": "apparel",
+            "tags": ["draft"],
+            "images": [],
+            "specs": {"size": "L"},
+            "status": "draft",
+            "stock": 5,
+            "owner_username": "alice",
+            "owner_display_name": "Alice",
+            "created_at": "2026-05-01T10:00:00+08:00",
+            "updated_at": "2026-05-01T10:00:00+08:00",
+        }
+        self._write_products(PRODUCTS_FIXTURE + [draft_product])
+        self._login(username="storeteam", next_url="/")
+
+        list_response = self.client.get("/api/v1/staff/products/?status=draft")
+        self.assertEqual(list_response.status_code, 200)
+        self.assertEqual(list_response.json()["items"][0]["slug"], "draft-tee")
+
+        publish_response = self.client.post(
+            "/api/v1/staff/products/draft-tee/publish/",
+            data=json.dumps({"note": "Publish now"}),
+            content_type="application/json",
+        )
+        self.assertEqual(publish_response.status_code, 200)
+        self.assertEqual(publish_response.json()["status"], "active")
+
+        archive_response = self.client.post(
+            "/api/v1/staff/products/draft-tee/archive/",
+            data=json.dumps({"note": "Archive now"}),
+            content_type="application/json",
+        )
+        self.assertEqual(archive_response.status_code, 200)
+        self.assertEqual(archive_response.json()["status"], "archived")
+
+        delete_response = self.client.delete("/api/v1/staff/products/draft-tee/")
+        self.assertEqual(delete_response.status_code, 204)
+        self.assertIsNone(local_store.get_product_by_slug("draft-tee"))
+
+    def test_admin_content_management_apis_support_listing_and_delete(self):
+        self._login(username="storeteam", next_url="/")
+
+        reviews_response = self.client.get("/api/v1/staff/content/reviews/?q=Nice")
+        questions_response = self.client.get("/api/v1/staff/content/questions/?answered=answered")
+        posts_response = self.client.get("/api/v1/staff/content/posts/?topic=general")
+
+        self.assertEqual(reviews_response.status_code, 200)
+        self.assertEqual(questions_response.status_code, 200)
+        self.assertEqual(posts_response.status_code, 200)
+        self.assertEqual(reviews_response.json()["items"][0]["title"], "Nice daily mug")
+        self.assertEqual(questions_response.json()["items"][0]["title"], "Can this go in the dishwasher?")
+        self.assertEqual(posts_response.json()["items"][0]["title"], "Best mug for office use?")
+
+        review_delete_response = self.client.delete("/api/v1/staff/content/reviews/1/")
+        question_delete_response = self.client.delete("/api/v1/staff/content/questions/1/")
+        post_delete_response = self.client.delete("/api/v1/staff/content/posts/1/")
+
+        self.assertEqual(review_delete_response.status_code, 204)
+        self.assertEqual(question_delete_response.status_code, 204)
+        self.assertEqual(post_delete_response.status_code, 204)
+        self.assertEqual(local_store.get_reviews(), [])
+        self.assertEqual(local_store.get_questions(), [])
+        self.assertEqual(local_store.get_posts(), [])
+
+    def test_public_banner_api_returns_only_approved_in_schedule_banners(self):
+        response = self.client.get("/api/v1/banners/")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(len(payload["items"]), 1)
+        self.assertEqual(payload["items"][0]["title"], "Primary Banner")
+        self.assertTrue(payload["items"][0]["is_active"])
+
+    def test_member_can_submit_banner_application(self):
+        self._login(username="buyer", next_url="/")
+
+        create_response = self.client.post(
+            "/api/v1/me/banner-applications/",
+            data={
+                "title": "Summer Tee Promo",
+                "copy_text": "All tees 20% off",
+                "link_url": "/products/acme-tee",
+                "starts_at": "2026-06-01",
+                "ends_at": "2026-06-15",
+                "position": "home_main",
+                "note": "Seasonal campaign",
+                "image": SimpleUploadedFile("banner.png", b"banner-bytes", content_type="image/png"),
+            },
+        )
+        self.assertEqual(create_response.status_code, 201)
+        created = create_response.json()
+        self.assertEqual(created["status"], "pending")
+        self.assertFalse(created["is_active"])
+        self.assertEqual(created["applicant_username"], "buyer")
+
+        list_response = self.client.get("/api/v1/me/banner-applications/")
+        self.assertEqual(list_response.status_code, 200)
+        self.assertEqual(list_response.json()["items"][0]["title"], "Summer Tee Promo")
+
+    def test_admin_banner_apis_support_review_reorder_update_and_delete(self):
+        self._login(username="storeteam", next_url="/")
+
+        applicant_response = self.client.post(
+            "/api/v1/staff/banners/",
+            data={
+                "title": "Third Banner",
+                "copy_text": "Upload from admin",
+                "link_url": "/products/acme-bottle",
+                "starts_at": "2026-06-01",
+                "ends_at": "2026-06-20",
+                "position": "home_main",
+                "note": "admin seeded banner",
+                "is_active": "true",
+                "image": SimpleUploadedFile("banner.jpg", b"fake-image-bytes", content_type="image/jpeg"),
+            },
+        )
+        self.assertEqual(applicant_response.status_code, 201)
+        created = applicant_response.json()
+        self.assertEqual(created["status"], "approved")
+
+        self._logout()
+        self._login(username="buyer", next_url="/")
+        create_response = self.client.post(
+            "/api/v1/me/banner-applications/",
+            data={
+                "title": "Pending Banner",
+                "copy_text": "Awaiting review",
+                "link_url": "/products/acme-mug",
+                "starts_at": "2026-06-10",
+                "ends_at": "2026-06-30",
+                "position": "home_main",
+                "note": "buyer request",
+                "image": SimpleUploadedFile("pending.jpg", b"pending-bytes", content_type="image/jpeg"),
+            },
+        )
+        pending_banner = create_response.json()
+        self._logout()
+        self._login(username="storeteam", next_url="/")
+
+        review_response = self.client.post(
+            f"/api/v1/staff/banners/{pending_banner['id']}/review/",
+            data=json.dumps({"approved": True}),
+            content_type="application/json",
+        )
+        self.assertEqual(review_response.status_code, 200)
+        self.assertEqual(review_response.json()["status"], "approved")
+
+        reorder_response = self.client.post(
+            "/api/v1/staff/banners/reorder/",
+            data=json.dumps({"ids": [created["id"], pending_banner["id"], 1]}),
+            content_type="application/json",
+        )
+        self.assertEqual(reorder_response.status_code, 200)
+        reordered_map = {item["id"]: item for item in reorder_response.json()["items"]}
+        self.assertEqual(reordered_map[created["id"]]["sort_order"], 1)
+        self.assertEqual(reordered_map[pending_banner["id"]]["sort_order"], 2)
+
+        update_response = self.client.put(
+            f"/api/v1/staff/banners/{created['id']}/",
+            data=json.dumps(
+                {
+                    "title": "Third Banner Updated",
+                    "copy_text": "Updated without replacing image",
+                    "link_url": "/products/acme-tee",
+                    "starts_at": "2026-06-05",
+                    "ends_at": "2026-06-25",
+                    "position": "home_main",
+                    "note": "updated by admin",
+                    "is_active": False,
+                    "sort_order": 2,
+                }
+            ),
+            content_type="application/json",
+        )
+        self.assertEqual(update_response.status_code, 200)
+        self.assertEqual(update_response.json()["title"], "Third Banner Updated")
+        self.assertFalse(update_response.json()["is_active"])
+
+        delete_response = self.client.delete(f"/api/v1/staff/banners/{created['id']}/")
+        self.assertEqual(delete_response.status_code, 204)
+
+        list_response = self.client.get("/api/v1/staff/banners/")
+        self.assertEqual(list_response.status_code, 200)
+        remaining_ids = [item["id"] for item in list_response.json()["items"]]
+        self.assertNotIn(created["id"], remaining_ids)
 
     def test_api_route_record_page_lists_wave_two_routes(self):
         response = self.client.get("/docs/api-routes/")
@@ -1924,7 +2664,7 @@ class ProductFeatureTests(SimpleTestCase):
         self.assertTrue(preview_response.json()["requires_login"])
 
         self._login(username="buyer", next_url="/")
-        confirm_response = self.client.post("/api/v1/checkout/confirm/")
+        confirm_response = self._confirm_checkout()
         self.assertEqual(confirm_response.status_code, 201)
         self.assertEqual(confirm_response.json()["id"], 1)
 
@@ -1948,7 +2688,7 @@ class ProductFeatureTests(SimpleTestCase):
             content_type="application/json",
         )
         self.assertEqual(create_response.status_code, 201)
-        self.assertEqual(create_response.json()["status"], "pending")
+        self.assertEqual(create_response.json()["status"], "active")
         slug = create_response.json()["slug"]
 
         detail_response = self.client.get(f"/api/v1/me/products/{slug}/")
@@ -1986,6 +2726,28 @@ class ProductFeatureTests(SimpleTestCase):
         delete_response = self.client.delete(f"/api/v1/me/products/{duplicate_slug}/")
         self.assertEqual(delete_response.status_code, 204)
 
+    def test_wave_three_seller_can_create_product_with_chinese_name(self):
+        self._login(username="alice", next_url="/")
+
+        create_response = self.client.post(
+            "/api/v1/me/products/",
+            data=json.dumps(
+                {
+                    "name": "短袖上衣",
+                    "price": "22.00",
+                    "brand": "none",
+                    "category": "上衣",
+                    "tags": "短袖,上衣",
+                    "specs": "size:S,M,L",
+                    "status": "active",
+                    "stock": "7",
+                }
+            ),
+            content_type="application/json",
+        )
+        self.assertEqual(create_response.status_code, 201)
+        self.assertTrue(create_response.json()["slug"].startswith("product-"))
+
     def test_wave_three_staff_review_apis_work(self):
         self._login(username="buyer", next_url="/")
         seller_request_response = self.client.post("/api/v1/me/seller-request/")
@@ -1997,11 +2759,11 @@ class ProductFeatureTests(SimpleTestCase):
             "/api/v1/me/products/",
             data=json.dumps(
                 {
-                    "name": "Pending Kettle",
+                    "name": "Managed Kettle",
                     "price": "39.00",
                     "brand": "ACME",
                     "category": "kitchen",
-                    "tags": "pending",
+                    "tags": "managed",
                     "specs": "material:steel",
                     "status": "active",
                     "stock": "3",
@@ -2009,14 +2771,14 @@ class ProductFeatureTests(SimpleTestCase):
             ),
             content_type="application/json",
         )
-        pending_slug = create_response.json()["slug"]
+        managed_slug = create_response.json()["slug"]
         self._logout()
 
         self._login(username="storeteam", next_url="/")
         dashboard_response = self.client.get("/api/v1/staff/reviews/")
         self.assertEqual(dashboard_response.status_code, 200)
         self.assertTrue(dashboard_response.json()["seller_requests"])
-        self.assertTrue(dashboard_response.json()["pending_products"])
+        self.assertTrue(dashboard_response.json()["managed_products"])
 
         seller_review_response = self.client.post(
             "/api/v1/staff/seller-requests/buyer/review/",
@@ -2027,31 +2789,78 @@ class ProductFeatureTests(SimpleTestCase):
         self.assertEqual(seller_review_response.json()["user"]["role"], "seller")
 
         product_review_response = self.client.post(
-            f"/api/v1/staff/products/{pending_slug}/review/",
-            data=json.dumps({"approved": True, "note": "Looks good."}),
+            f"/api/v1/staff/products/{managed_slug}/archive/",
+            data=json.dumps({"note": "Violation report confirmed."}),
             content_type="application/json",
         )
         self.assertEqual(product_review_response.status_code, 200)
-        self.assertEqual(product_review_response.json()["status"], "active")
+        self.assertEqual(product_review_response.json()["status"], "archived")
 
-    def test_product_price_compare_api_returns_mock_data(self):
-        response = self.client.get("/api/v1/products/acme-mug/price-compare/")
+    def test_product_price_compare_api_returns_live_data_for_supported_product(self):
+        self._write_products(
+            [
+                {
+                    "id": 8,
+                    "slug": "new-forcepolo",
+                    "name": "NEW FORCE Polo",
+                    "price": 300.0,
+                    "compare_at_price": 1200.0,
+                    "brand": "NEW FORCE",
+                    "category": "apparel",
+                    "tags": ["polo"],
+                    "images": [],
+                    "specs": {"size": "L"},
+                    "status": "active",
+                    "stock": 1,
+                    "owner_username": "abc3",
+                    "owner_display_name": "abc3",
+                }
+            ]
+        )
+        response = self.client.get("/api/v1/products/new-forcepolo/price-compare/")
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
-        self.assertTrue(payload["is_mock"])
-        self.assertEqual(payload["our_product_slug"], "acme-mug")
+        self.assertFalse(payload["is_mock"])
+        self.assertEqual(payload["source_type"], "fixed_live_urls")
+        self.assertEqual(payload["our_product_slug"], "new-forcepolo")
         self.assertEqual(len(payload["items"]), 2)
         self.assertIn("lowest_price", payload)
 
     def test_product_price_compare_refresh_api_updates_payload(self):
-        response = self.client.post("/api/v1/products/acme-mug/price-compare/refresh/")
+        self._write_products(
+            [
+                {
+                    "id": 8,
+                    "slug": "new-forcepolo",
+                    "name": "NEW FORCE Polo",
+                    "price": 300.0,
+                    "compare_at_price": 1200.0,
+                    "brand": "NEW FORCE",
+                    "category": "apparel",
+                    "tags": ["polo"],
+                    "images": [],
+                    "specs": {"size": "L"},
+                    "status": "active",
+                    "stock": 1,
+                    "owner_username": "abc3",
+                    "owner_display_name": "abc3",
+                }
+            ]
+        )
+        response = self.client.post("/api/v1/products/new-forcepolo/price-compare/refresh/")
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
-        self.assertEqual(payload["detail"], "模擬抓價已更新。")
-        self.assertTrue(payload["result"]["is_mock"])
-        self.assertEqual(payload["result"]["our_product_slug"], "acme-mug")
+        self.assertEqual(payload["detail"], "價格比較已更新。")
+        self.assertFalse(payload["result"]["is_mock"])
+        self.assertEqual(payload["result"]["our_product_slug"], "new-forcepolo")
+
+    def test_product_price_compare_api_rejects_unsupported_product(self):
+        response = self.client.get("/api/v1/products/acme-mug/price-compare/")
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["detail"], "Price comparison is not enabled for this product.")
 
     def test_api_route_record_page_lists_wave_three_routes(self):
         response = self.client.get("/docs/api-routes/")
@@ -2206,3 +3015,87 @@ class ProductFeatureTests(SimpleTestCase):
 
         prepare_response = self._post_json(f"/api/v1/me/sales/{order_id}/newebpay-logistics/sandbox/", {})
         self.assertEqual(prepare_response.status_code, 503)
+
+    def test_checkout_store_map_prepare_and_callback_round_trip(self):
+        self._login(username="buyer")
+        env = {
+            "NEWEBPAY_LOGISTICS_MERCHANT_ID": "MS123456789",
+            "NEWEBPAY_LOGISTICS_HASH_KEY": "12345678901234567890123456789012",
+            "NEWEBPAY_LOGISTICS_HASH_IV": "1234567890123456",
+            "NEWEBPAY_LOGISTICS_STORE_MAP_REPLY_URL": "https://backend.example/api/v1/integrations/newebpay/logistics/store-map/callback/",
+            "NEWEBPAY_LOGISTICS_STORE_MAP_RETURN_URL": "https://frontend.example/checkout",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            prepare_response = self._post_json(
+                "/api/v1/checkout/logistics/store-map/prepare/",
+                {
+                    "pickup_store_brand": "UNIMART",
+                    "payment_method": "newebpay_credit",
+                    "return_url": "https://frontend.example/checkout",
+                },
+            )
+
+            self.assertEqual(prepare_response.status_code, 201)
+            prepared = prepare_response.json()
+            self.assertEqual(prepared["action_url"], "https://ccore.newebpay.com/API/Logistic/storeMap")
+            self.assertEqual(prepared["pickup_store_brand"], "UNIMART")
+            self.assertIn("store_map_token=", prepared["return_url"])
+            self.assertEqual(prepared["callback_url"], env["NEWEBPAY_LOGISTICS_STORE_MAP_REPLY_URL"])
+
+            callback_response = self._post_json(
+                "/api/v1/integrations/newebpay/logistics/store-map/callback/",
+                {
+                    "MerchantOrderNo": prepared["merchant_order_no"],
+                    "StoreID": "149741",
+                    "StoreName": "台北測試門市",
+                    "StoreAddr": "台北市大安區測試路 1 號",
+                    "StoreType": "1",
+                    "ExtraData": prepared["selection_token"],
+                    "Status": "SUCCESS",
+                },
+            )
+            self.assertEqual(callback_response.status_code, 200)
+
+            selection_response = self.client.get(
+                f"/api/v1/checkout/logistics/store-selection/?token={prepared['selection_token']}"
+            )
+            self.assertEqual(selection_response.status_code, 200)
+            selection = selection_response.json()
+            self.assertTrue(selection["is_ready"])
+            self.assertEqual(selection["pickup_store_brand"], "UNIMART")
+            self.assertEqual(selection["pickup_store_code"], "149741")
+            self.assertEqual(selection["pickup_store_name"], "台北測試門市")
+
+    def test_checkout_store_selection_is_isolated_per_user(self):
+        self._login(username="buyer")
+        env = {
+            "NEWEBPAY_LOGISTICS_MERCHANT_ID": "MS123456789",
+            "NEWEBPAY_LOGISTICS_HASH_KEY": "12345678901234567890123456789012",
+            "NEWEBPAY_LOGISTICS_HASH_IV": "1234567890123456",
+            "NEWEBPAY_LOGISTICS_STORE_MAP_REPLY_URL": "https://backend.example/api/v1/integrations/newebpay/logistics/store-map/callback/",
+            "NEWEBPAY_LOGISTICS_STORE_MAP_RETURN_URL": "https://frontend.example/checkout",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            prepared = self._post_json(
+                "/api/v1/checkout/logistics/store-map/prepare/",
+                {"pickup_store_brand": "FAMI", "payment_method": "newebpay_credit"},
+            ).json()
+            self._post_json(
+                "/api/v1/integrations/newebpay/logistics/store-map/callback/",
+                {
+                    "MerchantOrderNo": prepared["merchant_order_no"],
+                    "StoreID": "F12345",
+                    "StoreName": "全家測試店",
+                    "StoreAddr": "台中市測試路 2 號",
+                    "StoreType": "2",
+                    "ExtraData": prepared["selection_token"],
+                    "Status": "SUCCESS",
+                },
+            )
+
+            self._logout()
+            self._login(username="alice")
+            selection_response = self.client.get(
+                f"/api/v1/checkout/logistics/store-selection/?token={prepared['selection_token']}"
+            )
+            self.assertEqual(selection_response.status_code, 404)

@@ -97,5 +97,38 @@
         "mock_rank": 2
       }
     ]
+  },
+  {
+    "our_product_slug": "product-20260528113449327015",
+    "our_product_name": "短袖上衣",
+    "our_product_id": 6,
+    "competitors": [
+      {
+        "site": "momo",
+        "site_label": "momo 購物網",
+        "title": "短袖上衣 - momo 購物網 模擬結果",
+        "url": "https://example.com/momo/product-20260528113449327015",
+        "price": 576.0,
+        "currency": "TWD",
+        "captured_at": "2026-05-28T12:01:11.068428+00:00",
+        "status": "matched",
+        "note": "模擬資料：示範比價來源。",
+        "mock_rank": 1
+      },
+      {
+        "site": "pchome",
+        "site_label": "PChome 24h",
+        "title": "短袖上衣 - PChome 24h 模擬結果",
+        "url": "https://example.com/pchome/product-20260528113449327015",
+        "price": 630.0,
+        "currency": "TWD",
+        "captured_at": "2026-05-28T12:01:11.068428+00:00",
+        "status": "matched",
+        "note": "模擬資料：示範比價來源。",
+        "mock_rank": 2
+      }
+    ],
+    "last_refreshed_at": "2026-05-28T12:01:11.068428+00:00",
+    "source_type": "mock"
   }
 ]

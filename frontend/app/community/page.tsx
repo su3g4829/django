@@ -1,36 +1,37 @@
 'use client'
 
-/**
- * 社群文章列表頁
- *
- * 功能：
- * - 顯示社群文章列表
- * - 提供發文表單
- * - 顯示 loading 與 error 狀態
- *
- * 主要 API：
- * - GET `/api/v1/community/posts/`
- * - POST `/api/v1/community/posts/`
- */
-
+import Link from 'next/link'
 import { FormEvent, useEffect, useState } from 'react'
 
+import { RichTextContent } from '@/components/rich-text-content'
+import { RichTextEditor } from '@/components/rich-text-editor'
 import { apiFetch } from '@/lib/api'
+import { uploadCommunityEditorImage } from '@/lib/community-editor'
+import { hasMeaningfulRichText, prepareRichTextForStorage } from '@/lib/rich-text'
 import type { CommunityPost, CommunityPostListPayload } from '@/lib/types'
 
-export default function CommunityPage() {
-  /** 社群文章列表。 */
-  const [posts, setPosts] = useState<CommunityPost[]>([])
-  /** 首次載入文章列表時的狀態。 */
-  const [loading, setLoading] = useState(true)
-  /** 發文時避免重複提交。 */
-  const [submitting, setSubmitting] = useState(false)
-  /** 列表或送出失敗時的錯誤訊息。 */
-  const [error, setError] = useState('')
-  /** 發文表單內容。 */
-  const [form, setForm] = useState({ topic: 'general', title: '', body: '', tags: '' })
+type CommunityPostFormState = {
+  topic: string
+  title: string
+  body: string
+  tags: string
+}
 
-  /** 重新載入社群文章列表。 */
+const EMPTY_FORM: CommunityPostFormState = {
+  topic: 'general',
+  title: '',
+  body: '',
+  tags: '',
+}
+
+export default function CommunityPage() {
+  const [posts, setPosts] = useState<CommunityPost[]>([])
+  const [loading, setLoading] = useState(true)
+  const [submitting, setSubmitting] = useState(false)
+  const [showComposer, setShowComposer] = useState(false)
+  const [error, setError] = useState('')
+  const [form, setForm] = useState<CommunityPostFormState>(EMPTY_FORM)
+
   async function loadPosts() {
     setLoading(true)
     try {
@@ -38,94 +39,145 @@ export default function CommunityPage() {
       setPosts(payload.items)
       setError('')
     } catch (err) {
-      setError(err instanceof Error ? err.message : '載入社群文章失敗，請稍後再試。')
+      setError(err instanceof Error ? err.message : '文章載入失敗。')
     } finally {
       setLoading(false)
     }
   }
 
   useEffect(() => {
-    loadPosts()
+    void loadPosts()
   }, [])
 
-  /**
-   * 提交新增文章表單。
-   *
-   * event:
-   * - form submit 事件，需先阻止預設送出行為。
-   */
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+
+    if (!form.title.trim()) {
+      setError('請輸入文章標題。')
+      return
+    }
+    if (!hasMeaningfulRichText(form.body)) {
+      setError('請輸入文章內容。')
+      return
+    }
+
     try {
       setSubmitting(true)
+      setError('')
       await apiFetch('/community/posts/', {
         method: 'POST',
-        body: JSON.stringify(form),
+        body: JSON.stringify({
+          ...form,
+          body: prepareRichTextForStorage(form.body),
+        }),
       })
-      setForm({ topic: 'general', title: '', body: '', tags: '' })
+      setForm(EMPTY_FORM)
+      setShowComposer(false)
       await loadPosts()
     } catch (err) {
-      setError(err instanceof Error ? err.message : '發文失敗，請稍後再試。')
+      setError(err instanceof Error ? err.message : '發表文章失敗。')
     } finally {
       setSubmitting(false)
     }
   }
 
   if (loading) {
-    return <section className="card">載入社群文章中…</section>
+    return <section className="card">文章載入中...</section>
   }
 
   return (
     <div className="stack">
-      {/* 頁首說明：交代這裡是前端論壇首頁。 */}
       <section className="hero">
         <h1>社群論壇</h1>
-        <p className="muted">這裡顯示由 Next.js 呈現的社群文章列表，資料由 Django DRF API 提供。</p>
+        <p className="muted">在這裡發表商品心得、穿搭分享、保養技巧或購買建議。</p>
       </section>
 
       {error ? <div className="notice">{error}</div> : null}
 
-      {/* 發文表單區：建立新文章。 */}
       <section className="card stack">
-        <h2>新增文章</h2>
-        <form className="stack" onSubmit={handleSubmit}>
-          {/* 文章基本欄位：分類、標題、內容、標籤。 */}
-          <label className="field">
-            <span>主題分類</span>
-            <input value={form.topic} onChange={(event) => setForm((prev) => ({ ...prev, topic: event.target.value }))} />
-          </label>
-          <label className="field">
-            <span>標題</span>
-            <input value={form.title} onChange={(event) => setForm((prev) => ({ ...prev, title: event.target.value }))} />
-          </label>
-          <label className="field">
-            <span>內容</span>
-            <textarea value={form.body} onChange={(event) => setForm((prev) => ({ ...prev, body: event.target.value }))} rows={5} />
-          </label>
-          <label className="field">
-            <span>標籤</span>
-            <input value={form.tags} onChange={(event) => setForm((prev) => ({ ...prev, tags: event.target.value }))} />
-          </label>
-          <button className="btn" disabled={submitting} type="submit">
-            {submitting ? '送出中…' : '發表文章'}
+        <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+          <h2 style={{ margin: 0 }}>新增文章</h2>
+          <button className="btn" onClick={() => setShowComposer((prev) => !prev)} type="button">
+            {showComposer ? '收起輸入窗' : '新增文章'}
           </button>
-        </form>
+        </div>
+
+        {showComposer ? (
+          <form className="stack" onSubmit={handleSubmit}>
+            <label className="field">
+              <span>主題分類</span>
+              <input value={form.topic} onChange={(event) => setForm((prev) => ({ ...prev, topic: event.target.value }))} />
+            </label>
+
+            <label className="field">
+              <span>標題</span>
+              <input value={form.title} onChange={(event) => setForm((prev) => ({ ...prev, title: event.target.value }))} />
+            </label>
+
+            <label className="field">
+              <span>內容</span>
+              <RichTextEditor
+                value={form.body}
+                onChange={(body) => setForm((prev) => ({ ...prev, body }))}
+                onImageUpload={uploadCommunityEditorImage}
+              />
+            </label>
+
+            <label className="field">
+              <span>標籤</span>
+              <input value={form.tags} onChange={(event) => setForm((prev) => ({ ...prev, tags: event.target.value }))} />
+            </label>
+
+            <div className="row">
+              <button className="btn" disabled={submitting} type="submit">
+                {submitting ? '發表中...' : '發表文章'}
+              </button>
+              <button
+                className="btn btn-secondary"
+                disabled={submitting}
+                onClick={() => {
+                  setForm(EMPTY_FORM)
+                  setShowComposer(false)
+                  setError('')
+                }}
+                type="button"
+              >
+                取消
+              </button>
+            </div>
+          </form>
+        ) : (
+          <p className="muted" style={{ margin: 0 }}>
+            點選右側按鈕後才會展開輸入窗。
+          </p>
+        )}
       </section>
 
-      {/* 文章列表區：逐筆顯示文章摘要與詳情入口。 */}
       <section className="stack">
+        {!posts.length ? <div className="card muted">目前還沒有文章。</div> : null}
         {posts.map((post) => (
           <article className="card stack" key={post.id}>
-            {/* 文章摘要卡：標題、分類、作者、票數與回覆數。 */}
-            <div className="row" style={{ justifyContent: 'space-between' }}>
-              <strong>{post.title}</strong>
+            <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <div className="stack" style={{ gap: '0.4rem' }}>
+                <strong>{post.title}</strong>
+                <div className="muted">
+                  作者：{post.author} | 讚數：{post.votes} | 回覆：{post.reply_count ?? 0}
+                </div>
+              </div>
               <span className="badge">{post.topic}</span>
             </div>
-            <div className="muted">作者：{post.author} ｜ 讚數：{post.votes} ｜ 回覆：{post.reply_count ?? 0}</div>
-            <p>{post.body}</p>
-            <a className="btn btn-secondary" href={`/community/${post.id}`}>
-              查看文章
-            </a>
+            <RichTextContent className="rich-text-content rich-text-preview" html={post.body} />
+            {post.tags?.length ? <div className="muted">標籤：{post.tags.join(', ')}</div> : null}
+            <div className="row">
+              <Link className="btn btn-secondary" href={`/community/${post.id}`}>
+                查看文章
+              </Link>
+              {post.can_edit ? (
+                <Link className="btn" href={`/community/${post.id}?edit=1`}>
+                  編輯文章
+                </Link>
+              ) : null}
+            </div>
           </article>
         ))}
       </section>

@@ -4,16 +4,14 @@
  * 賣家商品列表頁
  *
  * 功能：
- * - 顯示目前賣家的商品列表
- * - 提供新增商品入口
- *
- * 主要 API：
- * - GET `/api/v1/me/products/`
+ * - 載入目前登入賣家可管理的商品
+ * - 提供編輯、複製、封存、刪除操作
+ * - 在登入狀態變化或視窗重新聚焦時自動重抓列表，避免看到其他帳號的舊資料
  */
 
 import { useEffect, useState } from 'react'
 
-import { apiFetch } from '@/lib/api'
+import { APP_BOOTSTRAP_REFRESH_EVENT, apiFetch } from '@/lib/api'
 import type { Product, StatusChoice } from '@/lib/types'
 
 type SellerProductsPayload = {
@@ -22,18 +20,14 @@ type SellerProductsPayload = {
 }
 
 export default function SellerProductsPage() {
-  /** 目前賣家擁有的商品列表。 */
   const [items, setItems] = useState<Product[]>([])
-  /** 初次載入列表時的狀態。 */
   const [loading, setLoading] = useState(true)
-  /** 封存、複製、刪除時的提交狀態。 */
   const [submitting, setSubmitting] = useState(false)
-  /** API 錯誤訊息。 */
   const [error, setError] = useState('')
 
-  /** 載入賣家商品列表。 */
   async function loadProducts() {
     setLoading(true)
+    setItems([])
     try {
       const payload = await apiFetch<SellerProductsPayload>('/me/products/')
       setItems(payload.items)
@@ -46,10 +40,25 @@ export default function SellerProductsPage() {
   }
 
   useEffect(() => {
-    loadProducts()
+    void loadProducts()
+
+    const handleBootstrapRefresh = () => {
+      void loadProducts()
+    }
+
+    const handleWindowFocus = () => {
+      void loadProducts()
+    }
+
+    window.addEventListener(APP_BOOTSTRAP_REFRESH_EVENT, handleBootstrapRefresh as EventListener)
+    window.addEventListener('focus', handleWindowFocus)
+
+    return () => {
+      window.removeEventListener(APP_BOOTSTRAP_REFRESH_EVENT, handleBootstrapRefresh as EventListener)
+      window.removeEventListener('focus', handleWindowFocus)
+    }
   }, [])
 
-  /** 封存商品。 */
   async function archiveProduct(slug: string) {
     try {
       setSubmitting(true)
@@ -62,7 +71,6 @@ export default function SellerProductsPage() {
     }
   }
 
-  /** 複製商品成新草稿。 */
   async function duplicateProduct(slug: string) {
     try {
       setSubmitting(true)
@@ -75,15 +83,21 @@ export default function SellerProductsPage() {
     }
   }
 
-  /** 刪除商品。 */
   async function deleteProduct(slug: string) {
     if (!window.confirm('確定要刪除這個商品嗎？')) return
     try {
       setSubmitting(true)
       await apiFetch(`/me/products/${slug}/`, { method: 'DELETE' })
       await loadProducts()
+      setError('')
     } catch (err) {
-      setError(err instanceof Error ? err.message : '刪除商品失敗，請稍後再試。')
+      const message = err instanceof Error ? err.message : '刪除商品失敗，請稍後再試。'
+      if (message === 'Product not found.') {
+        await loadProducts()
+        setError('商品不存在，或該商品不屬於目前登入的賣家；列表已重新整理。')
+      } else {
+        setError(message)
+      }
     } finally {
       setSubmitting(false)
     }
@@ -91,7 +105,6 @@ export default function SellerProductsPage() {
 
   return (
     <section className="card stack">
-      {/* 頁首與新增商品入口。 */}
       <div className="row" style={{ justifyContent: 'space-between' }}>
         <div>
           <h1>我的商品</h1>
@@ -107,10 +120,9 @@ export default function SellerProductsPage() {
       {loading ? (
         <div className="muted">載入商品列表中…</div>
       ) : !items.length ? (
-        <div className="muted">目前沒有任何商品。</div>
+        <div className="muted">目前尚未建立任何商品。</div>
       ) : (
         <table className="table">
-          {/* 表頭：商品摘要、狀態、價格、庫存與操作。 */}
           <thead>
             <tr>
               <th>商品</th>
@@ -121,13 +133,12 @@ export default function SellerProductsPage() {
             </tr>
           </thead>
           <tbody>
-            {/* 每列是一個可管理商品，提供編輯、複製、封存、刪除。 */}
             {items.map((item) => (
               <tr key={item.slug}>
                 <td>
                   <strong>{item.name}</strong>
                   <div className="muted">
-                    {item.brand} ｜ {item.category}
+                    {[item.brand, item.category].filter((value) => value && value !== 'none').join(' ｜ ') || '未分類'}
                   </div>
                 </td>
                 <td>{item.status_label ?? item.status ?? '-'}</td>
@@ -135,8 +146,9 @@ export default function SellerProductsPage() {
                 <td>{item.stock_display ?? String(item.stock ?? '-')}</td>
                 <td>
                   <div className="row">
-                    {/* 操作列：導向編輯，或直接執行複製 / 封存 / 刪除。 */}
-                    <a href={`/me/products/${item.slug}`}>編輯</a>
+                    <a className="btn btn-secondary" href={`/me/products/${item.slug}`}>
+                      編輯
+                    </a>
                     <button className="btn btn-secondary" disabled={submitting} onClick={() => duplicateProduct(item.slug)} type="button">
                       複製
                     </button>

@@ -16,5 +16,27 @@
     "title": "Good basic tee",
     "body": "Comfortable fabric and the fit is close to the product page.",
     "created_at": "2026-04-11T14:10:00+08:00"
+  },
+  {
+    "id": 3,
+    "product_id": 6,
+    "author": "abc3",
+    "author_username": "abc3",
+    "author_user_id": 6,
+    "rating": 1,
+    "title": "太貴了吧",
+    "body": "別人商場才400 你這邊賣600 坑錢啊",
+    "created_at": "2026-05-31T13:21:10.369379+08:00"
+  },
+  {
+    "id": 4,
+    "product_id": 8,
+    "author": "abc2",
+    "author_username": "abc2",
+    "author_user_id": 5,
+    "rating": 5,
+    "title": "真便宜",
+    "body": "物超所值",
+    "created_at": "2026-05-31T19:03:10.757263+08:00"
   }
 ]

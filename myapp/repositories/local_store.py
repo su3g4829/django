@@ -80,6 +80,17 @@ def _default_invoice_profile() -> Dict[str, Any]:
     }
 
 
+def _default_shipping_rules() -> Dict[str, Any]:
+    """Return seller-level shipping defaults for marketplace checkout."""
+    return {
+        "home_delivery_enabled": True,
+        "home_delivery_fee": "80.00",
+        "convenience_store_enabled": True,
+        "convenience_store_fee": "60.00",
+        "free_shipping_threshold": "1200.00",
+    }
+
+
 def _normalize_user_record(user: Dict[str, Any]) -> Dict[str, Any]:
     """統一本地會員資料結構，方便未來移轉到 ORM。"""
     normalized = dict(user)
@@ -104,6 +115,11 @@ def _normalize_user_record(user: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(invoice_profile, dict):
         merged_invoice.update(invoice_profile)
     normalized["invoice_profile"] = merged_invoice
+    shipping_rules = normalized.get("shipping_rules")
+    merged_shipping_rules = _default_shipping_rules()
+    if isinstance(shipping_rules, dict):
+        merged_shipping_rules.update(shipping_rules)
+    normalized["shipping_rules"] = merged_shipping_rules
     return normalized
 
 
@@ -239,6 +255,20 @@ def save_newebpay_logistics_logs(items: List[Dict[str, Any]]) -> None:
     _invalidate("newebpay_logistics_logs")
 
 
+def get_newebpay_store_map_selections() -> List[Dict[str, Any]]:
+    """Return persisted NewebPay convenience-store map selections."""
+    try:
+        return _cached("newebpay_store_map_selections", lambda: _load_json("newebpay_store_map_selections.json"))
+    except FileNotFoundError:
+        return []
+
+
+def save_newebpay_store_map_selections(items: List[Dict[str, Any]]) -> None:
+    """Persist NewebPay convenience-store map selections."""
+    _write_json("newebpay_store_map_selections.json", items)
+    _invalidate("newebpay_store_map_selections")
+
+
 def get_posts() -> List[Dict[str, Any]]:
     """讀取論壇文章。"""
     try:
@@ -259,6 +289,20 @@ def save_posts(posts: List[Dict[str, Any]]) -> None:
     """儲存論壇文章資料。"""
     _write_json("posts.json", posts)
     _invalidate("posts")
+
+
+def get_banners() -> List[Dict[str, Any]]:
+    """讀取首頁 banner 設定。"""
+    try:
+        return _cached("banners", lambda: _load_json("banners.json"))
+    except FileNotFoundError:
+        return []
+
+
+def save_banners(banners: List[Dict[str, Any]]) -> None:
+    """儲存首頁 banner 設定。"""
+    _write_json("banners.json", banners)
+    _invalidate("banners")
 
 
 def get_users() -> List[Dict[str, Any]]:

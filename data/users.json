@@ -5,7 +5,7 @@
     "password_hash": "pbkdf2_sha256$1200000$RcqMj58fWaScbuFAsByGfM$FeSUBvJflxUJ018cWT4Rj+OmqXe3mt9z1CihfB+5u4U=",
     "display_name": "Alice",
     "role": "seller",
-    "account_status": "active",
+    "account_status": "suspended",
     "seller_request_status": "approved",
     "email": "alice@example.test",
     "addresses": [],
@@ -18,11 +18,18 @@
       "updated_at": ""
     },
     "created_at": "2026-05-18T09:00:00+08:00",
-    "updated_at": "2026-05-24T06:09:10.092133+00:00",
-    "last_login_at": "2026-05-24T06:09:10.092133+00:00",
+    "updated_at": "2026-05-31T10:32:32.041509+00:00",
+    "last_login_at": "2026-05-28T11:32:18.855697+00:00",
     "seller_requested_at": "2026-05-18T09:00:00+08:00",
     "seller_reviewed_at": "2026-05-18T09:00:00+08:00",
-    "account_status_updated_at": ""
+    "account_status_updated_at": "2026-05-31T10:32:32.041509+00:00",
+    "shipping_rules": {
+      "home_delivery_enabled": true,
+      "home_delivery_fee": "80.00",
+      "convenience_store_enabled": true,
+      "convenience_store_fee": "60.00",
+      "free_shipping_threshold": "1200.00"
+    }
   },
   {
     "id": 2,
@@ -43,11 +50,18 @@
       "updated_at": ""
     },
     "created_at": "2026-05-18T09:00:00+08:00",
-    "updated_at": "2026-05-24T06:16:06.549538+00:00",
-    "last_login_at": "2026-05-24T06:16:06.549538+00:00",
+    "updated_at": "2026-05-31T10:32:07.852258+00:00",
+    "last_login_at": "2026-05-31T10:32:07.852258+00:00",
     "seller_requested_at": "2026-05-18T09:00:00+08:00",
     "seller_reviewed_at": "2026-05-18T09:00:00+08:00",
-    "account_status_updated_at": ""
+    "account_status_updated_at": "",
+    "shipping_rules": {
+      "home_delivery_enabled": true,
+      "home_delivery_fee": "80.00",
+      "convenience_store_enabled": true,
+      "convenience_store_fee": "60.00",
+      "free_shipping_threshold": "1200.00"
+    }
   },
   {
     "id": 3,
@@ -55,7 +69,7 @@
     "password_hash": "pbkdf2_sha256$1200000$RcqMj58fWaScbuFAsByGfM$FeSUBvJflxUJ018cWT4Rj+OmqXe3mt9z1CihfB+5u4U=",
     "display_name": "Buyer",
     "role": "member",
-    "account_status": "active",
+    "account_status": "suspended",
     "seller_request_status": "rejected",
     "email": "buyer@example.test",
     "addresses": [],
@@ -68,10 +82,125 @@
       "updated_at": ""
     },
     "created_at": "2026-05-18T09:00:00+08:00",
-    "updated_at": "2026-05-26T11:30:45.808449+00:00",
+    "updated_at": "2026-05-31T10:32:29.728923+00:00",
     "last_login_at": "2026-05-26T11:30:45.808449+00:00",
     "seller_requested_at": "2026-05-24T06:11:34.215282+00:00",
     "seller_reviewed_at": "2026-05-24T06:16:11.794303+00:00",
-    "account_status_updated_at": ""
+    "account_status_updated_at": "2026-05-31T10:32:29.728923+00:00",
+    "shipping_rules": {
+      "home_delivery_enabled": true,
+      "home_delivery_fee": "80.00",
+      "convenience_store_enabled": true,
+      "convenience_store_fee": "60.00",
+      "free_shipping_threshold": "1200.00"
+    }
+  },
+  {
+    "id": 4,
+    "username": "abc",
+    "display_name": "abc",
+    "password_hash": "pbkdf2_sha256$1200000$IYgLw3Eumevl2qpVnMHOoF$mQKNLmfP7zFSX/dJ0mHUICDmxUqIcurnhoiaBm9Kp9s=",
+    "role": "seller",
+    "account_status": "active",
+    "seller_request_status": "approved",
+    "email": "abc@abc.com",
+    "addresses": [],
+    "default_address_id": null,
+    "invoice_profile": {
+      "invoice_type": "personal",
+      "carrier_code": "",
+      "company_name": "",
+      "tax_id": "",
+      "updated_at": ""
+    },
+    "created_at": "2026-05-27T13:04:39.158207+00:00",
+    "updated_at": "2026-05-31T10:38:10.802992+00:00",
+    "last_login_at": "2026-05-31T10:38:10.802992+00:00",
+    "seller_requested_at": "2026-05-27T13:17:26.701945+00:00",
+    "seller_reviewed_at": "2026-05-27T13:18:24.749862+00:00",
+    "account_status_updated_at": "",
+    "shipping_rules": {
+      "home_delivery_enabled": true,
+      "home_delivery_fee": "80.00",
+      "convenience_store_enabled": true,
+      "convenience_store_fee": "60.00",
+      "free_shipping_threshold": "1200.00"
+    }
+  },
+  {
+    "id": 5,
+    "username": "abc2",
+    "display_name": "abc2",
+    "password_hash": "pbkdf2_sha256$1200000$oYfpBusY3JJ8pdRqao7gfM$yzOfos7siO6s6VAr82sucFXQuad4UbpSmH5DmU+g3t0=",
+    "role": "seller",
+    "account_status": "active",
+    "seller_request_status": "approved",
+    "email": "abc2@abc.com",
+    "addresses": [
+      {
+        "id": 1,
+        "label": "test",
+        "recipient": "abc2",
+        "phone": "0912345678",
+        "city": "台北",
+        "district": "大直",
+        "postal_code": "320",
+        "address_line": "abc路2號",
+        "created_at": "2026-05-31T08:31:08.135248+00:00"
+      }
+    ],
+    "default_address_id": 1,
+    "invoice_profile": {
+      "invoice_type": "personal",
+      "carrier_code": "",
+      "company_name": "",
+      "tax_id": "",
+      "updated_at": ""
+    },
+    "created_at": "2026-05-28T14:27:33.653909+00:00",
+    "updated_at": "2026-05-31T11:00:54.757254+00:00",
+    "last_login_at": "2026-05-31T11:00:54.757254+00:00",
+    "seller_requested_at": "2026-05-28T14:27:55.647258+00:00",
+    "seller_reviewed_at": "2026-05-28T14:28:23.895469+00:00",
+    "account_status_updated_at": "",
+    "shipping_rules": {
+      "home_delivery_enabled": true,
+      "home_delivery_fee": "80.00",
+      "convenience_store_enabled": true,
+      "convenience_store_fee": "60.00",
+      "free_shipping_threshold": "1200.00"
+    }
+  },
+  {
+    "id": 6,
+    "username": "abc3",
+    "display_name": "abc3",
+    "password_hash": "pbkdf2_sha256$1200000$LPfOiK7MQnepV51OjHFxaw$smjxtgGgjN0tMg91DkC/ySgBXSCAq28QNx+FuonVW0Y=",
+    "role": "seller",
+    "account_status": "active",
+    "seller_request_status": "approved",
+    "email": "abc3@abc.com",
+    "addresses": [],
+    "default_address_id": null,
+    "invoice_profile": {
+      "invoice_type": "personal",
+      "carrier_code": "",
+      "company_name": "",
+      "tax_id": "",
+      "updated_at": ""
+    },
+    "created_at": "2026-05-30T12:33:06.271889+00:00",
+    "updated_at": "2026-05-31T11:00:29.600490+00:00",
+    "last_login_at": "2026-05-31T11:00:29.600490+00:00",
+    "seller_requested_at": "2026-05-30T12:33:15.718537+00:00",
+    "seller_reviewed_at": "2026-05-30T12:33:39.654051+00:00",
+    "account_status_updated_at": "",
+    "shipping_rules": {
+      "home_delivery_enabled": true,
+      "home_delivery_fee": "80.00",
+      "convenience_store_enabled": true,
+      "convenience_store_fee": "60.00",
+      "free_shipping_threshold": "1200.00"
+    }
   }
 ]

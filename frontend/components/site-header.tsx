@@ -1,59 +1,54 @@
 'use client'
 
-/**
- * 全站導覽列元件
- *
- * 功能：
- * - 讀取 `/api/v1/app/bootstrap/` 取得目前登入者與計數資訊
- * - 顯示前台、賣家、管理者不同角色的導覽入口
- * - 提供登出操作
- */
 import Link from 'next/link'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
-import { apiFetch } from '@/lib/api'
+import { APP_BOOTSTRAP_REFRESH_EVENT, apiFetch, type BootstrapRefreshDetail } from '@/lib/api'
+import { clearAllSessionDrafts } from '@/lib/session-drafts'
 import type { AppBootstrapPayload } from '@/lib/types'
 
-/**
- * 全站導覽列。
- */
 export function SiteHeader() {
-  /**
-   * data:
-   * - 後端 app bootstrap API 回傳的初始化資料
-   * - 包含目前使用者、購物車數量、比較清單數量、收藏數量
-   */
   const [data, setData] = useState<AppBootstrapPayload | null>(null)
 
-  useEffect(() => {
+  const loadBootstrap = useCallback(() => {
     apiFetch<AppBootstrapPayload>('/app/bootstrap/')
       .then(setData)
       .catch(() => setData({ user: null, cart_count: 0, compare_count: 0, favorite_count: 0 }))
   }, [])
 
-  /**
-   * 執行登出。
-   *
-   * 做法：
-   * - 呼叫 Django DRF `/api/v1/auth/logout/`
-   * - 成功後回到前台首頁
-   */
+  useEffect(() => {
+    function handleBootstrapRefresh(event: Event) {
+      const customEvent = event as CustomEvent<BootstrapRefreshDetail>
+      const detail = customEvent.detail || {}
+      if (Object.keys(detail).length) {
+        setData((current) => ({
+          user: current?.user ?? null,
+          cart_count: detail.cart_count ?? current?.cart_count ?? 0,
+          compare_count: detail.compare_count ?? current?.compare_count ?? 0,
+          favorite_count: detail.favorite_count ?? current?.favorite_count ?? 0,
+        }))
+      }
+      void loadBootstrap()
+    }
+
+    void loadBootstrap()
+    window.addEventListener(APP_BOOTSTRAP_REFRESH_EVENT, handleBootstrapRefresh as EventListener)
+    return () => window.removeEventListener(APP_BOOTSTRAP_REFRESH_EVENT, handleBootstrapRefresh as EventListener)
+  }, [loadBootstrap])
+
   async function handleLogout() {
     await apiFetch('/auth/logout/', { method: 'POST' })
+    clearAllSessionDrafts()
     window.location.href = '/'
   }
 
-  /** 是否有賣家權限。admin 也視為可用賣家功能。 */
   const isSeller = data?.user?.role === 'seller' || data?.user?.role === 'admin'
-
-  /** 是否為管理者。 */
   const isAdmin = data?.user?.role === 'admin'
 
   return (
     <header className="navbar">
       <div className="container navbar-inner">
         <div className="row">
-          {/* 左側品牌與主導覽區。 */}
           <Link href="/" style={{ fontWeight: 800 }}>
             Store Frontend
           </Link>
@@ -69,14 +64,18 @@ export function SiteHeader() {
             <Link href="/me/profile">會員資料</Link>
             <Link href="/me/addresses">地址管理</Link>
             <Link href="/me/invoice">發票設定</Link>
+            {data?.user ? <Link href="/me/promotions">宣傳申請</Link> : null}
 
             {isSeller ? <Link href="/me/products">我的商品</Link> : null}
+            {isSeller ? <Link href="/me/shipping-rules">運費設定</Link> : null}
             {isSeller ? <Link href="/me/sales">賣家訂單</Link> : null}
             {isSeller ? <Link href="/me/sales/report">銷售報表</Link> : null}
 
             {isAdmin ? <Link href="/staff/dashboard">管理儀表板</Link> : null}
+            {isAdmin ? <Link href="/staff/products">商品管理</Link> : null}
             {isAdmin ? <Link href="/staff/orders">平台訂單</Link> : null}
             {isAdmin ? <Link href="/staff/users">會員管理</Link> : null}
+            {isAdmin ? <Link href="/staff/banners">Banner 管理</Link> : null}
             {isAdmin ? <Link href="/staff/reviews">審核中心</Link> : null}
 
             <Link href="/docs/routes">前端路由文件</Link>
@@ -86,7 +85,6 @@ export function SiteHeader() {
         </div>
 
         <div className="row">
-          {/* 右側登入狀態與登入/登出操作區。 */}
           {data?.user ? (
             <>
               <span className="muted">Hi, {data.user.display_name}</span>

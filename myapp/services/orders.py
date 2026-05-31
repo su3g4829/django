@@ -13,6 +13,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 
 from ..repositories import local_store
+from . import auth_demo
 from . import cart as cart_service
 from . import customer_center
 from . import product_management
@@ -51,6 +52,39 @@ SELLER_STATUS_CHOICES = [
 ]
 SELLER_STATUS_LABELS = {item["value"]: item["label"] for item in SELLER_STATUS_CHOICES}
 
+SHIPPING_METHOD_HOME_DELIVERY = "home_delivery"
+SHIPPING_METHOD_CONVENIENCE_STORE = "convenience_store"
+SHIPPING_METHOD_CHOICES = [
+    {"value": SHIPPING_METHOD_HOME_DELIVERY, "label": "宅配到府"},
+    {"value": SHIPPING_METHOD_CONVENIENCE_STORE, "label": "超商取貨"},
+]
+SHIPPING_METHOD_LABELS = {item["value"]: item["label"] for item in SHIPPING_METHOD_CHOICES}
+
+PAYMENT_METHOD_NEWEBPAY_CREDIT = "newebpay_credit"
+
+PAYMENT_METHOD_BANK_TRANSFER = "bank_transfer"
+PAYMENT_METHOD_CASH_ON_DELIVERY = "cash_on_delivery"
+PAYMENT_METHOD_CHOICES = [
+    {"value": PAYMENT_METHOD_NEWEBPAY_CREDIT, "label": "藍新信用卡"},
+    {"value": PAYMENT_METHOD_BANK_TRANSFER, "label": "ATM / 匯款"},
+    {"value": PAYMENT_METHOD_CASH_ON_DELIVERY, "label": "貨到付款"},
+]
+PAYMENT_METHOD_LABELS = {item["value"]: item["label"] for item in PAYMENT_METHOD_CHOICES}
+
+CONVENIENCE_STORE_BRAND_CHOICES = [
+    {"value": "UNIMART", "label": "7-ELEVEN"},
+    {"value": "FAMI", "label": "全家"},
+]
+CONVENIENCE_STORE_BRAND_LABELS = {item["value"]: item["label"] for item in CONVENIENCE_STORE_BRAND_CHOICES}
+
+
+def _shipping_decimal(value: Any, default: str = "0.00") -> Decimal:
+    """Normalize shipping config numbers into Decimal."""
+    try:
+        return Decimal(str(value if value not in (None, "") else default)).quantize(Decimal("0.01"))
+    except Exception:
+        return Decimal(default).quantize(Decimal("0.01"))
+
 
 def _format_created_at(value: str) -> str:
     """格式化 訂單 流程中使用的時間或顯示值。
@@ -87,6 +121,147 @@ def _line_decimal(value: Any) -> Decimal:
         數值結果，供後續金額或庫存流程使用。
     """
     return Decimal(str(value)).quantize(Decimal("0.01"))
+
+
+def _shipping_fee_for_line(product: Dict[str, Any], seller_rules: Dict[str, Any], shipping_method: str) -> Decimal:
+    """Resolve the applicable shipping fee for one product line."""
+    profile = product_management.prepare_product_for_display(product).get("shipping_profile", {})
+    use_seller_rules = bool(profile.get("use_seller_rules", True))
+
+    if shipping_method == SHIPPING_METHOD_HOME_DELIVERY:
+        if not use_seller_rules and profile.get("override_home_delivery_fee") is not None:
+            return _shipping_decimal(profile.get("override_home_delivery_fee"))
+        return _shipping_decimal(seller_rules.get("home_delivery_fee", "80.00"))
+
+    if shipping_method == SHIPPING_METHOD_CONVENIENCE_STORE:
+        if not use_seller_rules and profile.get("override_convenience_store_fee") is not None:
+            return _shipping_decimal(profile.get("override_convenience_store_fee"))
+        return _shipping_decimal(seller_rules.get("convenience_store_fee", "60.00"))
+
+    return Decimal("0.00")
+
+
+def _available_shipping_methods_for_group(
+    lines: List[Dict[str, Any]],
+    seller_rules: Dict[str, Any],
+) -> List[Dict[str, str]]:
+    """Return shipping methods that every product in one seller group supports."""
+    available: list[dict[str, str]] = []
+    can_use_home = bool(seller_rules.get("home_delivery_enabled", True))
+    can_use_store = bool(seller_rules.get("convenience_store_enabled", True))
+
+    for line in lines:
+        product = local_store.get_product_by_slug(line["slug"]) or {}
+        profile = product_management.prepare_product_for_display(product).get("shipping_profile", {})
+        can_use_home = can_use_home and bool(profile.get("allow_home_delivery", True))
+        can_use_store = can_use_store and bool(profile.get("allow_convenience_store", True))
+
+    if can_use_home:
+        available.append({"value": SHIPPING_METHOD_HOME_DELIVERY, "label": SHIPPING_METHOD_LABELS[SHIPPING_METHOD_HOME_DELIVERY]})
+    if can_use_store:
+        available.append(
+            {"value": SHIPPING_METHOD_CONVENIENCE_STORE, "label": SHIPPING_METHOD_LABELS[SHIPPING_METHOD_CONVENIENCE_STORE]}
+        )
+    return available
+
+
+def build_seller_shipping_groups(
+    items: List[Dict[str, Any]],
+    *,
+    shipping_method: str,
+) -> List[Dict[str, Any]]:
+    """Split cart/order items by seller and calculate shipping per seller."""
+    grouped: Dict[str, Dict[str, Any]] = {}
+    for raw_line in items:
+        line = dict(raw_line)
+        if "line_total" not in line:
+            line["line_total"] = format(Decimal(str(line["price"])) * int(line["qty"]), ".2f")
+        product = local_store.get_product_by_slug(line["slug"]) or {}
+        seller_username = str(product.get("owner_username") or line.get("seller_username") or "unknown")
+        seller_display_name = str(product.get("owner_display_name") or line.get("seller_display_name") or seller_username)
+        bucket = grouped.setdefault(
+            seller_username,
+            {
+                "seller_username": seller_username,
+                "seller_display_name": seller_display_name,
+                "items": [],
+            },
+        )
+        bucket["items"].append(line)
+
+    groups: List[Dict[str, Any]] = []
+    for seller_username, bucket in grouped.items():
+        try:
+            seller_rules = auth_demo.get_seller_shipping_rules(seller_username)
+        except ValueError:
+            seller_rules = dict(auth_demo.DEFAULT_SHIPPING_RULES)
+        available_shipping_methods = _available_shipping_methods_for_group(bucket["items"], seller_rules)
+        available_shipping_values = {item["value"] for item in available_shipping_methods}
+        subtotal = sum((_line_decimal(line["line_total"]) for line in bucket["items"]), Decimal("0.00")).quantize(Decimal("0.01"))
+        free_shipping_threshold = _shipping_decimal(seller_rules.get("free_shipping_threshold", "1200.00"), "1200.00")
+
+        line_fees = []
+        for line in bucket["items"]:
+            product = local_store.get_product_by_slug(line["slug"]) or {}
+            line_fees.append(_shipping_fee_for_line(product, seller_rules, shipping_method))
+        base_shipping_fee = max(line_fees or [Decimal("0.00")]).quantize(Decimal("0.01"))
+        free_shipping_applied = subtotal >= free_shipping_threshold if subtotal > 0 else False
+        shipping_fee = Decimal("0.00") if free_shipping_applied else base_shipping_fee
+
+        groups.append(
+            {
+                "seller_username": seller_username,
+                "seller_display_name": bucket["seller_display_name"],
+                "subtotal": format(subtotal, ".2f"),
+                "shipping_fee": format(shipping_fee, ".2f"),
+                "base_shipping_fee": format(base_shipping_fee, ".2f"),
+                "free_shipping_threshold": format(free_shipping_threshold, ".2f"),
+                "free_shipping_applied": free_shipping_applied,
+                "selected_shipping_method": shipping_method,
+                "selected_shipping_method_label": SHIPPING_METHOD_LABELS.get(shipping_method, shipping_method),
+                "available_shipping_methods": available_shipping_methods,
+                "selected_shipping_method_supported": shipping_method in available_shipping_values,
+                "items": [
+                    {
+                        "key": line.get("key", ""),
+                        "slug": line["slug"],
+                        "display_name": line.get("display_name") or line.get("name", ""),
+                        "qty": int(line["qty"]),
+                        "line_total": format(_line_decimal(line["line_total"]), ".2f"),
+                    }
+                    for line in bucket["items"]
+                ],
+            }
+        )
+
+    return groups
+
+
+def build_checkout_totals(
+    session,
+    *,
+    shipping_method: str,
+) -> Dict[str, Any]:
+    """Build marketplace checkout totals using per-seller shipping groups."""
+    cart = cart_service.get_cart(session)
+    items = list(cart.get("items", {}).values())
+    subtotal = sum((Decimal(str(item["price"])) * int(item["qty"]) for item in items), Decimal("0.00")).quantize(Decimal("0.01"))
+    discount = cart_service.compute_totals(session)["discount"]
+    seller_shipping_groups = build_seller_shipping_groups(items, shipping_method=shipping_method)
+    unsupported_groups = [group for group in seller_shipping_groups if not group["selected_shipping_method_supported"]]
+
+    shipping = sum((_shipping_decimal(group["shipping_fee"]) for group in seller_shipping_groups), Decimal("0.00")).quantize(Decimal("0.01"))
+    total = (subtotal + shipping - discount).quantize(Decimal("0.01"))
+    return {
+        "totals": {
+            "subtotal": subtotal,
+            "shipping": shipping,
+            "discount": discount,
+            "total": total,
+        },
+        "seller_shipping_groups": seller_shipping_groups,
+        "unsupported_sellers": [group["seller_display_name"] for group in unsupported_groups],
+    }
 
 
 def _parse_order_date(value: str) -> date | None:
@@ -347,14 +522,40 @@ def _enrich_order_common(order: Dict[str, Any]) -> Dict[str, Any]:
     item["service_request"] = _enrich_service_request(item.get("service_request"))
     item["can_request_cancel"] = _can_request_cancel(item)
     item["can_request_refund"] = _can_request_refund(item)
+    item["buyer_note"] = item.get("buyer_note", "")
     shipping_address = item.get("shipping_address") or {}
     item["shipping_address"] = dict(shipping_address) if isinstance(shipping_address, dict) else {}
     invoice_profile = item.get("invoice_profile") or {}
     item["invoice_profile"] = dict(invoice_profile) if isinstance(invoice_profile, dict) else {}
+    item["shipping_method"] = item.get("shipping_method", SHIPPING_METHOD_HOME_DELIVERY)
+    item["shipping_method_label"] = SHIPPING_METHOD_LABELS.get(item["shipping_method"], item["shipping_method"])
+    item["payment_method"] = item.get("payment_method", PAYMENT_METHOD_NEWEBPAY_CREDIT)
+    item["payment_method_label"] = PAYMENT_METHOD_LABELS.get(item["payment_method"], item["payment_method"])
+    item["pickup_store_brand"] = item.get("pickup_store_brand", "")
+    item["pickup_store_brand_label"] = CONVENIENCE_STORE_BRAND_LABELS.get(item["pickup_store_brand"], item["pickup_store_brand"])
+    item["pickup_store_code"] = item.get("pickup_store_code", "")
+    item["pickup_store_name"] = item.get("pickup_store_name", "")
+    item["pickup_store_address"] = item.get("pickup_store_address", "")
+    item["seller_shipping_groups"] = item.get("seller_shipping_groups") or build_seller_shipping_groups(
+        item.get("items", []),
+        shipping_method=item["shipping_method"],
+    )
     return item
 
 
-def create_order_from_cart(session, user: Dict[str, str]) -> Dict[str, Any]:
+def create_order_from_cart(
+    session,
+    user: Dict[str, str],
+    *,
+    address_id: int | None = None,
+    shipping_method: str = SHIPPING_METHOD_HOME_DELIVERY,
+    pickup_store_brand: str = "",
+    pickup_store_code: str = "",
+    pickup_store_name: str = "",
+    pickup_store_address: str = "",
+    payment_method: str = PAYMENT_METHOD_NEWEBPAY_CREDIT,
+    buyer_note: str = "",
+) -> Dict[str, Any]:
     """把購物車內容轉成正式訂單，並清空已結帳品項。
 
     參數:
@@ -369,8 +570,34 @@ def create_order_from_cart(session, user: Dict[str, str]) -> Dict[str, Any]:
     if not items:
         raise ValueError("Your cart is empty.")
 
+    if shipping_method not in SHIPPING_METHOD_LABELS:
+        raise ValueError("Invalid shipping method.")
+    if payment_method not in PAYMENT_METHOD_LABELS:
+        raise ValueError("Invalid payment method.")
+
+    selected_address = (
+        customer_center.get_address_by_id(user["username"], address_id)
+        if address_id is not None
+        else customer_center.get_default_address(user["username"])
+    )
+    if not selected_address:
+        raise ValueError("Please select a shipping address.")
+
+    if shipping_method == SHIPPING_METHOD_CONVENIENCE_STORE:
+        if not pickup_store_brand.strip() or not pickup_store_code.strip() or not pickup_store_name.strip():
+            raise ValueError("Convenience-store pickup requires store brand, code, and name.")
+        if pickup_store_brand.strip() not in CONVENIENCE_STORE_BRAND_LABELS:
+            raise ValueError("Invalid convenience-store brand.")
+
+    checkout_pricing = build_checkout_totals(session, shipping_method=shipping_method)
+    if checkout_pricing["unsupported_sellers"]:
+        raise ValueError(
+            "The selected shipping method is not available for: "
+            + ", ".join(checkout_pricing["unsupported_sellers"])
+            + "."
+        )
     product_management.reserve_stock(items)
-    totals = cart_service.compute_totals(session)
+    totals = checkout_pricing["totals"]
     orders = local_store.get_orders()
     next_id = max((order["id"] for order in orders), default=0) + 1
     user_record = local_store.get_user_by_username(user["username"]) or {}
@@ -382,10 +609,17 @@ def create_order_from_cart(session, user: Dict[str, str]) -> Dict[str, Any]:
         "display_name": user["display_name"],
         "status": ORDER_STATUS_CONFIRMED,
         "coupon": cart.get("coupon"),
-        "shipping_address": customer_center.get_default_address(user["username"]),
+        "shipping_address": selected_address,
+        "shipping_method": shipping_method,
+        "pickup_store_brand": pickup_store_brand.strip(),
+        "pickup_store_code": pickup_store_code.strip(),
+        "pickup_store_name": pickup_store_name.strip(),
+        "pickup_store_address": pickup_store_address.strip(),
+        "payment_method": payment_method,
         "invoice_profile": customer_center.get_invoice_profile(user["username"]),
         "service_request": _empty_service_request(),
-        "buyer_note": "",
+        "buyer_note": buyer_note.strip(),
+        "seller_shipping_groups": checkout_pricing["seller_shipping_groups"],
         "items": [
             {
                 "id": item["id"],
@@ -436,6 +670,21 @@ def list_orders_for_user(username: str) -> List[Dict[str, Any]]:
         item["shipment_summary"] = " / ".join(group["seller_status_label"] for group in shipment_groups) or "待出貨"
         results.append(item)
     return results
+
+
+def get_checkout_shipping_methods() -> List[Dict[str, str]]:
+    """回傳 checkout 可選的物流方式。"""
+    return [dict(item) for item in SHIPPING_METHOD_CHOICES]
+
+
+def get_checkout_payment_methods() -> List[Dict[str, str]]:
+    """回傳 checkout 可選的付款方式。"""
+    return [dict(item) for item in PAYMENT_METHOD_CHOICES]
+
+
+def get_convenience_store_brands() -> List[Dict[str, str]]:
+    """回傳 checkout 可選的超商品牌。"""
+    return [dict(item) for item in CONVENIENCE_STORE_BRAND_CHOICES]
 
 
 def get_order_detail_for_user(order_id: int, username: str) -> Optional[Dict[str, Any]]:

@@ -72,15 +72,21 @@ class ProductSerializer(serializers.Serializer):
     owner_user_id = serializers.IntegerField(required=False, allow_null=True)
     owner_username = serializers.CharField(required=False, allow_blank=True)
     owner_display_name = serializers.CharField(required=False, allow_blank=True)
+    created_at = serializers.CharField(required=False, allow_blank=True)
+    updated_at = serializers.CharField(required=False, allow_blank=True)
+    created_at_display = serializers.CharField(required=False, allow_blank=True)
+    updated_at_display = serializers.CharField(required=False, allow_blank=True)
     has_variants = serializers.BooleanField(required=False)
     variant_count = serializers.IntegerField(required=False)
     variant_price_min = serializers.FloatField(required=False)
     variant_price_max = serializers.FloatField(required=False)
     price_range_label = serializers.CharField(required=False)
     stock_status = serializers.CharField(required=False)
+    is_favorite = serializers.BooleanField(required=False)
     color_options = serializers.ListField(child=serializers.CharField(), required=False)
     size_options = serializers.ListField(child=serializers.CharField(), required=False)
     filter_attributes = serializers.DictField(required=False)
+    shipping_profile = serializers.DictField(required=False)
     variants = VariantSerializer(many=True, required=False)
 
 
@@ -301,6 +307,8 @@ class CommunityPostSerializer(serializers.Serializer):
     created_at_display = serializers.CharField(required=False)
     reply_count = serializers.IntegerField(required=False)
     replies = CommunityReplySerializer(many=True, required=False)
+    can_edit = serializers.BooleanField(required=False)
+    can_delete = serializers.BooleanField(required=False)
 
 
 class CommunityPostListResponseSerializer(serializers.Serializer):
@@ -322,12 +330,25 @@ class CommunityPostCreateSerializer(serializers.Serializer):
     tags = serializers.CharField(required=False, allow_blank=True, default="")
 
 
+class CommunityPostUpdateSerializer(CommunityPostCreateSerializer):
+    """CommunityPostUpdateSerializer。
+
+    負責驗證編輯文章時需要的輸入欄位。
+    """
+
+
 class CommunityReplyCreateSerializer(serializers.Serializer):
     """CommunityReplyCreateSerializer。
     
     負責驗證建立資料時需要的輸入欄位。
     """
     body = serializers.CharField()
+
+
+class CommunityImageUploadSerializer(serializers.Serializer):
+    """論壇富文本圖片上傳。"""
+
+    image = serializers.FileField()
 
 
 class VoteResponseSerializer(serializers.Serializer):
@@ -356,6 +377,7 @@ class DemoUserSerializer(serializers.Serializer):
     last_login_at = serializers.CharField(required=False, allow_blank=True)
     seller_requested_at = serializers.CharField(required=False, allow_blank=True)
     seller_reviewed_at = serializers.CharField(required=False, allow_blank=True)
+    shipping_rules = serializers.DictField(required=False)
 
 
 class MeResponseSerializer(serializers.Serializer):
@@ -439,6 +461,16 @@ class InvoiceProfileUpdateSerializer(serializers.Serializer):
     tax_id = serializers.CharField(required=False, allow_blank=True)
 
 
+class SellerShippingRulesSerializer(serializers.Serializer):
+    """Seller-level shipping rules."""
+
+    home_delivery_enabled = serializers.BooleanField()
+    home_delivery_fee = serializers.CharField()
+    convenience_store_enabled = serializers.BooleanField()
+    convenience_store_fee = serializers.CharField()
+    free_shipping_threshold = serializers.CharField()
+
+
 class OrderServiceRequestCreateSerializer(serializers.Serializer):
     """OrderServiceRequestCreateSerializer。
     
@@ -507,6 +539,13 @@ class ShipmentGroupSerializer(serializers.Serializer):
     items = SellerLineSerializer(many=True)
 
 
+class CheckoutChoiceSerializer(serializers.Serializer):
+    """結帳頁的選項欄位。"""
+
+    value = serializers.CharField()
+    label = serializers.CharField()
+
+
 class OrderSerializer(serializers.Serializer):
     """OrderSerializer。
     
@@ -533,7 +572,17 @@ class OrderSerializer(serializers.Serializer):
     shipped_at_display = serializers.CharField(required=False, allow_blank=True)
     completed_at_display = serializers.CharField(required=False, allow_blank=True)
     shipping_address = serializers.DictField(required=False)
+    shipping_method = serializers.CharField(required=False, allow_blank=True)
+    shipping_method_label = serializers.CharField(required=False, allow_blank=True)
+    payment_method = serializers.CharField(required=False, allow_blank=True)
+    payment_method_label = serializers.CharField(required=False, allow_blank=True)
+    pickup_store_brand = serializers.CharField(required=False, allow_blank=True)
+    pickup_store_brand_label = serializers.CharField(required=False, allow_blank=True)
+    pickup_store_code = serializers.CharField(required=False, allow_blank=True)
+    pickup_store_name = serializers.CharField(required=False, allow_blank=True)
+    pickup_store_address = serializers.CharField(required=False, allow_blank=True)
     invoice_profile = serializers.DictField(required=False)
+    buyer_note = serializers.CharField(required=False, allow_blank=True)
     service_request = ServiceRequestSerializer(required=False)
     can_request_cancel = serializers.BooleanField(required=False)
     can_request_refund = serializers.BooleanField(required=False)
@@ -728,6 +777,37 @@ class AdminOrdersQuerySerializer(serializers.Serializer):
     q = serializers.CharField(required=False, allow_blank=True)
 
 
+class AdminProductsQuerySerializer(serializers.Serializer):
+    """Admin products query filters."""
+
+    q = serializers.CharField(required=False, allow_blank=True)
+    status = serializers.CharField(required=False, allow_blank=True)
+    category = serializers.CharField(required=False, allow_blank=True)
+    brand = serializers.CharField(required=False, allow_blank=True)
+    owner = serializers.CharField(required=False, allow_blank=True)
+
+
+class AdminReviewsQuerySerializer(serializers.Serializer):
+    """Admin reviews query filters."""
+
+    q = serializers.CharField(required=False, allow_blank=True)
+    rating = serializers.CharField(required=False, allow_blank=True)
+
+
+class AdminQuestionsQuerySerializer(serializers.Serializer):
+    """Admin questions query filters."""
+
+    q = serializers.CharField(required=False, allow_blank=True)
+    answered = serializers.CharField(required=False, allow_blank=True)
+
+
+class AdminPostsQuerySerializer(serializers.Serializer):
+    """Admin posts query filters."""
+
+    q = serializers.CharField(required=False, allow_blank=True)
+    topic = serializers.CharField(required=False, allow_blank=True)
+
+
 class ServiceReviewSerializer(serializers.Serializer):
     """ServiceReviewSerializer。
     
@@ -760,6 +840,88 @@ class AppBootstrapSerializer(serializers.Serializer):
     cart_count = serializers.IntegerField()
     compare_count = serializers.IntegerField()
     favorite_count = serializers.IntegerField()
+
+
+class BannerSerializer(serializers.Serializer):
+    """首頁宣傳 banner。"""
+
+    id = serializers.IntegerField()
+    title = serializers.CharField(required=False, allow_blank=True)
+    copy_text = serializers.CharField(required=False, allow_blank=True)
+    image_path = serializers.CharField()
+    link_url = serializers.CharField(required=False, allow_blank=True)
+    starts_at = serializers.CharField(required=False, allow_blank=True)
+    ends_at = serializers.CharField(required=False, allow_blank=True)
+    position = serializers.CharField(required=False, allow_blank=True)
+    position_label = serializers.CharField(required=False, allow_blank=True)
+    note = serializers.CharField(required=False, allow_blank=True)
+    sort_order = serializers.IntegerField()
+    status = serializers.CharField(required=False, allow_blank=True)
+    status_label = serializers.CharField(required=False, allow_blank=True)
+    is_active = serializers.BooleanField()
+    rejection_reason = serializers.CharField(required=False, allow_blank=True)
+    applicant_user_id = serializers.IntegerField(required=False, allow_null=True)
+    applicant_username = serializers.CharField(required=False, allow_blank=True)
+    applicant_display_name = serializers.CharField(required=False, allow_blank=True)
+    reviewed_at = serializers.CharField(required=False, allow_blank=True)
+    reviewed_by_username = serializers.CharField(required=False, allow_blank=True)
+    reviewed_by_display_name = serializers.CharField(required=False, allow_blank=True)
+    created_at = serializers.CharField(required=False, allow_blank=True)
+    updated_at = serializers.CharField(required=False, allow_blank=True)
+    is_currently_visible = serializers.BooleanField(required=False)
+
+
+class BannerListResponseSerializer(serializers.Serializer):
+    """Banner 列表回應。"""
+
+    items = BannerSerializer(many=True)
+
+
+class BannerApplicationCreateSerializer(serializers.Serializer):
+    """會員提交 banner 申請。"""
+
+    title = serializers.CharField(required=False, allow_blank=True, max_length=120)
+    copy_text = serializers.CharField(required=False, allow_blank=True)
+    link_url = serializers.CharField(required=False, allow_blank=True, max_length=255)
+    starts_at = serializers.DateField()
+    ends_at = serializers.DateField()
+    position = serializers.CharField(required=False, allow_blank=True, default="home_main")
+    note = serializers.CharField(required=False, allow_blank=True)
+    image = serializers.FileField()
+
+
+class AdminBannerCreateSerializer(BannerApplicationCreateSerializer):
+    """管理者直接建立已通過 banner。"""
+
+    is_active = serializers.BooleanField(required=False, default=True)
+
+
+class AdminBannerUpdateSerializer(serializers.Serializer):
+    """更新 banner。"""
+
+    title = serializers.CharField(required=False, allow_blank=True, max_length=120, default="")
+    copy_text = serializers.CharField(required=False, allow_blank=True, default="")
+    link_url = serializers.CharField(required=False, allow_blank=True, max_length=255, default="")
+    starts_at = serializers.DateField(required=False)
+    ends_at = serializers.DateField(required=False)
+    position = serializers.CharField(required=False, allow_blank=True, default="home_main")
+    note = serializers.CharField(required=False, allow_blank=True, default="")
+    is_active = serializers.BooleanField(required=False, default=True)
+    sort_order = serializers.IntegerField(required=False, min_value=1, default=1)
+    image = serializers.FileField(required=False)
+
+
+class AdminBannerReviewSerializer(serializers.Serializer):
+    """審核 banner 申請。"""
+
+    approved = serializers.BooleanField()
+    rejection_reason = serializers.CharField(required=False, allow_blank=True)
+
+
+class AdminBannerReorderSerializer(serializers.Serializer):
+    """更新 banner 排序。"""
+
+    ids = serializers.ListField(child=serializers.IntegerField(min_value=1), allow_empty=False)
 
 
 class LoginRequestSerializer(serializers.Serializer):
@@ -849,6 +1011,9 @@ class CartResponseSerializer(serializers.Serializer):
     coupon = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     item_count = serializers.IntegerField()
     totals = CartTotalsSerializer()
+    shipping_methods = CheckoutChoiceSerializer(many=True, required=False)
+    selected_shipping_method = serializers.CharField(required=False, allow_blank=True)
+    seller_shipping_groups = serializers.ListField(child=serializers.DictField(), required=False)
     detail = serializers.CharField(required=False)
 
 
@@ -887,11 +1052,47 @@ class CheckoutPreviewSerializer(serializers.Serializer):
     coupon = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     item_count = serializers.IntegerField()
     totals = CartTotalsSerializer()
+    addresses = AddressSerializer(many=True, required=False)
     default_address = serializers.DictField(required=False, allow_null=True)
     invoice_profile = serializers.DictField(required=False)
+    shipping_methods = CheckoutChoiceSerializer(many=True, required=False)
+    payment_methods = CheckoutChoiceSerializer(many=True, required=False)
+    convenience_store_brands = CheckoutChoiceSerializer(many=True, required=False)
+    selected_address_id = serializers.IntegerField(required=False, allow_null=True)
+    selected_shipping_method = serializers.CharField(required=False, allow_blank=True)
+    selected_payment_method = serializers.CharField(required=False, allow_blank=True)
+    seller_shipping_groups = serializers.ListField(child=serializers.DictField(), required=False)
     user = DemoUserSerializer(required=False, allow_null=True)
     requires_login = serializers.BooleanField()
     can_confirm = serializers.BooleanField()
+
+
+class CheckoutConfirmSerializer(serializers.Serializer):
+    """確認下單時提交的欄位。"""
+
+    address_id = serializers.IntegerField(required=False, allow_null=True)
+    shipping_method = serializers.ChoiceField(
+        choices=[
+            "home_delivery",
+            "convenience_store",
+        ],
+        required=False,
+        default="home_delivery",
+    )
+    pickup_store_brand = serializers.CharField(required=False, allow_blank=True)
+    pickup_store_code = serializers.CharField(required=False, allow_blank=True)
+    pickup_store_name = serializers.CharField(required=False, allow_blank=True)
+    pickup_store_address = serializers.CharField(required=False, allow_blank=True)
+    payment_method = serializers.ChoiceField(
+        choices=[
+            "newebpay_credit",
+            "bank_transfer",
+            "cash_on_delivery",
+        ],
+        required=False,
+        default="newebpay_credit",
+    )
+    buyer_note = serializers.CharField(required=False, allow_blank=True)
 
 
 class StatusChoiceSerializer(serializers.Serializer):
@@ -918,6 +1119,11 @@ class SellerProductWriteSerializer(serializers.Serializer):
     variants = serializers.CharField(required=False, allow_blank=True)
     status = serializers.CharField(required=False, allow_blank=True)
     stock = serializers.CharField(required=False, allow_blank=True)
+    use_seller_shipping_rules = serializers.CharField(required=False, allow_blank=True)
+    allow_home_delivery = serializers.CharField(required=False, allow_blank=True)
+    allow_convenience_store = serializers.CharField(required=False, allow_blank=True)
+    override_home_delivery_fee = serializers.CharField(required=False, allow_blank=True)
+    override_convenience_store_fee = serializers.CharField(required=False, allow_blank=True)
     existing_image_paths = serializers.ListField(child=serializers.CharField(), required=False)
     remove_image_paths = serializers.ListField(child=serializers.CharField(), required=False)
 
@@ -936,8 +1142,14 @@ class StaffReviewDashboardSerializer(serializers.Serializer):
     
     DRF Serializer，用來驗證請求資料或整理 API 回應格式。
     """
-    pending_products = ProductSerializer(many=True)
+    managed_products = ProductSerializer(many=True)
     seller_requests = DemoUserSerializer(many=True)
+
+
+class ProductForceArchiveSerializer(serializers.Serializer):
+    """管理者強制下架商品時可帶的附註。"""
+
+    note = serializers.CharField(required=False, allow_blank=True)
 
 
 class NewebpaySandboxPaymentPrepareSerializer(serializers.Serializer):
@@ -981,6 +1193,62 @@ class NewebpaySandboxLogisticsPrepareSerializer(serializers.Serializer):
     shipment_note = serializers.CharField(required=False, allow_blank=True)
 
 
+class CheckoutStoreMapPrepareSerializer(serializers.Serializer):
+    """Prepare NewebPay convenience-store map selection."""
+
+    pickup_store_brand = serializers.CharField()
+    payment_method = serializers.CharField(required=False, allow_blank=True)
+    return_url = serializers.CharField(required=False, allow_blank=True)
+
+
+class CheckoutStoreMapPreparedSerializer(serializers.Serializer):
+    """Return the auto-submit form payload for NewebPay storeMap."""
+
+    provider = serializers.CharField()
+    mode = serializers.CharField()
+    selection_token = serializers.CharField()
+    buyer_username = serializers.CharField()
+    pickup_store_brand = serializers.CharField()
+    pickup_store_brand_label = serializers.CharField()
+    payment_method = serializers.CharField(required=False, allow_blank=True)
+    merchant_order_no = serializers.CharField()
+    action_url = serializers.CharField()
+    form_method = serializers.CharField()
+    callback_url = serializers.CharField()
+    return_url = serializers.CharField()
+    plain_params = serializers.DictField()
+    form_fields = serializers.DictField()
+    note = serializers.CharField()
+
+
+class CheckoutStoreSelectionSerializer(serializers.Serializer):
+    """Return the selected convenience-store data for checkout."""
+
+    selection_token = serializers.CharField()
+    status = serializers.CharField()
+    is_ready = serializers.BooleanField()
+    pickup_store_brand = serializers.CharField(required=False, allow_blank=True)
+    pickup_store_brand_label = serializers.CharField(required=False, allow_blank=True)
+    pickup_store_code = serializers.CharField(required=False, allow_blank=True)
+    pickup_store_name = serializers.CharField(required=False, allow_blank=True)
+    pickup_store_address = serializers.CharField(required=False, allow_blank=True)
+    merchant_order_no = serializers.CharField(required=False, allow_blank=True)
+    updated_at = serializers.CharField(required=False, allow_blank=True)
+
+
+class NewebpayStoreMapCallbackSerializer(serializers.Serializer):
+    """Receive NewebPay store-map callback payload."""
+
+    MerchantID = serializers.CharField(required=False, allow_blank=True)
+    MerchantOrderNo = serializers.CharField(required=False, allow_blank=True)
+    StoreID = serializers.CharField(required=False, allow_blank=True)
+    StoreName = serializers.CharField(required=False, allow_blank=True)
+    StoreAddr = serializers.CharField(required=False, allow_blank=True)
+    StoreType = serializers.CharField(required=False, allow_blank=True)
+    ExtraData = serializers.CharField(required=False, allow_blank=True)
+    Status = serializers.CharField(required=False, allow_blank=True)
+
+
 class NewebpaySandboxLogisticsPreparedSerializer(serializers.Serializer):
     """藍新物流 sandbox scaffold 回傳資料。"""
 
@@ -993,6 +1261,7 @@ class NewebpaySandboxLogisticsPreparedSerializer(serializers.Serializer):
     create_url = serializers.CharField(required=False, allow_blank=True)
     status_url = serializers.CharField(required=False, allow_blank=True)
     suggested_payload = serializers.DictField()
+    buyer_shipping_summary = serializers.DictField(required=False)
     note = serializers.CharField()
 
 

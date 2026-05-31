@@ -15,16 +15,22 @@
 import { FormEvent, useEffect, useState } from 'react'
 
 import { apiFetch } from '@/lib/api'
+import { clearSessionDraft, getSessionDraft, setSessionDraft } from '@/lib/session-drafts'
 import type { InvoiceProfile } from '@/lib/types'
+
+const INVOICE_DRAFT_KEY = 'me-invoice-form'
 
 export default function MeInvoicePage() {
   /** 發票資料表單。 */
-  const [form, setForm] = useState<InvoiceProfile>({
-    invoice_type: 'personal',
-    carrier_code: '',
-    company_name: '',
-    tax_id: '',
-  })
+  const [form, setForm] = useState<InvoiceProfile>(
+    () =>
+      getSessionDraft<InvoiceProfile>(INVOICE_DRAFT_KEY) ?? {
+        invoice_type: 'personal',
+        carrier_code: '',
+        company_name: '',
+        tax_id: '',
+      },
+  )
   /** 初次載入發票資料時的狀態。 */
   const [loading, setLoading] = useState(true)
   /** 送出更新時的狀態。 */
@@ -35,11 +41,16 @@ export default function MeInvoicePage() {
   const [message, setMessage] = useState('')
 
   useEffect(() => {
+    setSessionDraft(INVOICE_DRAFT_KEY, form)
+  }, [form])
+
+  useEffect(() => {
     /** 載入目前登入者的發票資料。 */
     setLoading(true)
     apiFetch<InvoiceProfile>('/me/invoice/')
       .then((payload) => {
-        setForm(payload)
+        const draft = getSessionDraft<Partial<InvoiceProfile>>(INVOICE_DRAFT_KEY)
+        setForm(draft ? { ...payload, ...draft } : payload)
         setError('')
       })
       .catch((err: Error) => setError(err.message))
@@ -61,6 +72,7 @@ export default function MeInvoicePage() {
         method: 'POST',
         body: JSON.stringify(form),
       })
+      clearSessionDraft(INVOICE_DRAFT_KEY)
       setForm(payload)
       setMessage('發票資料已更新。')
     } catch (err) {

@@ -1,56 +1,59 @@
 'use client'
 
-/**
- * 購物車頁
- *
- * 功能：
- * - 顯示購物車內容
- * - 更新數量、移除項目、套用折扣碼
- * - 顯示 loading、submitting、error 狀態
- *
- * 主要 API：
- * - GET `/api/v1/cart/`
- * - PATCH `/api/v1/cart/items/:itemKey/`
- * - DELETE `/api/v1/cart/items/:itemKey/`
- * - POST `/api/v1/cart/`
- */
-
 import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
 
-import { apiFetch } from '@/lib/api'
+import { apiFetch, dispatchAppBootstrapRefresh, toQueryString } from '@/lib/api'
+import { getSessionDraft, setSessionDraft } from '@/lib/session-drafts'
 import type { CartPayload } from '@/lib/types'
 
+const DEFAULT_SHIPPING_METHOD = 'home_delivery'
+const CHECKOUT_DRAFT_KEY = 'checkout-form'
+
 export default function CartPage() {
-  /** 後端購物車 API 回傳的完整購物車資料。 */
+  const router = useRouter()
   const [cart, setCart] = useState<CartPayload | null>(null)
-  /** 折扣碼輸入框內容。 */
   const [coupon, setCoupon] = useState('')
-  /** 載入或提交失敗時顯示的錯誤訊息。 */
-  const [error, setError] = useState('')
-  /** 首次讀取購物車資料時的 loading 狀態。 */
+  const [selectedShippingMethod, setSelectedShippingMethod] = useState(DEFAULT_SHIPPING_METHOD)
   const [loading, setLoading] = useState(true)
-  /** 更新數量、刪除、套用折扣碼時的提交狀態。 */
   const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState('')
+  const [cartReady, setCartReady] = useState(false)
+
+  async function loadCart(preferredShippingMethod?: string) {
+    setLoading(true)
+    try {
+      const payload = await apiFetch<CartPayload>(
+        `/cart/${toQueryString({
+          shipping_method: preferredShippingMethod || selectedShippingMethod || DEFAULT_SHIPPING_METHOD,
+        })}`,
+      )
+      setCart(payload)
+      setCoupon(payload.coupon ?? '')
+      setSelectedShippingMethod(payload.selected_shipping_method ?? preferredShippingMethod ?? DEFAULT_SHIPPING_METHOD)
+      setError(payload.detail ?? '')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load cart.')
+    } finally {
+      setCartReady(true)
+      setLoading(false)
+    }
+  }
 
   useEffect(() => {
-    /** 首次進頁面時，從 session 購物車載入最新內容。 */
-    setLoading(true)
-    apiFetch<CartPayload>('/cart/')
-      .then((payload) => {
-        setCart(payload)
-        setCoupon(payload.coupon ?? '')
-        setError('')
-      })
-      .catch((err: Error) => setError(err.message))
-      .finally(() => setLoading(false))
+    void loadCart(selectedShippingMethod)
   }, [])
 
-  /**
-   * 共用 mutation 包裝器，統一處理 submitting 與 error 狀態。
-   *
-   * task:
-   * - 真正執行 API 寫入的非同步函式，成功後應回傳最新購物車資料。
-   */
+  useEffect(() => {
+    if (!cartReady) {
+      return
+    }
+    if (selectedShippingMethod === (cart?.selected_shipping_method ?? DEFAULT_SHIPPING_METHOD)) {
+      return
+    }
+    void loadCart(selectedShippingMethod)
+  }, [cart?.selected_shipping_method, cartReady, selectedShippingMethod])
+
   async function withMutation(task: () => Promise<CartPayload>) {
     try {
       setSubmitting(true)
@@ -58,69 +61,79 @@ export default function CartPage() {
       const next = await task()
       setCart(next)
       setCoupon(next.coupon ?? '')
+      setSelectedShippingMethod(next.selected_shipping_method ?? selectedShippingMethod)
+      setError(next.detail ?? '')
+      dispatchAppBootstrapRefresh({ cart_count: next.item_count })
     } catch (err) {
-      setError(err instanceof Error ? err.message : '購物車操作失敗，請稍後再試。')
+      setError(err instanceof Error ? err.message : 'Failed to update cart.')
     } finally {
       setSubmitting(false)
     }
   }
 
-  /**
-   * 更新單一購物車項目的數量。
-   *
-   * itemKey:
-   * - 後端用來辨識購物車項目的唯一鍵值。
-   * qty:
-   * - 使用者想更新成的數量。
-   */
   function updateQty(itemKey: string, qty: number) {
     return withMutation(() =>
-      apiFetch<CartPayload>(`/cart/items/${encodeURIComponent(itemKey)}/`, {
-        method: 'PATCH',
-        body: JSON.stringify({ qty }),
-      }),
+      apiFetch<CartPayload>(
+        `/cart/items/${encodeURIComponent(itemKey)}/${toQueryString({
+          shipping_method: selectedShippingMethod,
+        })}`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ qty }),
+        },
+      ),
     )
   }
 
-  /**
-   * 移除單一購物車項目。
-   *
-   * itemKey:
-   * - 要刪除的購物車項目唯一鍵值。
-   */
   function removeItem(itemKey: string) {
     return withMutation(() =>
-      apiFetch<CartPayload>(`/cart/items/${encodeURIComponent(itemKey)}/`, {
-        method: 'DELETE',
-      }),
+      apiFetch<CartPayload>(
+        `/cart/items/${encodeURIComponent(itemKey)}/${toQueryString({
+          shipping_method: selectedShippingMethod,
+        })}`,
+        {
+          method: 'DELETE',
+        },
+      ),
     )
   }
 
-  /** 將目前 `coupon` state 套用到購物車。 */
   function applyCoupon() {
     return withMutation(() =>
-      apiFetch<CartPayload>('/cart/', {
-        method: 'POST',
-        body: JSON.stringify({ code: coupon }),
-      }),
+      apiFetch<CartPayload>(
+        `/cart/${toQueryString({
+          shipping_method: selectedShippingMethod,
+        })}`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ code: coupon }),
+        },
+      ),
     )
+  }
+
+  function proceedToCheckout() {
+    const existingDraft = getSessionDraft<Record<string, unknown>>(CHECKOUT_DRAFT_KEY) ?? {}
+    setSessionDraft(CHECKOUT_DRAFT_KEY, {
+      ...existingDraft,
+      shipping_method: selectedShippingMethod,
+    })
+    router.push('/checkout')
   }
 
   if (loading) {
-    return <section className="card">載入購物車中…</section>
+    return <section className="card">載入購物車中...</section>
   }
 
   return (
     <div className="stack">
-      {/* 購物車主表格：顯示商品、數量、金額與刪除操作。 */}
       <section className="card stack">
         <h1>購物車</h1>
         {error ? <div className="notice">{error}</div> : null}
         {!cart?.items.length ? (
-          <div className="muted">目前購物車是空的。</div>
+          <div className="muted">你的購物車目前沒有商品。</div>
         ) : (
           <table className="table">
-            {/* 表頭：定義主清單欄位。 */}
             <thead>
               <tr>
                 <th>商品</th>
@@ -130,16 +143,13 @@ export default function CartPage() {
               </tr>
             </thead>
             <tbody>
-              {/* 每一列都是單一購物車項目，可直接調整數量或刪除。 */}
               {cart.items.map((item) => (
                 <tr key={item.key}>
                   <td>
-                    {/* 商品名稱與 SKU 摘要。 */}
                     <strong>{item.display_name}</strong>
                     <div className="muted">{item.sku ?? ''}</div>
                   </td>
                   <td>
-                    {/* 數量輸入框：變更時即呼叫 PATCH 更新後端 cart item。 */}
                     <input
                       disabled={submitting}
                       min={0}
@@ -150,7 +160,6 @@ export default function CartPage() {
                   </td>
                   <td>${item.line_total.toFixed(2)}</td>
                   <td>
-                    {/* 單列刪除按鈕：對應 DELETE `/api/v1/cart/items/:itemKey/`。 */}
                     <button className="btn btn-secondary" disabled={submitting} onClick={() => removeItem(item.key)} type="button">
                       移除
                     </button>
@@ -162,29 +171,76 @@ export default function CartPage() {
         )}
       </section>
 
-      {/* 結帳摘要：折扣碼、運費、總額與結帳按鈕。 */}
-      <section className="card grid grid-2">
-        <div className="stack">
-          {/* 左欄：優惠碼輸入與套用操作。 */}
-          <label className="field">
-            <span>折扣碼</span>
-            <input disabled={submitting} value={coupon} onChange={(event) => setCoupon(event.target.value)} />
-          </label>
-          <button className="btn btn-secondary" disabled={submitting || !cart} onClick={applyCoupon} type="button">
-            {submitting ? '套用中…' : '套用折扣碼'}
-          </button>
-        </div>
-        <div className="stack">
-          {/* 右欄：金額總覽與導向結帳頁的 CTA。 */}
-          <strong>小計 ${cart?.totals.subtotal ?? '0.00'}</strong>
-          <span className="muted">運費 ${cart?.totals.shipping ?? '0.00'}</span>
-          <span className="muted">折扣 -${cart?.totals.discount ?? '0.00'}</span>
-          <strong>總計 ${cart?.totals.total ?? '0.00'}</strong>
-          <a className="btn" href="/checkout">
-            前往結帳
-          </a>
-        </div>
-      </section>
+      <div className="grid grid-2">
+        <section className="card stack">
+          <h2>配送方式</h2>
+          {!cart?.shipping_methods?.length ? (
+            <div className="muted">目前沒有可用配送方式。</div>
+          ) : (
+            cart.shipping_methods.map((method) => (
+              <label key={method.value}>
+                <input
+                  checked={selectedShippingMethod === method.value}
+                  disabled={submitting || !cart.items.length}
+                  name="shipping_method"
+                  onChange={() => setSelectedShippingMethod(method.value)}
+                  type="radio"
+                />{' '}
+                {method.label}
+              </label>
+            ))
+          )}
+
+          {cart?.seller_shipping_groups?.length ? (
+            <div className="stack" style={{ gap: '0.75rem' }}>
+              <strong>分賣家運費預估</strong>
+              {cart.seller_shipping_groups.map((group) => (
+                <div className="card stack" key={group.seller_username} style={{ gap: '0.35rem' }}>
+                  <div>
+                    <strong>{group.seller_display_name}</strong>
+                  </div>
+                  <div className="muted">商品小計 ${group.subtotal}</div>
+                  <div className="muted">
+                    {group.selected_shipping_method_label}運費 ${group.shipping_fee}
+                  </div>
+                  <div className="muted">
+                    {group.free_shipping_applied
+                      ? `已達免運門檻 $${group.free_shipping_threshold}`
+                      : `免運門檻 $${group.free_shipping_threshold}`}
+                  </div>
+                  {!group.selected_shipping_method_supported ? (
+                    <div className="notice">
+                      這位賣家的商品不支援目前配送方式，請改選其他配送方式後再結帳。
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </section>
+
+        <section className="card grid grid-2">
+          <div className="stack">
+            <label className="field">
+              <span>折扣碼</span>
+              <input disabled={submitting} value={coupon} onChange={(event) => setCoupon(event.target.value)} />
+            </label>
+            <button className="btn btn-secondary" disabled={submitting || !cart} onClick={applyCoupon} type="button">
+              {submitting ? '處理中...' : '套用折扣碼'}
+            </button>
+          </div>
+
+          <div className="stack">
+            <strong>小計 ${cart?.totals.subtotal ?? '0.00'}</strong>
+            <span className="muted">運費 ${cart?.totals.shipping ?? '0.00'}</span>
+            <span className="muted">折扣 -${cart?.totals.discount ?? '0.00'}</span>
+            <strong>總計 ${cart?.totals.total ?? '0.00'}</strong>
+            <button className="btn" disabled={!cart?.items.length || submitting} onClick={proceedToCheckout} type="button">
+              前往結帳
+            </button>
+          </div>
+        </section>
+      </div>
     </div>
   )
 }

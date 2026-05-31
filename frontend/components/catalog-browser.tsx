@@ -43,12 +43,13 @@ type CatalogBrowserProps = {
     size?: string
     page?: number
   }
+  syncUrl?: boolean
 }
 
 /**
  * 商品列表主要互動畫面。
  */
-export function CatalogBrowser({ title, intro, initialFilters }: CatalogBrowserProps) {
+export function CatalogBrowser({ title, intro, initialFilters, syncUrl = false }: CatalogBrowserProps) {
   /**
    * query:
    * - 目前列表查詢條件
@@ -94,6 +95,17 @@ export function CatalogBrowser({ title, intro, initialFilters }: CatalogBrowserP
       .finally(() => setLoading(false))
   }, [requestPath])
 
+  useEffect(() => {
+    if (!syncUrl || typeof window === 'undefined') {
+      return
+    }
+    const nextUrl = `${window.location.pathname}${toQueryString(query)}`
+    const currentUrl = `${window.location.pathname}${window.location.search}`
+    if (nextUrl !== currentUrl) {
+      window.history.replaceState(window.history.state, '', nextUrl)
+    }
+  }, [query, syncUrl])
+
   return (
     <div className="stack">
       {/* 頁首說明區：顯示目前頁面標題與簡介。 */}
@@ -104,7 +116,7 @@ export function CatalogBrowser({ title, intro, initialFilters }: CatalogBrowserP
 
       {/* 篩選表單：控制搜尋與各種 facet 條件。 */}
       <section className="card stack">
-        <div className="grid grid-3">
+        <div className="grid catalog-grid">
           <label className="field">
             <span>搜尋關鍵字</span>
             <input
@@ -183,7 +195,7 @@ export function CatalogBrowser({ title, intro, initialFilters }: CatalogBrowserP
       ) : (
         <>
           {/* 商品卡片列表：逐筆渲染後端回傳的商品。 */}
-          <section className="grid grid-3">
+          <section className="grid product-list-grid">
             {data?.items?.map((product) => (
               <ProductCard key={product.id} product={product} />
             ))}

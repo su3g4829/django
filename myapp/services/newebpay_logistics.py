@@ -47,6 +47,7 @@ def _serialize_record(record: Dict[str, Any]) -> Dict[str, Any]:
         "mode": record["mode"],
         "order_id": record["order_id"],
         "seller_username": record["seller_username"],
+        "merchant_order_no": record.get("merchant_order_no", ""),
         "logistics_no": record["logistics_no"],
         "status": record["status"],
         "status_label": record["status_label"],

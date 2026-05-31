@@ -1,15 +1,15 @@
 'use client'
 
 /**
- * 管理者審核台頁
+ * 管理者處理台頁
  *
  * 功能：
- * - 顯示待審商品與賣家申請
- * - 提供審核操作
+ * - 顯示賣家申請
+ * - 顯示目前已上架商品，提供強制下架操作
  *
  * 主要 API：
  * - GET `/api/v1/staff/reviews/`
- * - POST `/api/v1/staff/products/:slug/review/`
+ * - POST `/api/v1/staff/products/:slug/archive/`
  * - POST `/api/v1/staff/seller-requests/:username/review/`
  */
 
@@ -19,7 +19,7 @@ import { apiFetch } from '@/lib/api'
 import type { StaffReviewDashboard } from '@/lib/types'
 
 export default function StaffReviewsPage() {
-  /** 審核台資料，包含賣家申請與待審商品。 */
+  /** 處理台資料，包含賣家申請與商品管理清單。 */
   const [data, setData] = useState<StaffReviewDashboard | null>(null)
   /** 初次載入審核台時的狀態。 */
   const [loading, setLoading] = useState(true)
@@ -69,27 +69,19 @@ export default function StaffReviewsPage() {
     }
   }
 
-  /**
-   * 審核商品上架申請。
-   *
-   * slug:
-   * - 要審核的商品 slug。
-   * approved:
-   * - `true` 代表核准，`false` 代表駁回。
-   */
-  async function reviewProduct(slug: string, approved: boolean) {
+  /** 管理者強制下架商品。 */
+  async function archiveProduct(slug: string) {
     try {
       setSubmitting(true)
-      await apiFetch(`/staff/products/${slug}/review/`, {
+      await apiFetch(`/staff/products/${slug}/archive/`, {
         method: 'POST',
         body: JSON.stringify({
-          approved,
-          note: approved ? 'Approved in Next.js frontend.' : 'Rejected in Next.js frontend.',
+          note: 'Forced down in admin panel.',
         }),
       })
       await loadDashboard()
     } catch (err) {
-      setError(err instanceof Error ? err.message : '審核商品失敗，請稍後再試。')
+      setError(err instanceof Error ? err.message : '商品下架失敗，請稍後再試。')
     } finally {
       setSubmitting(false)
     }
@@ -126,25 +118,22 @@ export default function StaffReviewsPage() {
         )}
       </section>
 
-      {/* 右欄：商品上架審核。 */}
+      {/* 右欄：商品上架管理，管理者可直接強制下架。 */}
       <section className="card stack">
-        <h1>商品上架審核</h1>
-        {!data?.pending_products.length ? (
-          <div className="muted">目前沒有待審核商品。</div>
+        <h1>商品上架管理</h1>
+        {!data?.managed_products.length ? (
+          <div className="muted">目前沒有已上架商品。</div>
         ) : (
-          data.pending_products.map((product) => (
+          data.managed_products.map((product) => (
             <div className="card stack" key={product.slug}>
-              {/* 單筆待審商品卡：品牌、分類與審核操作。 */}
+              {/* 單筆上架商品卡：顯示商品摘要與強制下架按鈕。 */}
               <strong>{product.name}</strong>
               <div className="muted">
-                {product.brand} ｜ {product.category}
+                {product.brand} ｜ {product.category} ｜ {product.status_label ?? product.status}
               </div>
               <div className="row">
-                <button className="btn" disabled={submitting} onClick={() => reviewProduct(product.slug, true)} type="button">
-                  核准
-                </button>
-                <button className="btn btn-secondary" disabled={submitting} onClick={() => reviewProduct(product.slug, false)} type="button">
-                  駁回
+                <button className="btn btn-secondary" disabled={submitting} onClick={() => archiveProduct(product.slug)} type="button">
+                  強制下架
                 </button>
               </div>
             </div>

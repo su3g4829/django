@@ -18,6 +18,7 @@
 import { FormEvent, useEffect, useState } from 'react'
 
 import { apiFetch } from '@/lib/api'
+import { clearSessionDraft, getSessionDraft, setSessionDraft } from '@/lib/session-drafts'
 import type { Address } from '@/lib/types'
 
 type AddressListPayload = {
@@ -33,18 +34,23 @@ const EMPTY_FORM = {
   postal_code: '',
   address_line: '',
 }
+const ADDRESS_DRAFT_KEY = 'me-address-form'
 
 export default function MeAddressesPage() {
   /** 地址列表。 */
   const [items, setItems] = useState<Address[]>([])
   /** 新增地址表單。 */
-  const [form, setForm] = useState(EMPTY_FORM)
+  const [form, setForm] = useState(() => getSessionDraft<typeof EMPTY_FORM>(ADDRESS_DRAFT_KEY) ?? { ...EMPTY_FORM })
   /** 首次載入地址列表時的狀態。 */
   const [loading, setLoading] = useState(true)
   /** 新增、刪除、設預設時的提交狀態。 */
   const [submitting, setSubmitting] = useState(false)
   /** 錯誤訊息。 */
   const [error, setError] = useState('')
+
+  useEffect(() => {
+    setSessionDraft(ADDRESS_DRAFT_KEY, form)
+  }, [form])
 
   /** 載入地址列表。 */
   async function loadAddresses() {
@@ -79,6 +85,7 @@ export default function MeAddressesPage() {
         method: 'POST',
         body: JSON.stringify(form),
       })
+      clearSessionDraft(ADDRESS_DRAFT_KEY)
       setForm(EMPTY_FORM)
       await loadAddresses()
     } catch (err) {

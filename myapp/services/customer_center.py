@@ -146,6 +146,14 @@ def get_default_address(username: str) -> Dict[str, Any] | None:
     return None
 
 
+def get_address_by_id(username: str, address_id: int) -> Dict[str, Any] | None:
+    """依地址 ID 取回指定會員的地址。"""
+    for address in list_addresses(username):
+        if int(address.get("id", 0)) == address_id:
+            return dict(address)
+    return None
+
+
 def get_invoice_profile(username: str) -> Dict[str, Any]:
     """取得 會員中心 流程中指定條件的資料。
 
