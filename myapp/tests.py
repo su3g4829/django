@@ -3041,6 +3041,8 @@ class ProductFeatureTests(SimpleTestCase):
             self.assertEqual(prepared["pickup_store_brand"], "UNIMART")
             self.assertIn("store_map_token=", prepared["return_url"])
             self.assertEqual(prepared["callback_url"], env["NEWEBPAY_LOGISTICS_STORE_MAP_REPLY_URL"])
+            self.assertEqual(prepared["plain_params"]["LgsType"], "B2C")
+            self.assertEqual(prepared["plain_params"]["IsCollection"], "N")
 
             callback_response = self._post_json(
                 "/api/v1/integrations/newebpay/logistics/store-map/callback/",
@@ -3133,3 +3135,5 @@ class ProductFeatureTests(SimpleTestCase):
             payload["prepared"]["plain_params"]["MerchantID"],
             env["NEWEBPAY_LOGISTICS_MERCHANT_ID"],
         )
+        self.assertEqual(payload["prepared"]["plain_params"]["LgsType"], "B2C")
+        self.assertEqual(payload["prepared"]["plain_params"]["IsCollection"], "N")

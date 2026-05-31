@@ -31,6 +31,7 @@ DEFAULT_STATUS_URL = "https://ccore.newebpay.com/API/Logistic/queryShipment"
 DEFAULT_VERSION = "1.0"
 DEFAULT_RESPOND_TYPE = "JSON"
 STORE_MAP_SELECTION_TTL_SECONDS = 2 * 60 * 60
+STORE_MAP_LGS_TYPE = "B2C"
 
 STORE_BRAND_TO_SHIP_TYPE = {
     "UNIMART": "1",
@@ -259,12 +260,15 @@ def prepare_store_map(
         },
     )
     timestamp = _now_timestamp()
+    normalized_payment_method = payment_method.strip().lower()
+    is_collection = "Y" if normalized_payment_method in {"convenience_store_cod", "cod", "pickup_cod"} else "N"
 
     plain_params = {
         "MerchantID": config.merchant_id,
         "MerchantOrderNo": merchant_order_no,
-        "LgsType": "C2C",
+        "LgsType": STORE_MAP_LGS_TYPE,
         "ShipType": ship_type,
+        "IsCollection": is_collection,
         "ServerReplyURL": config.store_map_reply_url,
         "ReturnURL": resolved_return_url,
         "TimeStamp": str(timestamp),
