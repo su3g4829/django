@@ -33,6 +33,14 @@ DEFAULT_RESPOND_TYPE = "JSON"
 STORE_MAP_SELECTION_TTL_SECONDS = 2 * 60 * 60
 STORE_MAP_LGS_TYPE = "B2C"
 
+# Temporary credential override for NewebPay logistics debugging.
+# Remove this block after verifying whether env loading is the cause of 4104.
+HARDCODED_LOGISTICS_DEBUG_CREDENTIALS = {
+    "merchant_id": "MS159267158",
+    "hash_key": "XajEySms8TLasmEmC7KAWP6UXpnr4zZO",
+    "hash_iv": "CqD8t17qvdICnRDP",
+}
+
 STORE_BRAND_TO_SHIP_TYPE = {
     "UNIMART": "1",
     "FAMI": "2",
@@ -66,6 +74,7 @@ class NewebpayLogisticsRuntimeConfig:
     store_map_return_url: str
     version: str
     respond_type: str
+    credentials_source: str = "env"
 
 
 def _now_timestamp() -> int:
@@ -122,9 +131,14 @@ def _build_store_map_gateway_return_url(reply_url: str, selection_token: str) ->
 
 
 def _load_runtime_config() -> NewebpayLogisticsRuntimeConfig:
-    merchant_id = os.getenv("NEWEBPAY_LOGISTICS_MERCHANT_ID", "").strip() or os.getenv("NEWEBPAY_MERCHANT_ID", "").strip()
-    hash_key = os.getenv("NEWEBPAY_LOGISTICS_HASH_KEY", "").strip() or os.getenv("NEWEBPAY_HASH_KEY", "").strip()
-    hash_iv = os.getenv("NEWEBPAY_LOGISTICS_HASH_IV", "").strip() or os.getenv("NEWEBPAY_HASH_IV", "").strip()
+    hardcoded_merchant_id = str(HARDCODED_LOGISTICS_DEBUG_CREDENTIALS.get("merchant_id", "")).strip()
+    hardcoded_hash_key = str(HARDCODED_LOGISTICS_DEBUG_CREDENTIALS.get("hash_key", "")).strip()
+    hardcoded_hash_iv = str(HARDCODED_LOGISTICS_DEBUG_CREDENTIALS.get("hash_iv", "")).strip()
+    credentials_source = "hardcoded_debug_override" if hardcoded_merchant_id and hardcoded_hash_key and hardcoded_hash_iv else "env"
+
+    merchant_id = hardcoded_merchant_id or os.getenv("NEWEBPAY_LOGISTICS_MERCHANT_ID", "").strip() or os.getenv("NEWEBPAY_MERCHANT_ID", "").strip()
+    hash_key = hardcoded_hash_key or os.getenv("NEWEBPAY_LOGISTICS_HASH_KEY", "").strip() or os.getenv("NEWEBPAY_HASH_KEY", "").strip()
+    hash_iv = hardcoded_hash_iv or os.getenv("NEWEBPAY_LOGISTICS_HASH_IV", "").strip() or os.getenv("NEWEBPAY_HASH_IV", "").strip()
     callback_url = os.getenv("NEWEBPAY_LOGISTICS_CALLBACK_URL", "").strip()
     create_url = os.getenv("NEWEBPAY_LOGISTICS_CREATE_URL", DEFAULT_CREATE_URL).strip() or DEFAULT_CREATE_URL
     status_url = os.getenv("NEWEBPAY_LOGISTICS_STATUS_URL", DEFAULT_STATUS_URL).strip() or DEFAULT_STATUS_URL
@@ -161,6 +175,7 @@ def _load_runtime_config() -> NewebpayLogisticsRuntimeConfig:
         store_map_return_url=store_map_return_url,
         version=version,
         respond_type=respond_type,
+        credentials_source=credentials_source,
     )
 
 
@@ -336,6 +351,7 @@ def build_store_map_debug_payload(
         "mode": MODE_NAME,
         "runtime": {
             "merchant_id": config.merchant_id,
+            "credentials_source": config.credentials_source,
             "hash_key_length": len(config.hash_key),
             "hash_iv_length": len(config.hash_iv),
             "hash_key_preview": _mask_secret(config.hash_key),
