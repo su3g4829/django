@@ -3145,6 +3145,81 @@ class ProductFeatureTests(SimpleTestCase):
         self.assertEqual(order["payment_method"], "newebpay_google_pay")
         self.assertEqual(order["payment_status"], "paid")
 
+    def test_newebpay_payment_sandbox_return_updates_buyer_and_seller_order_views(self):
+        self._login(username="buyer")
+        self._add_product_to_cart("acme-mug", qty=1)
+        order_id = self._confirm_checkout().json()["id"]
+
+        env = {
+            "STORE_FRONTEND_ORIGIN": "https://frontend.example",
+            "NEWEBPAY_MERCHANT_ID": "MS123456789",
+            "NEWEBPAY_HASH_KEY": "12345678901234567890123456789012",
+            "NEWEBPAY_HASH_IV": "1234567890123456",
+            "NEWEBPAY_PAYMENT_NOTIFY_URL": "https://backend.example/api/v1/integrations/newebpay/payment/sandbox/callback/",
+            "NEWEBPAY_PAYMENT_RETURN_URL": "https://backend.example/api/v1/integrations/newebpay/payment/sandbox/return/",
+            "NEWEBPAY_PAYMENT_CLIENT_BACK_URL": "https://frontend.example/orders/1",
+        }
+        merchant_order_no = f"ORDER{order_id}_1710000099"
+        result_payload = {
+            "MerchantID": env["NEWEBPAY_MERCHANT_ID"],
+            "MerchantOrderNo": merchant_order_no,
+            "TradeNo": "NPAYWEBATM123",
+            "Amt": "13",
+            "PaymentType": "WEBATM",
+            "PayTime": "2026-06-01 12:00:00",
+        }
+        decrypted_trade_info = urlencode(
+            {
+                "Status": "SUCCESS",
+                "Message": "Test message",
+                "Result": json.dumps(result_payload),
+            }
+        )
+
+        with patch.dict(os.environ, env, clear=False):
+            trade_info = newebpay_payment_real_service._encrypt_trade_info(
+                decrypted_trade_info,
+                hash_key=env["NEWEBPAY_HASH_KEY"],
+                hash_iv=env["NEWEBPAY_HASH_IV"],
+            )
+            trade_sha = newebpay_payment_real_service._build_trade_sha(
+                trade_info,
+                hash_key=env["NEWEBPAY_HASH_KEY"],
+                hash_iv=env["NEWEBPAY_HASH_IV"],
+            )
+            return_response = self.client.get(
+                "/api/v1/integrations/newebpay/payment/sandbox/return/",
+                {
+                    "Status": "SUCCESS",
+                    "MerchantID": env["NEWEBPAY_MERCHANT_ID"],
+                    "TradeInfo": trade_info,
+                    "TradeSha": trade_sha,
+                },
+            )
+
+        self.assertEqual(return_response.status_code, 302)
+        self.assertIn(f"/orders/{order_id}", return_response["Location"])
+        self.assertIn("payment_callback=success", return_response["Location"])
+
+        buyer_payment_response = self.client.get(f"/api/v1/me/orders/{order_id}/newebpay-payment/")
+        self.assertEqual(buyer_payment_response.status_code, 200)
+        self.assertEqual(buyer_payment_response.json()["trade_no"], "NPAYWEBATM123")
+        self.assertEqual(buyer_payment_response.json()["status"], "paid")
+
+        buyer_order_response = self.client.get(f"/api/v1/me/orders/{order_id}/")
+        self.assertEqual(buyer_order_response.status_code, 200)
+        self.assertEqual(buyer_order_response.json()["payment_method"], "newebpay_webatm")
+        self.assertEqual(buyer_order_response.json()["payment_status"], "paid")
+        self.assertEqual(buyer_order_response.json()["payment_trade_no"], "NPAYWEBATM123")
+
+        self._logout()
+        self._login(username="alice")
+        seller_order_response = self.client.get(f"/api/v1/me/sales/{order_id}/")
+        self.assertEqual(seller_order_response.status_code, 200)
+        self.assertEqual(seller_order_response.json()["payment_method"], "newebpay_webatm")
+        self.assertEqual(seller_order_response.json()["payment_status"], "paid")
+        self.assertEqual(seller_order_response.json()["payment_trade_no"], "NPAYWEBATM123")
+
     def test_newebpay_payment_sandbox_callback_updates_order_store_fields(self):
         self._login(username="buyer")
         self._add_product_to_cart("acme-mug", qty=1)

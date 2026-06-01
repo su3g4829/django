@@ -468,6 +468,23 @@ def _payload_from_request(request) -> PayloadAdapter:
     return payload
 
 
+def _flatten_request_mapping(data: Any) -> Dict[str, Any]:
+    """Flatten QueryDict-style request payloads into scalar values."""
+    flattened: Dict[str, Any] = {}
+    if isinstance(data, QueryDict):
+        for key in data.keys():
+            values = data.getlist(key)
+            flattened[key] = values if len(values) > 1 else data.get(key)
+        return flattened
+
+    for key, value in dict(data).items():
+        if isinstance(value, list) and len(value) == 1:
+            flattened[key] = value[0]
+        else:
+            flattened[key] = value
+    return flattened
+
+
 def _product_or_404(slug: str, user: Dict[str, str] | None = None) -> Dict[str, Any] | Response:
     """取得前台可見商品；找不到時回傳 404。"""
     product = product_management.get_visible_product(slug, user)
@@ -1261,11 +1278,11 @@ class NewebpaySandboxPaymentReturnApi(APIView):
 
     def get(self, request):
         """接受瀏覽器 GET 回傳。"""
-        return self._handle(dict(request.query_params))
+        return self._handle(_flatten_request_mapping(request.query_params))
 
     def post(self, request):
         """接受藍新前台支付 POST 回傳。"""
-        return self._handle(dict(request.data))
+        return self._handle(_flatten_request_mapping(request.data))
 
 
 class SellerOrderDetailApi(APIView):
