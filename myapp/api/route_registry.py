@@ -1,11 +1,9 @@
-"""DRF API 路由登錄表。
-
-這個檔案不是 Django 真正的 router，而是「文件用途」的集中清單。
-主要拿來提供 `/docs/api-routes/` 頁面，記錄：
-- canonical API 路由
-- legacy alias 路由
-- 對應的 DRF view 類別
-- 目前的整併狀態與說明
+"""DRF API ????擏??萄??
+?謕???ｇ????Django ?賹縣??router???魂???????????????謘??????頩???? `/docs/api-routes/` ?蹓遴??????
+- canonical API ????
+- legacy alias ????
+- ?????DRF view ?遴竣??
+- ?獢????輯??????方?
 """
 from __future__ import annotations
 
@@ -541,16 +539,7 @@ API_ROUTE_GROUPS = [
                 "view": "myapp.api.views.BuyerNewebpayPaymentApi",
                 "drf": True,
                 "status": "canonical",
-                "notes": "Mock 藍新支付交易建立與查詢入口，供 PoC 測試使用。",
-            },
-            {
-                "name": "Seller NewebPay Logistics",
-                "canonical": "/api/v1/me/sales/<order_id>/newebpay-logistics/",
-                "legacy": "",
-                "view": "myapp.api.views.SellerNewebpayLogisticsApi",
-                "drf": True,
-                "status": "canonical",
-                "notes": "Mock 藍新物流托運單建立與查詢入口，供 PoC 測試使用。",
+                "notes": "Mock NewebPay payment create/read endpoints used for PoC testing.",
             },
             {
                 "name": "NewebPay Payment Callback",
@@ -559,16 +548,7 @@ API_ROUTE_GROUPS = [
                 "view": "myapp.api.views.NewebpayPaymentCallbackApi",
                 "drf": True,
                 "status": "canonical",
-                "notes": "模擬藍新支付 callback/webhook 回傳交易狀態。",
-            },
-            {
-                "name": "NewebPay Logistics Callback",
-                "canonical": "/api/v1/integrations/newebpay/logistics/callback/",
-                "legacy": "",
-                "view": "myapp.api.views.NewebpayLogisticsCallbackApi",
-                "drf": True,
-                "status": "canonical",
-                "notes": "模擬藍新物流 callback/webhook 回傳配送狀態。",
+                "notes": "Mock payment callback/webhook endpoint for transaction status updates.",
             },
         ],
     },
@@ -585,15 +565,6 @@ API_ROUTE_GROUPS = [
                 "notes": "Prepare official NewebPay MPG sandbox form payload from an existing order.",
             },
             {
-                "name": "Seller NewebPay Sandbox Logistics Prepare",
-                "canonical": "/api/v1/me/sales/<order_id>/newebpay-logistics/sandbox/",
-                "legacy": "",
-                "view": "myapp.api.views.SellerNewebpaySandboxLogisticsPrepareApi",
-                "drf": True,
-                "status": "canonical",
-                "notes": "Return logistics sandbox scaffold payload and config summary for one seller order.",
-            },
-            {
                 "name": "NewebPay Sandbox Payment Callback",
                 "canonical": "/api/v1/integrations/newebpay/payment/sandbox/callback/",
                 "legacy": "",
@@ -601,15 +572,6 @@ API_ROUTE_GROUPS = [
                 "drf": True,
                 "status": "canonical",
                 "notes": "Verify TradeSha and decrypt TradeInfo from the official NewebPay sandbox callback.",
-            },
-            {
-                "name": "NewebPay Sandbox Logistics Callback",
-                "canonical": "/api/v1/integrations/newebpay/logistics/sandbox/callback/",
-                "legacy": "",
-                "view": "myapp.api.views.NewebpaySandboxLogisticsCallbackApi",
-                "drf": True,
-                "status": "canonical",
-                "notes": "Receive logistics sandbox callback payload for later field mapping and validation.",
             },
         ],
     },

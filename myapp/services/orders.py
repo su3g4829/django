@@ -491,6 +491,23 @@ def _any_item_shipped(items: List[Dict[str, Any]]) -> bool:
     return any(_enrich_seller_line(item)["seller_status"] in {SELLER_STATUS_SHIPPED, SELLER_STATUS_COMPLETED} for item in items)
 
 
+def _all_items_shipped_or_completed(items: List[Dict[str, Any]]) -> bool:
+    """Return whether every line has reached shipped-or-completed state."""
+    if not items:
+        return False
+    return all(
+        _enrich_seller_line(item)["seller_status"] in {SELLER_STATUS_SHIPPED, SELLER_STATUS_COMPLETED}
+        for item in items
+    )
+
+
+def _all_items_completed(items: List[Dict[str, Any]]) -> bool:
+    """Return whether every line is already completed."""
+    if not items:
+        return False
+    return all(_enrich_seller_line(item)["seller_status"] == SELLER_STATUS_COMPLETED for item in items)
+
+
 def _can_request_cancel(order: Dict[str, Any]) -> bool:
     """處理 訂單 相關流程。
 
@@ -525,6 +542,19 @@ def _can_request_refund(order: Dict[str, Any]) -> bool:
     return _any_item_shipped(order.get("items", []))
 
 
+def _can_confirm_completion(order: Dict[str, Any]) -> bool:
+    """Return whether the buyer can confirm the order as completed."""
+    service_request = _enrich_service_request(order.get("service_request"))
+    if service_request["is_pending"]:
+        return False
+    if order.get("status", ORDER_STATUS_CONFIRMED) != ORDER_STATUS_CONFIRMED:
+        return False
+    items = order.get("items", [])
+    if not _all_items_shipped_or_completed(items):
+        return False
+    return not _all_items_completed(items)
+
+
 def _enrich_order_common(order: Dict[str, Any]) -> Dict[str, Any]:
     """處理 訂單 相關流程。
 
@@ -546,6 +576,7 @@ def _enrich_order_common(order: Dict[str, Any]) -> Dict[str, Any]:
     item["service_request"] = _enrich_service_request(item.get("service_request"))
     item["can_request_cancel"] = _can_request_cancel(item)
     item["can_request_refund"] = _can_request_refund(item)
+    item["can_confirm_completion"] = _can_confirm_completion(item)
     item["buyer_note"] = item.get("buyer_note", "")
     shipping_address = item.get("shipping_address") or {}
     item["shipping_address"] = dict(shipping_address) if isinstance(shipping_address, dict) else {}
@@ -770,6 +801,30 @@ def request_order_service(order_id: int, username: str, *, request_type: str, re
         local_store.save_orders(orders)
         refreshed = local_store.get_order_by_id(order_id) or order
         return _enrich_order_common(refreshed)
+    raise ValueError("Order not found.")
+
+
+def confirm_order_completion(order_id: int, username: str) -> Dict[str, Any]:
+    """Allow the buyer to confirm receipt and complete the order."""
+    orders = list(local_store.get_orders())
+    for order in orders:
+        if order.get("id") != order_id or order.get("username") != username:
+            continue
+        if not _can_confirm_completion(order):
+            raise ValueError("This order is not ready for buyer completion yet.")
+        completed_at = timezone.localtime().isoformat()
+        for line in order.get("items", []):
+            if line.get("seller_status") in {SELLER_STATUS_SHIPPED, SELLER_STATUS_COMPLETED}:
+                if not line.get("shipped_at"):
+                    line["shipped_at"] = completed_at
+                line["seller_status"] = SELLER_STATUS_COMPLETED
+                line["completed_at"] = completed_at
+        local_store.save_orders(orders)
+        refreshed = local_store.get_order_by_id(order_id) or order
+        item = _enrich_order_common(refreshed)
+        item["items"] = [_enrich_seller_line(line) for line in item.get("items", [])]
+        item["shipment_groups"] = _build_buyer_shipment_groups(item["items"])
+        return item
     raise ValueError("Order not found.")
 
 

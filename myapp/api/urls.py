@@ -34,6 +34,7 @@ urlpatterns = [
     path("me/orders/<int:order_id>/", views.BuyerOrderDetailApi.as_view(), name="api-buyer-order-detail"),
     path("me/orders/<int:order_id>/cancel-request/", views.BuyerCancelRequestApi.as_view(), name="api-buyer-order-cancel-request"),
     path("me/orders/<int:order_id>/refund-request/", views.BuyerRefundRequestApi.as_view(), name="api-buyer-order-refund-request"),
+    path("me/orders/<int:order_id>/complete/", views.BuyerOrderCompleteApi.as_view(), name="api-buyer-order-complete"),
     path("me/orders/<int:order_id>/newebpay-payment/", views.BuyerNewebpayPaymentApi.as_view(), name="api-buyer-newebpay-payment"),
     path(
         "me/orders/<int:order_id>/newebpay-payment/sandbox/",
@@ -44,12 +45,6 @@ urlpatterns = [
     path("me/sales/report/", views.SellerSalesReportApi.as_view(), name="api-seller-sales-report"),
     path("me/sales/<int:order_id>/", views.SellerOrderDetailApi.as_view(), name="api-seller-order-detail"),
     path("me/sales/<int:order_id>/update/", views.SellerOrderUpdateApi.as_view(), name="api-seller-order-update"),
-    path("me/sales/<int:order_id>/newebpay-logistics/", views.SellerNewebpayLogisticsApi.as_view(), name="api-seller-newebpay-logistics"),
-    path(
-        "me/sales/<int:order_id>/newebpay-logistics/sandbox/",
-        views.SellerNewebpaySandboxLogisticsPrepareApi.as_view(),
-        name="api-seller-newebpay-logistics-sandbox",
-    ),
 
     # Seller product management
     path("me/products/", views.SellerProductsApi.as_view(), name="api-seller-products"),
@@ -79,7 +74,6 @@ urlpatterns = [
         name="api-checkout-store-selection",
     ),
     path("integrations/newebpay/payment/callback/", views.NewebpayPaymentCallbackApi.as_view(), name="api-newebpay-payment-callback"),
-    path("integrations/newebpay/logistics/callback/", views.NewebpayLogisticsCallbackApi.as_view(), name="api-newebpay-logistics-callback"),
     path(
         "integrations/newebpay/logistics/store-map/callback/",
         views.NewebpayStoreMapCallbackApi.as_view(),
@@ -94,11 +88,6 @@ urlpatterns = [
         "integrations/newebpay/payment/sandbox/return/",
         views.NewebpaySandboxPaymentReturnApi.as_view(),
         name="api-newebpay-payment-sandbox-return",
-    ),
-    path(
-        "integrations/newebpay/logistics/sandbox/callback/",
-        views.NewebpaySandboxLogisticsCallbackApi.as_view(),
-        name="api-newebpay-logistics-sandbox-callback",
     ),
 
     # Staff / admin

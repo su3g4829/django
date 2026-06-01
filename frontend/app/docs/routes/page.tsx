@@ -1,133 +1,115 @@
 'use client'
 
 /**
- * Next.js 頁面與 Django DRF API 對照文件頁。
- *
- * 功能：
- * - 列出主要前端路由各自依賴的 DRF API
- * - 協助分辨 buyer / seller / staff 與整合測試頁的資料流
- * - 額外標示 Next.js proxy route 的用途
- */
+ * Next.js ???Django DRF API 撠?辣?? *
+ * ?嚗? * - ?銝餉??垢頝舐?靘陷??DRF API
+ * - ??儘 buyer / seller / staff ??葫閰阡?????
+ * - 憿?璅內 Next.js proxy route ??? */
 
 const routeGroups = [
   {
-    title: '商品與內容前台',
+    title: '???摰孵???,
     rows: [
-      { page: '/products', drf: 'GET /api/v1/products/', note: '商品列表、搜尋、篩選、排序。' },
-      { page: '/products/[slug]', drf: 'GET /api/v1/products/:slug/', note: '商品詳情主資料。' },
+      { page: '/products', drf: 'GET /api/v1/products/', note: '???”??撠祟?詻?摨? },
+      { page: '/products/[slug]', drf: 'GET /api/v1/products/:slug/', note: '??閰單?銝餉??? },
       {
         page: '/products/[slug]',
         drf: 'GET/POST /api/v1/products/:slug/reviews/',
-        note: '評論列表與新增評論。',
+        note: '閰??”?憓?隢?,
       },
       {
         page: '/products/[slug]',
         drf: 'GET/POST /api/v1/products/:slug/questions/',
-        note: '問答列表與新增問題。',
+        note: '???”?憓?憿?,
       },
       {
         page: '/products/[slug]',
         drf: 'GET /api/v1/products/:slug/price-compare/',
-        note: '競品價格比較資料。',
+        note: '蝡嗅??寞瘥?鞈???,
       },
       {
         page: '/products/[slug]',
         drf: 'POST /api/v1/products/:slug/price-compare/refresh/',
-        note: '模擬重新抓取競品價格。',
+        note: '璅⊥???蝡嗅??寞??,
       },
-      { page: '/products/compare', drf: 'GET /api/v1/products/compare/', note: '商品比較清單。' },
-      { page: '/products/compare', drf: 'POST /api/v1/products/:slug/compare/', note: '加入/移除比較。' },
-      { page: '/brands/[brand_slug]', drf: 'GET /api/v1/products/?brand=...', note: '品牌頁商品列表。' },
+      { page: '/products/compare', drf: 'GET /api/v1/products/compare/', note: '??瘥?皜?? },
+      { page: '/products/compare', drf: 'POST /api/v1/products/:slug/compare/', note: '?/蝘駁瘥??? },
+      { page: '/brands/[brand_slug]', drf: 'GET /api/v1/products/?brand=...', note: '??????銵具? },
       {
         page: '/categories/[category_slug]',
         drf: 'GET /api/v1/products/?category=...',
-        note: '分類頁商品列表。',
+        note: '??????銵具?,
       },
-      { page: '/community', drf: 'GET/POST /api/v1/community/posts/', note: '論壇文章列表與發文。' },
-      { page: '/community/[id]', drf: 'GET /api/v1/community/posts/:id/', note: '單篇論壇文章明細。' },
+      { page: '/community', drf: 'GET/POST /api/v1/community/posts/', note: '隢????”??? },
+      { page: '/community/[id]', drf: 'GET /api/v1/community/posts/:id/', note: '?桃?隢????敦?? },
     ],
   },
   {
-    title: '買家與會員中心',
+    title: '鞎瑕振???∩葉敹?,
     rows: [
-      { page: '/login', drf: 'GET /api/v1/auth/csrf/ + POST /api/v1/auth/login/', note: '登入流程。' },
-      { page: '/register', drf: 'GET /api/v1/auth/csrf/ + POST /api/v1/auth/register/', note: '註冊流程。' },
-      { page: '/me/dashboard', drf: 'GET /api/v1/me/dashboard/', note: '會員中心摘要。' },
-      { page: '/me/profile', drf: 'GET/POST /api/v1/me/profile/', note: '個人資料。' },
-      { page: '/me/addresses', drf: 'GET/POST /api/v1/me/addresses/', note: '地址簿。' },
-      { page: '/me/invoice', drf: 'GET/POST /api/v1/me/invoice/', note: '發票資料。' },
-      { page: '/orders', drf: 'GET /api/v1/me/orders/', note: '買家訂單列表。' },
-      { page: '/orders/[id]', drf: 'GET /api/v1/me/orders/:id/', note: '買家訂單明細。' },
-      { page: '/cart', drf: 'GET /api/v1/cart/', note: '購物車資料。' },
-      { page: '/cart', drf: 'POST /api/v1/cart/items/', note: '加入購物車。' },
-      { page: '/checkout', drf: 'GET /api/v1/checkout/preview/', note: '結帳預覽。' },
-      { page: '/checkout', drf: 'POST /api/v1/checkout/confirm/', note: '建立訂單。' },
+      { page: '/login', drf: 'GET /api/v1/auth/csrf/ + POST /api/v1/auth/login/', note: '?餃瘚??? },
+      { page: '/register', drf: 'GET /api/v1/auth/csrf/ + POST /api/v1/auth/register/', note: '閮餃?瘚??? },
+      { page: '/me/dashboard', drf: 'GET /api/v1/me/dashboard/', note: '?銝剖????? },
+      { page: '/me/profile', drf: 'GET/POST /api/v1/me/profile/', note: '?犖鞈??? },
+      { page: '/me/addresses', drf: 'GET/POST /api/v1/me/addresses/', note: '?啣?蝪踴? },
+      { page: '/me/invoice', drf: 'GET/POST /api/v1/me/invoice/', note: '?潛巨鞈??? },
+      { page: '/orders', drf: 'GET /api/v1/me/orders/', note: '鞎瑕振閮?”?? },
+      { page: '/orders/[id]', drf: 'GET /api/v1/me/orders/:id/', note: '鞎瑕振閮?敦?? },
+      { page: '/cart', drf: 'GET /api/v1/cart/', note: '鞈潛頠??? },
+      { page: '/cart', drf: 'POST /api/v1/cart/items/', note: '?鞈潛頠? },
+      { page: '/checkout', drf: 'GET /api/v1/checkout/preview/', note: '蝯董?汗?? },
+      { page: '/checkout', drf: 'POST /api/v1/checkout/confirm/', note: '撱箇?閮?? },
     ],
   },
   {
-    title: '藍新 Sandbox 測試頁',
+    title: '? Sandbox 皜祈岫??,
     rows: [
       {
         page: '/orders/[id]',
         drf: 'GET /api/v1/me/orders/:id/newebpay-payment/sandbox/',
-        note: '讀取藍新支付 sandbox 設定摘要。',
+        note: '霈???唳隞?sandbox 閮剖?????,
       },
       {
         page: '/orders/[id]',
         drf: 'POST /api/v1/me/orders/:id/newebpay-payment/sandbox/',
-        note: '建立藍新支付 sandbox form payload。',
-      },
-      {
-        page: '/me/sales/[id]',
-        drf: 'GET /api/v1/me/sales/:id/newebpay-logistics/sandbox/',
-        note: '讀取藍新物流 sandbox 設定摘要。',
-      },
-      {
-        page: '/me/sales/[id]',
-        drf: 'POST /api/v1/me/sales/:id/newebpay-logistics/sandbox/',
-        note: '建立藍新物流 sandbox scaffold payload。',
+        note: '撱箇???臭? sandbox form payload??,
       },
       {
         page: 'Callback',
         drf: 'POST /api/v1/integrations/newebpay/payment/sandbox/callback/',
-        note: '藍新支付 sandbox callback 收件端點。',
-      },
-      {
-        page: 'Callback',
-        drf: 'POST /api/v1/integrations/newebpay/logistics/sandbox/callback/',
-        note: '藍新物流 sandbox callback 收件端點。',
+        note: '??臭? sandbox callback ?嗡辣蝡舫???,
       },
     ],
   },
   {
-    title: '賣家與管理後台',
+    title: '鞈?振?恣????,
     rows: [
-      { page: '/me/products', drf: 'GET /api/v1/me/products/', note: '賣家商品列表。' },
-      { page: '/me/products/new', drf: 'POST /api/v1/me/products/', note: '新增商品。' },
-      { page: '/me/products/[slug]', drf: 'GET/PUT /api/v1/me/products/:slug/', note: '編輯商品。' },
-      { page: '/me/sales', drf: 'GET /api/v1/me/sales/', note: '賣家訂單列表。' },
-      { page: '/me/sales/[id]', drf: 'GET /api/v1/me/sales/:id/', note: '賣家訂單明細。' },
-      { page: '/me/sales/report', drf: 'GET /api/v1/me/sales/report/', note: '賣家銷售報表。' },
-      { page: '/staff/dashboard', drf: 'GET /api/v1/staff/dashboard/', note: '管理後台摘要。' },
-      { page: '/staff/orders', drf: 'GET /api/v1/staff/orders/', note: '管理者訂單列表。' },
-      { page: '/staff/orders/[id]', drf: 'GET /api/v1/staff/orders/:id/', note: '管理者訂單明細。' },
+      { page: '/me/products', drf: 'GET /api/v1/me/products/', note: '鞈?振???”?? },
+      { page: '/me/products/new', drf: 'POST /api/v1/me/products/', note: '?啣????? },
+      { page: '/me/products/[slug]', drf: 'GET/PUT /api/v1/me/products/:slug/', note: '蝺刻摩???? },
+      { page: '/me/sales', drf: 'GET /api/v1/me/sales/', note: '鞈?振閮?”?? },
+      { page: '/me/sales/[id]', drf: 'GET /api/v1/me/sales/:id/', note: '鞈?振閮?敦?? },
+      { page: '/me/sales/report', drf: 'GET /api/v1/me/sales/report/', note: '鞈?振?瑕?梯”?? },
+      { page: '/staff/dashboard', drf: 'GET /api/v1/staff/dashboard/', note: '蝞∠?敺???? },
+      { page: '/staff/orders', drf: 'GET /api/v1/staff/orders/', note: '蝞∠????桀?銵具? },
+      { page: '/staff/orders/[id]', drf: 'GET /api/v1/staff/orders/:id/', note: '蝞∠????格?蝝啜? },
       {
         page: '/staff/orders/[id]',
         drf: 'POST /api/v1/staff/orders/:id/service-review/',
-        note: '售後申請審核。',
+        note: '?桀??唾?撖拇??,
       },
-      { page: '/staff/reviews', drf: 'GET /api/v1/staff/reviews/', note: '賣家申請與商品審核列表。' },
-      { page: '/staff/users', drf: 'GET /api/v1/staff/users/', note: '會員列表。' },
+      { page: '/staff/reviews', drf: 'GET /api/v1/staff/reviews/', note: '鞈?振?唾????祟?詨?銵具? },
+      { page: '/staff/users', drf: 'GET /api/v1/staff/users/', note: '??”?? },
     ],
   },
   {
-    title: '基礎設施',
+    title: '?箇?閮剜',
     rows: [
-      { page: 'Layout / Header', drf: 'GET /api/v1/app/bootstrap/', note: '全站登入態、購物車、比較清單摘要。' },
+      { page: 'Layout / Header', drf: 'GET /api/v1/app/bootstrap/', note: '?函??餃?頃?抵???頛??格?閬? },
       {
         page: 'Proxy Route',
         drf: 'frontend/app/api/backend/[...path]/route.ts',
-        note: 'Next.js 代理 Django DRF，轉送 cookie 與 CSRF header。',
+        note: 'Next.js 隞?? Django DRF嚗???cookie ??CSRF header??,
       },
     ],
   },
@@ -137,10 +119,9 @@ export default function RouteDocsPage() {
   return (
     <div className="stack">
       <section className="hero">
-        <h1>Next.js 前端路由與 API 對照</h1>
+        <h1>Next.js ?垢頝舐??API 撠</h1>
         <p className="muted">
-          這份文件整理目前主要前端頁面對應的 Django DRF canonical API，方便檢查資料流與測試責任分界。
-        </p>
+          ?遢?辣?渡??桀?銝餉??垢?撠???Django DRF canonical API嚗靘踵炎?亥????葫閰西痊隞餃???        </p>
       </section>
 
       {routeGroups.map((group) => (
@@ -149,9 +130,9 @@ export default function RouteDocsPage() {
           <table className="table">
             <thead>
               <tr>
-                <th>前端頁面</th>
+                <th>?垢?</th>
                 <th>DRF API</th>
-                <th>用途說明</th>
+                <th>?券牧??/th>
               </tr>
             </thead>
             <tbody>

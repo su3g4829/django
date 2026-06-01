@@ -39,6 +39,10 @@ export default function OrderDetailPage() {
   const [paymentSubmitting, setPaymentSubmitting] = useState(false)
   const [paymentError, setPaymentError] = useState('')
 
+  const [completeSubmitting, setCompleteSubmitting] = useState(false)
+  const [completeMessage, setCompleteMessage] = useState('')
+  const [completeMessageType, setCompleteMessageType] = useState<'success' | 'error'>('success')
+
   useEffect(() => {
     setLoading(true)
     apiFetch<Order>(`/me/orders/${orderId}/`)
@@ -77,6 +81,22 @@ export default function OrderDetailPage() {
     setPaymentForm((current) => ({ ...current, [field]: value }))
   }
 
+  async function handleCompleteOrder() {
+    setCompleteSubmitting(true)
+    setCompleteMessage('')
+    try {
+      const payload = await apiFetch<Order>(`/me/orders/${orderId}/complete/`, { method: 'POST' })
+      setOrder(payload)
+      setCompleteMessageType('success')
+      setCompleteMessage('已完成訂單。')
+    } catch (err) {
+      setCompleteMessageType('error')
+      setCompleteMessage(err instanceof Error ? err.message : '完成訂單失敗。')
+    } finally {
+      setCompleteSubmitting(false)
+    }
+  }
+
   async function handlePreparePayment(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setPaymentSubmitting(true)
@@ -91,7 +111,7 @@ export default function OrderDetailPage() {
       setPaymentRecord(null)
     } catch (err) {
       setPaymentPrepared(null)
-      setPaymentError(err instanceof Error ? err.message : '建立 NewebPay sandbox payload 失敗。')
+      setPaymentError(err instanceof Error ? err.message : '建立藍新付款 sandbox payload 失敗。')
     } finally {
       setPaymentSubmitting(false)
     }
@@ -102,7 +122,7 @@ export default function OrderDetailPage() {
   const paymentMerchantOrderNo = searchParams.get('merchant_order_no')
 
   if (loading) {
-    return <section className="card">讀取訂單中...</section>
+    return <section className="card">載入訂單中...</section>
   }
 
   return (
@@ -112,7 +132,7 @@ export default function OrderDetailPage() {
         {error ? <div className="notice">{error}</div> : null}
         {!order ? null : (
           <>
-            <div className="muted">建立時間：{order.created_at_display ?? order.created_at} / 狀態：{order.status_label ?? order.status}</div>
+            <div className="muted">建立時間：{order.created_at_display ?? order.created_at} / 訂單狀態：{order.status_label ?? order.status}</div>
             <div className="muted">
               配送方式：{order.shipping_method_label ?? order.shipping_method ?? '-'} / 付款方式：
               {order.payment_method_label ?? order.payment_method ?? '-'}
@@ -123,7 +143,7 @@ export default function OrderDetailPage() {
 
       {paymentCallbackStatus ? (
         <section className="card stack">
-          <h2>支付回傳結果</h2>
+          <h2>付款回傳摘要</h2>
           <div className={paymentCallbackStatus === 'success' ? 'notice success' : 'notice'}>
             payment_callback={paymentCallbackStatus}
             {paymentTradeStatus ? ` / trade_status=${paymentTradeStatus}` : ''}
@@ -147,7 +167,7 @@ export default function OrderDetailPage() {
               </div>
             </>
           ) : (
-            <div className="muted">沒有收件地址資料。</div>
+            <div className="muted">沒有宅配地址資料。</div>
           )}
 
           {order?.pickup_store_name ? (
@@ -171,11 +191,11 @@ export default function OrderDetailPage() {
 
         <section className="card stack">
           <h2>金額資訊</h2>
-          <div className="muted">小計：{order?.totals?.subtotal ?? '0.00'}</div>
-          <div className="muted">運費：{order?.totals?.shipping ?? '0.00'}</div>
-          <div className="muted">折扣：{order?.totals?.discount ?? '0.00'}</div>
+          <div className="muted">商品小計：${order?.totals?.subtotal ?? '0.00'}</div>
+          <div className="muted">運費：${order?.totals?.shipping ?? '0.00'}</div>
+          <div className="muted">折扣：-${order?.totals?.discount ?? '0.00'}</div>
           <div>
-            <strong>總計：{order?.totals?.total ?? '0.00'}</strong>
+            <strong>總計：${order?.totals?.total ?? '0.00'}</strong>
           </div>
         </section>
       </div>
@@ -190,7 +210,7 @@ export default function OrderDetailPage() {
               <tr>
                 <th>商品</th>
                 <th>數量</th>
-                <th>金額</th>
+                <th>小計</th>
               </tr>
             </thead>
             <tbody>
@@ -224,18 +244,31 @@ export default function OrderDetailPage() {
         )}
       </section>
 
+      {order?.can_confirm_completion ? (
+        <section className="card stack">
+          <h2>完成訂單</h2>
+          <div className="muted">賣家已標記出貨後，買家可以在這裡完成整筆訂單，用來模擬收貨後的結案流程。</div>
+          {completeMessage ? (
+            <div className={completeMessageType === 'success' ? 'notice success' : 'notice'}>{completeMessage}</div>
+          ) : null}
+          <button className="btn-primary" disabled={completeSubmitting} onClick={handleCompleteOrder} type="button">
+            {completeSubmitting ? '處理中...' : '完成訂單'}
+          </button>
+        </section>
+      ) : null}
+
       <section className="card stack">
         <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
           <h2>NewebPay Sandbox 支付</h2>
           <span className="badge">Buyer Test</span>
         </div>
-        <div className="muted">這裡會建立藍新支付 MPG sandbox form payload，方便測試支付流程。</div>
+        <div className="muted">這裡會建立藍新支付 MPG sandbox form payload，方便測試付款流程。</div>
 
         {paymentError ? <div className="notice">{paymentError}</div> : null}
         {paymentSummaryLoading ? (
-          <div className="muted">讀取支付設定中...</div>
+          <div className="muted">載入付款設定中...</div>
         ) : !paymentSummary ? (
-          <div className="muted">目前沒有可用的支付設定。</div>
+          <div className="muted">目前沒有可用的付款 sandbox 摘要。</div>
         ) : (
           <>
             <div className="stack">
@@ -284,7 +317,7 @@ export default function OrderDetailPage() {
               <label className="stack">
                 <span>Notify URL 覆寫</span>
                 <input
-                  placeholder="可選填，用來覆蓋後端回調網址"
+                  placeholder="可選填，用來覆蓋後端 callback URL"
                   value={paymentForm.notify_url}
                   onChange={(event) => updatePaymentForm('notify_url', event.target.value)}
                 />
@@ -292,7 +325,7 @@ export default function OrderDetailPage() {
               <label className="stack">
                 <span>Return URL 覆寫</span>
                 <input
-                  placeholder="可選填，用來覆蓋付款完成返回網址"
+                  placeholder="可選填，用來覆蓋藍新前台 return URL"
                   value={paymentForm.return_url}
                   onChange={(event) => updatePaymentForm('return_url', event.target.value)}
                 />
@@ -300,7 +333,7 @@ export default function OrderDetailPage() {
               <label className="stack">
                 <span>ClientBack URL 覆寫</span>
                 <input
-                  placeholder="可選填，用來覆蓋使用者返回網址"
+                  placeholder="可選填，用來覆蓋付款完成後返回的前端頁"
                   value={paymentForm.client_back_url}
                   onChange={(event) => updatePaymentForm('client_back_url', event.target.value)}
                 />
@@ -341,19 +374,19 @@ export default function OrderDetailPage() {
 
             {paymentRecord ? (
               <div className="card stack">
-                <strong>最新支付紀錄</strong>
+                <strong>最新付款紀錄</strong>
                 <div>模式：{paymentRecord.mode}</div>
                 <div>狀態：{paymentRecord.status_label}</div>
                 <div>商店訂單編號：{paymentRecord.merchant_order_no || '-'}</div>
-                <div>交易編號：{paymentRecord.trade_no || '-'}</div>
+                <div>交易序號：{paymentRecord.trade_no || '-'}</div>
                 <div>金額：{paymentRecord.amount} {paymentRecord.currency}</div>
-                <div>回調次數：{paymentRecord.callback_count}</div>
+                <div>Callback 次數：{paymentRecord.callback_count}</div>
                 <div className="muted">建立時間：{paymentRecord.created_at}</div>
                 <div className="muted">更新時間：{paymentRecord.updated_at}</div>
                 {paymentRecord.paid_at ? <div className="muted">付款時間：{paymentRecord.paid_at}</div> : null}
                 {paymentRecord.raw_payload ? (
                   <details>
-                    <summary>查看原始回傳</summary>
+                    <summary>原始 callback payload</summary>
                     <pre>{JSON.stringify(paymentRecord.raw_payload, null, 2)}</pre>
                   </details>
                 ) : null}

@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
+from urllib.parse import urlencode
 
 from django.conf import settings
 from django.contrib.auth.hashers import check_password
@@ -18,6 +19,7 @@ from django.test import Client, SimpleTestCase, override_settings
 
 from .repositories import local_store
 from .services import auth_demo
+from .services import newebpay_payment_real as newebpay_payment_real_service
 from .services.privacy import anonymize_public_name
 
 
@@ -1066,6 +1068,47 @@ class ProductFeatureTests(SimpleTestCase):
         self.assertEqual(line["tracking_number"], "TW123456789")
         self.assertEqual(line["shipping_note"], "Packed with bubble wrap.")
         self.assertTrue(line["shipped_at"])
+
+    def test_buyer_can_complete_order_after_seller_ships(self):
+        self._write_products(build_seller_order_products())
+        self._login(username="buyer", next_url="/checkout/preview/")
+        self._add_product_to_cart("alice-mug", qty=1)
+        self._confirm_checkout()
+
+        self._logout()
+        self._login(username="alice", next_url="/me/sales/1/")
+        response = self._post_json(
+            "/api/v1/me/sales/1/update/",
+            {
+                "seller_status": "shipped",
+                "tracking_number": "TW123456789",
+                "shipping_note": "Seller shipped the parcel.",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+
+        self._logout()
+        self._login(username="buyer", next_url="/me/orders/1/")
+        response = self._post_json("/api/v1/me/orders/1/complete/", {})
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["can_confirm_completion"] is False)
+        order = local_store.get_order_by_id(1)
+        line = order["items"][0]
+        self.assertEqual(line["seller_status"], "completed")
+        self.assertTrue(line["completed_at"])
+
+    def test_buyer_cannot_complete_order_before_seller_ships(self):
+        self._write_products(build_seller_order_products())
+        self._login(username="buyer", next_url="/checkout/preview/")
+        self._add_product_to_cart("alice-mug", qty=1)
+        self._confirm_checkout()
+
+        response = self._post_json("/api/v1/me/orders/1/complete/", {})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("not ready", response.json()["detail"])
 
     def test_seller_sales_report_aggregates_orders(self):
         self._write_products(build_seller_order_products())
@@ -2951,44 +2994,6 @@ class ProductFeatureTests(SimpleTestCase):
         self.assertEqual(callback_response.status_code, 200)
         self.assertEqual(callback_response.json()["record"]["status"], "paid")
 
-    def test_newebpay_logistics_mock_api_can_create_and_fetch_record(self):
-        self._write_products(build_seller_order_products())
-        self._login(username="buyer")
-        self._add_product_to_cart("alice-mug", qty=1)
-        order_id = self._confirm_checkout().json()["id"]
-        self._logout()
-
-        self._login(username="alice")
-        create_response = self._post_json(
-            f"/api/v1/me/sales/{order_id}/newebpay-logistics/",
-            {"store_type": "UNIMARTC2C", "temperature": "normal", "shipment_note": "mock shipment"},
-        )
-        self.assertEqual(create_response.status_code, 201)
-        self.assertEqual(create_response.json()["provider"], "NewebPay Logistics")
-        self.assertEqual(create_response.json()["status"], "created")
-
-        get_response = self.client.get(f"/api/v1/me/sales/{order_id}/newebpay-logistics/")
-        self.assertEqual(get_response.status_code, 200)
-        self.assertEqual(get_response.json()["order_id"], order_id)
-
-    def test_newebpay_logistics_mock_callback_updates_status(self):
-        self._write_products(build_seller_order_products())
-        self._login(username="buyer")
-        self._add_product_to_cart("alice-mug", qty=1)
-        order_id = self._confirm_checkout().json()["id"]
-        self._logout()
-
-        self._login(username="alice")
-        create_response = self._post_json(f"/api/v1/me/sales/{order_id}/newebpay-logistics/", {})
-        logistics_no = create_response.json()["logistics_no"]
-
-        callback_response = self._post_json(
-            "/api/v1/integrations/newebpay/logistics/callback/",
-            {"logistics_no": logistics_no, "status": "picked_up", "result_message": "mock picked up"},
-        )
-        self.assertEqual(callback_response.status_code, 200)
-        self.assertEqual(callback_response.json()["record"]["status"], "picked_up")
-
     def test_newebpay_payment_sandbox_prepare_requires_configuration(self):
         self._login(username="buyer")
         self._add_product_to_cart("acme-mug", qty=1)
@@ -3022,20 +3027,63 @@ class ProductFeatureTests(SimpleTestCase):
         self.assertRegex(merchant_order_no, rf"^ORDER{order_id}_[0-9]+$")
         self.assertNotIn("-", merchant_order_no)
 
-    def test_newebpay_logistics_sandbox_prepare_requires_configuration(self):
-        self._write_products(build_seller_order_products())
+    def test_newebpay_payment_sandbox_callback_parses_urlencoded_trade_info(self):
         self._login(username="buyer")
-        self._add_product_to_cart("alice-mug", qty=1)
+        self._add_product_to_cart("acme-mug", qty=1)
         order_id = self._confirm_checkout().json()["id"]
-        self._logout()
 
-        self._login(username="alice")
-        config_response = self.client.get(f"/api/v1/me/sales/{order_id}/newebpay-logistics/sandbox/")
-        self.assertEqual(config_response.status_code, 200)
-        self.assertFalse(config_response.json()["configured"])
+        env = {
+            "NEWEBPAY_MERCHANT_ID": "MS123456789",
+            "NEWEBPAY_HASH_KEY": "12345678901234567890123456789012",
+            "NEWEBPAY_HASH_IV": "1234567890123456",
+            "NEWEBPAY_PAYMENT_NOTIFY_URL": "https://backend.example/api/v1/integrations/newebpay/payment/sandbox/callback/",
+            "NEWEBPAY_PAYMENT_RETURN_URL": "https://backend.example/api/v1/integrations/newebpay/payment/sandbox/return/",
+            "NEWEBPAY_PAYMENT_CLIENT_BACK_URL": "https://frontend.example/orders/1",
+        }
+        merchant_order_no = f"ORDER{order_id}_1710000000"
+        result_payload = {
+            "MerchantID": env["NEWEBPAY_MERCHANT_ID"],
+            "MerchantOrderNo": merchant_order_no,
+            "TradeNo": "NPAYTEST123",
+            "Amt": "13",
+        }
+        decrypted_trade_info = urlencode(
+            {
+                "Status": "SUCCESS",
+                "Message": "Test message",
+                "Result": json.dumps(result_payload),
+            }
+        )
 
-        prepare_response = self._post_json(f"/api/v1/me/sales/{order_id}/newebpay-logistics/sandbox/", {})
-        self.assertEqual(prepare_response.status_code, 503)
+        with patch.dict(os.environ, env, clear=False):
+            trade_info = newebpay_payment_real_service._encrypt_trade_info(
+                decrypted_trade_info,
+                hash_key=env["NEWEBPAY_HASH_KEY"],
+                hash_iv=env["NEWEBPAY_HASH_IV"],
+            )
+            trade_sha = newebpay_payment_real_service._build_trade_sha(
+                trade_info,
+                hash_key=env["NEWEBPAY_HASH_KEY"],
+                hash_iv=env["NEWEBPAY_HASH_IV"],
+            )
+            callback_response = self._post_json(
+                "/api/v1/integrations/newebpay/payment/sandbox/callback/",
+                {
+                    "Status": "SUCCESS",
+                    "MerchantID": env["NEWEBPAY_MERCHANT_ID"],
+                    "TradeInfo": trade_info,
+                    "TradeSha": trade_sha,
+                },
+            )
+
+        self.assertEqual(callback_response.status_code, 200)
+        record = callback_response.json()["record"]
+        self.assertEqual(record["decoded_payload"]["Result"]["MerchantOrderNo"], merchant_order_no)
+
+        logs = local_store.get_newebpay_payment_logs()
+        callback_log = next(item for item in logs if item.get("merchant_order_no") == merchant_order_no)
+        self.assertEqual(callback_log["trade_no"], "NPAYTEST123")
+        self.assertEqual(callback_log["status"], "paid")
 
     def test_checkout_store_map_prepare_and_callback_round_trip(self):
         self._login(username="buyer")

@@ -29,7 +29,6 @@ from ..services import banners as banner_service
 from ..services import cart as cart_service
 from ..services import community as community_service
 from ..services import customer_center
-from ..services import newebpay_logistics as newebpay_logistics_service
 from ..services import newebpay_logistics_real as newebpay_logistics_real_service
 from ..services import newebpay_payment as newebpay_payment_service
 from ..services import newebpay_payment_real as newebpay_payment_real_service
@@ -1073,6 +1072,21 @@ class BuyerRefundRequestApi(APIView):
         return Response(order)
 
 
+class BuyerOrderCompleteApi(APIView):
+    """Allow buyers to confirm receipt and complete an order."""
+
+    permission_classes = [IsDemoAuthenticated]
+
+    def post(self, request, order_id: int):
+        """Mark all shipped seller lines as completed."""
+        user = get_demo_user(request)
+        try:
+            order = order_service.confirm_order_completion(order_id, user["username"])
+        except ValueError as exc:
+            return _error(str(exc))
+        return Response(order)
+
+
 class BuyerNewebpayPaymentApi(APIView):
     """藍新支付 mock 測試 API。
 
@@ -1146,63 +1160,6 @@ class SellerOrdersApi(APIView):
             date_to=str(params.get("date_to", "")),
         )
         return Response({"items": items})
-
-
-class SellerNewebpayLogisticsApi(APIView):
-    """藍新物流 mock 測試 API。
-
-    提供賣家建立托運單與查詢該張訂單最新的物流 mock 紀錄。
-    """
-
-    permission_classes = [IsSellerOrAdminDemoUser]
-
-    def get(self, request, order_id: int):
-        """讀取賣家可見訂單目前最新的藍新物流 mock 紀錄。"""
-        user = get_demo_user(request)
-        try:
-            record = newebpay_logistics_service.get_logistics_record(order_id, user["username"])
-        except ValueError as exc:
-            return _error(str(exc), status.HTTP_404_NOT_FOUND)
-        if not record:
-            return _error("Logistics record not found.", status.HTTP_404_NOT_FOUND)
-        return Response(record)
-
-    def post(self, request, order_id: int):
-        """建立一筆藍新物流 mock 托運單。"""
-        user = get_demo_user(request)
-        payload = _validated(sz.NewebpayLogisticsCreateSerializer, request.data)
-        try:
-            record = newebpay_logistics_service.create_logistics_request(
-                order_id,
-                user["username"],
-                store_type=str(payload.get("store_type", "")),
-                temperature=str(payload.get("temperature", "")),
-                shipment_note=str(payload.get("shipment_note", "")),
-            )
-        except ValueError as exc:
-            return _error(str(exc), status.HTTP_404_NOT_FOUND)
-        return Response(record, status=status.HTTP_201_CREATED)
-
-
-class NewebpayLogisticsCallbackApi(APIView):
-    """藍新物流 mock callback 測試入口。"""
-
-    permission_classes = [AllowAny]
-    authentication_classes: list = []
-
-    def post(self, request):
-        """模擬藍新物流 callback/webhook 更新配送狀態。"""
-        payload = _validated(sz.NewebpayLogisticsCallbackSerializer, request.data)
-        try:
-            record = newebpay_logistics_service.handle_logistics_callback(
-                logistics_no=str(payload["logistics_no"]),
-                status_value=str(payload["status"]),
-                result_message=str(payload.get("result_message", "")),
-                raw_payload=dict(request.data),
-            )
-        except ValueError as exc:
-            return _error(str(exc), status.HTTP_404_NOT_FOUND)
-        return Response({"detail": "NewebPay logistics mock callback processed.", "record": record})
 
 
 class BuyerNewebpaySandboxPaymentPrepareApi(APIView):
@@ -1306,12 +1263,7 @@ class NewebpaySandboxPaymentReturnApi(APIView):
 
         newebpay_payment_real_service.persist_callback_record(record)
         decoded = record.get("decoded_payload") or {}
-        result = decoded.get("Result") if isinstance(decoded, dict) else {}
-        merchant_order_no = ""
-        if isinstance(result, dict):
-            merchant_order_no = str(result.get("MerchantOrderNo", ""))
-        if not merchant_order_no and isinstance(decoded, dict):
-            merchant_order_no = str(decoded.get("MerchantOrderNo", ""))
+        merchant_order_no = newebpay_payment_real_service.extract_callback_result_fields(decoded)["merchant_order_no"]
         order_id = _parse_order_id_from_merchant_order_no(merchant_order_no) if merchant_order_no else None
         return HttpResponseRedirect(
             self._redirect_url(
@@ -1331,52 +1283,6 @@ class NewebpaySandboxPaymentReturnApi(APIView):
     def post(self, request):
         """接受藍新前台支付 POST 回傳。"""
         return self._handle(dict(request.data))
-
-
-class SellerNewebpaySandboxLogisticsPrepareApi(APIView):
-    """建立藍新物流 sandbox scaffold 資料。"""
-
-    permission_classes = [IsSellerOrAdminDemoUser]
-
-    def get(self, request, order_id: int):
-        """回傳藍新物流 scaffold 設定摘要。"""
-        return Response(newebpay_logistics_real_service.get_runtime_summary())
-
-    def post(self, request, order_id: int):
-        """把賣家訂單整理成物流 sandbox scaffold payload。"""
-        user = get_demo_user(request)
-        payload = _validated(sz.NewebpaySandboxLogisticsPrepareSerializer, request.data)
-        try:
-            prepared = newebpay_logistics_real_service.prepare_logistics_request(
-                order_id,
-                user["username"],
-                logistics_type=str(payload.get("logistics_type", "")) or "UNIMARTC2C",
-                shipment_note=str(payload.get("shipment_note", "")),
-            )
-        except newebpay_logistics_real_service.NewebpayLogisticsConfigurationError as exc:
-            return _error(str(exc), status.HTTP_503_SERVICE_UNAVAILABLE)
-        except ValueError as exc:
-            return _error(str(exc), status.HTTP_404_NOT_FOUND)
-        newebpay_logistics_real_service.persist_prepared_attempt(prepared)
-        return Response(prepared)
-
-
-class NewebpaySandboxLogisticsCallbackApi(APIView):
-    """接收藍新物流 sandbox callback 原始資料。"""
-
-    permission_classes = [AllowAny]
-    authentication_classes: list = []
-
-    def post(self, request):
-        """目前先原樣收件，供後續對照物流規格欄位。"""
-        _validated(sz.NewebpaySandboxLogisticsCallbackSerializer, request.data)
-        try:
-            record = newebpay_logistics_real_service.handle_callback(dict(request.data))
-        except newebpay_logistics_real_service.NewebpayLogisticsConfigurationError as exc:
-            return _error(str(exc), status.HTTP_503_SERVICE_UNAVAILABLE)
-        except ValueError as exc:
-            return _error(str(exc), status.HTTP_400_BAD_REQUEST)
-        return Response({"detail": "NewebPay sandbox logistics callback processed.", "record": record})
 
 
 class SellerOrderDetailApi(APIView):

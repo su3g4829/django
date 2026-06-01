@@ -1,34 +1,34 @@
 /**
- * 前端共用型別定義
+ * ?垢?梁?摰儔
  *
- * 目的：
- * - 描述 Django DRF API 回傳 payload 的形狀
- * - 讓頁面與元件在取用資料欄位時有明確型別提示
- * - 降低前後端欄位名稱不一致時的出錯機率
+ * ?桃?嚗?
+ * - ?膩 Django DRF API ? payload ?耦?
+ * - 霈??Ｚ??辣?典??刻???雿???蝣箏??交?蝷?
+ * - ????蝡舀?雿?蝔曹?銝?湔???舀???
  */
 
 /**
- * 示範會員 / 使用者資料。
+ * 蝷箇?? / 雿輻????
  *
- * 來源：
+ * 靘?嚗?
  * - `/api/v1/me/`
  * - `/api/v1/app/bootstrap/`
  * - `/api/v1/staff/users/`
  */
 export type DemoUser = {
-  /** 使用者主鍵。 */
+  /** 雿輻?蜓?萸?*/
   id: number
-  /** 登入帳號。 */
+  /** ?餃撣唾???*/
   username: string
-  /** 顯示名稱，用於頁面問候或作者資訊。 */
+  /** 憿舐內?迂嚗?潮??Ｗ???雿?閮?*/
   display_name: string
-  /** 角色，例如 buyer / seller / admin。 */
+  /** 閫嚗?憒?buyer / seller / admin??*/
   role: string
-  /** 帳號狀態，例如 active / suspended。 */
+  /** 撣唾????靘? active / suspended??*/
   account_status?: string
-  /** 賣家申請狀態，例如 pending / approved / rejected。 */
+  /** 鞈?振?唾????靘? pending / approved / rejected??*/
   seller_request_status?: string
-  /** 電子郵件。 */
+  /** ?餃??萎辣??*/
   email?: string
   shipping_rules?: SellerShippingRules
 }
@@ -42,11 +42,11 @@ export type SellerShippingRules = {
 }
 
 /**
- * 全站初始化資料。
+ * ?函???????
  *
- * 用途：
- * - 提供 header 顯示登入狀態
- * - 顯示購物車、比較清單、收藏數量
+ * ?券?
+ * - ?? header 憿舐內?餃???
+ * - 憿舐內鞈潛頠?頛??柴???
  */
 export type AppBootstrapPayload = {
   user: DemoUser | null
@@ -87,58 +87,58 @@ export type BannerListPayload = {
 }
 
 /**
- * 商品資料。
+ * ??鞈???
  */
 export type Product = {
-  /** 商品主鍵。 */
+  /** ??銝駁??*/
   id: number
-  /** 商品網址 slug。 */
+  /** ??蝬脣? slug??*/
   slug: string
-  /** 商品名稱。 */
+  /** ???迂??*/
   name: string
-  /** 基礎售價。 */
+  /** ?箇??桀??*/
   price: number
-  /** 原價，用來計算折扣顯示。 */
+  /** ?嚗靘?蝞???＊蝷箝?*/
   compare_at_price?: number | null
-  /** 品牌名稱。 */
+  /** ???迂??*/
   brand: string
-  /** 分類名稱。 */
+  /** ???迂??*/
   category: string
-  /** 標籤清單。 */
+  /** 璅惜皜??*/
   tags?: string[]
-  /** 所有圖片路徑。 */
+  /** ????楝敺?*/
   images?: string[]
-  /** 商品主圖。 */
+  /** ??銝餃???*/
   primary_image?: string
-  /** 總庫存。若無固定庫存可能為 null。 */
+  /** 蝮賢澈摮?∪摰澈摮?賜 null??*/
   stock?: number | null
-  /** 庫存狀態字串，例如 in_stock / out_of_stock。 */
+  /** 摨怠????銝莎?靘? in_stock / out_of_stock??*/
   stock_status?: string
-  /** 目前 session 是否已收藏此商品。 */
+  /** ?桀? session ?臬撌脫?迨????*/
   is_favorite?: boolean
-  /** 可用顏色選項。 */
+  /** ?舐憿?賊???*/
   color_options?: string[]
-  /** 可用尺寸選項。 */
+  /** ?舐撠箏站?賊???*/
   size_options?: string[]
-  /** 是否有折扣。 */
+  /** ?臬?????*/
   has_discount?: boolean
-  /** 折扣百分比。 */
+  /** ??曉?瘥?*/
   discount_percent?: number
-  /** 價格區間顯示文字。 */
+  /** ?寞??＊蝷箸?摮?*/
   price_range_label?: string
-  /** 後台審核或商品狀態。 */
+  /** 敺撖拇??????*/
   status?: string
-  /** 狀態的人類可讀標籤。 */
+  /** ???鈭粹??航?璅惜??*/
   status_label?: string
-  /** 管理員下架商品時留下的附註。 */
+  /** 蝞∠??∩??嗅???????閮颯?*/
   review_note?: string
-  /** 前端可直接顯示的庫存文字。 */
+  /** ?垢?舐?仿＊蝷箇?摨怠?????*/
   stock_display?: string
-  /** 規格摘要文字。 */
+  /** 閬??????*/
   specs_text?: string
-  /** 變體摘要文字。 */
+  /** 霈???????*/
   variants_text?: string
-  /** 商品變體清單。 */
+  /** ??霈?皜??*/
   variants?: ProductVariant[]
   shipping_profile?: {
     use_seller_rules: boolean
@@ -148,7 +148,7 @@ export type Product = {
     override_convenience_store_fee?: number | null
   }
   default_variant?: ProductVariant | null
-  /** 擁有者使用者 ID。 */
+  /** ???蝙?刻?ID??*/
   owner_user_id?: number | null
   owner_username?: string
   owner_display_name?: string
@@ -170,18 +170,18 @@ export type ProductVariant = {
 }
 
 /**
- * 商品列表 API 回傳格式。
+ * ???” API ??澆???
  */
 export type ProductListPayload = {
-  /** 商品清單。 */
+  /** ??皜??*/
   items: Product[]
-  /** 分頁資訊。 */
+  /** ??鞈???*/
   meta: {
     page: number
     total_pages: number
     total_items: number
   }
-  /** 篩選 facet 選項。 */
+  /** 蝭拚 facet ?賊???*/
   facets?: {
     categories?: string[]
     brands?: string[]
@@ -189,27 +189,27 @@ export type ProductListPayload = {
     sizes?: string[]
     tags?: string[]
   }
-  /** 後端回顯目前實際套用的篩選條件。 */
+  /** 敺垢?＊?桀?撖阡?憟?祟?豢?隞嗚?*/
   filters?: Record<string, string>
 }
 
 /**
- * 商品比較清單。
+ * ??瘥?皜??
  */
 export type CompareListPayload = {
-  /** 比較中的商品完整資料。 */
+  /** 瘥?銝剔???摰鞈???*/
   items: Product[]
-  /** 僅保留 slug 的輕量清單，方便前端快速判斷是否已加入比較。 */
+  /** ????slug ?????殷??嫣噶?垢敹恍?瑟?血歇?瘥???*/
   slugs: string[]
 }
 
 /**
- * 商品評論。
+ * ??閰???
  */
 /**
- * 單一外站比價結果。
+ * ?桐?憭?瘥蝯???
  *
- * 目前是 mock 資料，用來示範 crawler / price compare 流程。
+ * ?桀???mock 鞈?嚗靘內蝭?crawler / price compare 瘚???
  */
 export type CompetitorPriceItem = {
   site: string
@@ -231,7 +231,7 @@ export type CompetitorPriceItem = {
 }
 
 /**
- * 商品比價結果 payload。
+ * ??瘥蝯? payload??
  */
 export type PriceComparisonPayload = {
   our_product_slug: string
@@ -249,7 +249,7 @@ export type PriceComparisonPayload = {
 }
 
 /**
- * 模擬重新抓價回應。
+ * 璅⊥??????
  */
 export type PriceComparisonRefreshPayload = {
   detail: string
@@ -259,26 +259,26 @@ export type PriceComparisonRefreshPayload = {
 export type Review = {
   id: number
   product_id: number
-  /** 頁面顯示用作者名稱。 */
+  /** ?憿舐內?其???蝔晞?*/
   author: string
-  /** 作者帳號。 */
+  /** 雿董??*/
   author_username?: string | null
-  /** 作者使用者 ID。 */
+  /** 雿蝙?刻?ID??*/
   author_user_id?: number | null
-  /** 星等分數。 */
+  /** ?????*/
   rating: number
-  /** 評論標題。 */
+  /** 閰?璅???*/
   title: string
-  /** 評論內文。 */
+  /** 閰??扳???*/
   body: string
-  /** 原始建立時間。 */
+  /** ??撱箇?????*/
   created_at: string
-  /** 格式化後可直接顯示的建立時間。 */
+  /** ?澆????舐?仿＊蝷箇?撱箇?????*/
   created_at_display?: string
 }
 
 /**
- * 商品問答中的回答。
+ * ????銝剔?????
  */
 export type QuestionAnswer = {
   id: number
@@ -291,7 +291,7 @@ export type QuestionAnswer = {
 }
 
 /**
- * 商品問答中的問題。
+ * ????銝剔?????
  */
 export type Question = {
   id: number
@@ -303,14 +303,14 @@ export type Question = {
   body: string
   created_at: string
   created_at_display?: string
-  /** 回答數量摘要。 */
+  /** ???賊?????*/
   answer_count?: number
-  /** 已展開時的回答清單。 */
+  /** 撌脣?????蝑??柴?*/
   answers?: QuestionAnswer[]
 }
 
 /**
- * 社群文章的回覆。
+ * 蝷曄黎????閬?
  */
 export type CommunityReply = {
   id: number
@@ -323,7 +323,7 @@ export type CommunityReply = {
 }
 
 /**
- * 社群論壇文章。
+ * 蝷曄黎隢?????
  */
 export type CommunityPost = {
   id: number
@@ -334,47 +334,47 @@ export type CommunityPost = {
   title: string
   body: string
   tags?: string[]
-  /** 文章投票分數。 */
+  /** ???巨???*/
   votes: number
   created_at: string
   created_at_display?: string
-  /** 回覆數量摘要。 */
+  /** ???賊?????*/
   reply_count?: number
-  /** 文章詳情頁使用的完整回覆列表。 */
+  /** ??閰單??蝙?函?摰???”??*/
   replies?: CommunityReply[]
   can_edit?: boolean
   can_delete?: boolean
 }
 
 /**
- * 社群文章列表 payload。
+ * 蝷曄黎???” payload??
  */
 export type CommunityPostListPayload = {
   items: CommunityPost[]
 }
 
 /**
- * 購物車單一項目。
+ * 鞈潛頠銝???
  */
 export type CartItem = {
-  /** 前端操作此項目的唯一 key。 */
+  /** ?垢??甇日??桃??臭? key??*/
   key: string
   id: number
   slug: string
   name: string
-  /** 若有變體，顯示用名稱通常比原始 name 更完整。 */
+  /** ?交?霈?嚗＊蝷箇?迂?虜瘥?憪?name ?游??氬?*/
   display_name: string
   price: number
   qty: number
   variant_id?: string
   variant_name?: string
   sku?: string
-  /** 單列小計。 */
+  /** ?桀?撠???*/
   line_total: number
 }
 
 /**
- * 購物車完整 payload。
+ * 鞈潛頠???payload??
  */
 export type CartPayload = {
   items: CartItem[]
@@ -408,12 +408,12 @@ export type CartPayload = {
       line_total: string
     }>
   }>
-  /** 後端可選回傳補充訊息。 */
+  /** 敺垢?舫?鋆?閮??*/
   detail?: string
 }
 
 /**
- * 收件地址。
+ * ?嗡辣?啣???
  */
 export type Address = {
   id: number
@@ -429,10 +429,10 @@ export type Address = {
 }
 
 /**
- * 發票設定。
+ * ?潛巨閮剖???
  */
 export type InvoiceProfile = {
-  /** 發票類型，例如 personal / company。 */
+  /** ?潛巨憿?嚗?憒?personal / company??*/
   invoice_type: string
   carrier_code?: string
   company_name?: string
@@ -441,7 +441,7 @@ export type InvoiceProfile = {
 }
 
 /**
- * checkout 選項列。
+ * checkout ?賊???
  */
 export type CheckoutChoice = {
   value: string
@@ -449,7 +449,7 @@ export type CheckoutChoice = {
 }
 
 /**
- * checkout 預覽 payload。
+ * checkout ?汗 payload??
  */
 export type CheckoutPreviewPayload = CartPayload & {
   user: DemoUser | null
@@ -487,7 +487,7 @@ export type CheckoutPreviewPayload = CartPayload & {
 }
 
 /**
- * 訂單資料。
+ * 閮鞈???
  */
 export type Order = {
   id: number
@@ -498,6 +498,10 @@ export type Order = {
   status_label?: string
   seller_status?: string
   seller_status_label?: string
+  tracking_number?: string
+  shipping_note?: string
+  shipped_at_display?: string
+  completed_at_display?: string
   shipping_address?: Address
   shipping_method?: string
   shipping_method_label?: string
@@ -511,11 +515,11 @@ export type Order = {
   buyer_note?: string
   created_at: string
   created_at_display?: string
-  /** 訂單金額彙總。 */
+  /** 閮??敶蜇??*/
   totals?: Record<string, string>
-  /** 賣家視角的金額摘要 */
+  /** 鞈?振閬???憿?閬?*/
   seller_totals?: Record<string, string>
-  /** 訂單項目。 */
+  /** 閮???*/
   items?: Array<{
     id: number
     slug: string
@@ -528,7 +532,7 @@ export type Order = {
     seller_status_label?: string
     tracking_number?: string
   }>
-  /** 售後申請資訊。 */
+  /** ?桀??唾?鞈???*/
   service_request?: {
     type?: string
     type_label?: string
@@ -539,7 +543,8 @@ export type Order = {
     reviewed_at?: string
     is_pending?: boolean
   }
-  /** 依賣家切分的物流 / 履約資訊。 */
+  can_confirm_completion?: boolean
+  /** 靘都摰嗅????拇? / 撅亦?鞈???*/
   shipment_groups?: Array<{
     seller_username: string
     seller_display_name: string
@@ -577,11 +582,11 @@ export type Order = {
 }
 
 /**
- * 藍新支付 sandbox 設定摘要。
+ * ??臭? sandbox 閮剖?????
  *
- * 用途：
- * - 顯示後端是否已填好 MerchantID / HashKey / HashIV
- * - 顯示目前沙箱 gateway 與 callback URL 設定
+ * ?券?
+ * - 憿舐內敺垢?臬撌脣‵憟?MerchantID / HashKey / HashIV
+ * - 憿舐內?桀?瘝拳 gateway ??callback URL 閮剖?
  */
 export type NewebpaySandboxPaymentSummary = {
   provider: string
@@ -597,11 +602,11 @@ export type NewebpaySandboxPaymentSummary = {
 }
 
 /**
- * 藍新支付 sandbox 準備結果。
+ * ??臭? sandbox 皞?蝯???
  *
- * 用途：
- * - 前端可把 form_fields 組成 HTML form 後 POST 到 gateway_url
- * - 現階段也可直接顯示 payload，方便人工檢查
+ * ?券?
+ * - ?垢?舀? form_fields 蝯? HTML form 敺?POST ??gateway_url
+ * - ?暸?畾萎??舐?仿＊蝷?payload嚗靘蹂犖撌交炎??
  */
 export type NewebpaySandboxPaymentPrepared = {
   provider: string
@@ -638,79 +643,9 @@ export type NewebpayPaymentRecord = {
   raw_payload?: Record<string, unknown>
 }
 
-/**
- * 藍新物流 sandbox scaffold 設定摘要。
- *
- * 用途：
- * - 顯示物流測試所需的 merchant 與 callback 設定
- * - 若 configured 為 false，可直接提示缺少哪些設定
- */
-export type NewebpaySandboxLogisticsSummary = {
-  provider: string
-  mode: string
-  configured: boolean
-  missing_settings?: string[]
-  merchant_id?: string
-  callback_url?: string
-  create_url?: string
-  status_url?: string
-  note?: string
-}
 
 /**
- * 藍新物流 sandbox scaffold 準備結果。
- *
- * 用途：
- * - 顯示訂單被整理後，建議送往物流 API 的 payload
- * - 現階段仍是 scaffold，不直接向藍新送件
- */
-export type NewebpaySandboxLogisticsPrepared = {
-  provider: string
-  mode: string
-  order_id: number
-  seller_username: string
-  logistics_type: string
-  callback_url?: string
-  create_url?: string
-  status_url?: string
-  suggested_payload: Record<string, string | number>
-  buyer_shipping_summary?: {
-    shipping_method: string
-    shipping_method_label?: string
-    payment_method: string
-    payment_method_label?: string
-    pickup_store_brand?: string
-    pickup_store_brand_label?: string
-    pickup_store_code?: string
-    pickup_store_name?: string
-    pickup_store_address?: string
-    is_convenience_store: boolean
-  }
-  note: string
-}
-
-export type NewebpayLogisticsRecord = {
-  provider: string
-  mode: string
-  order_id: number
-  seller_username: string
-  merchant_order_no?: string
-  logistics_no: string
-  status: string
-  status_label: string
-  store_type: string
-  temperature: string
-  receiver_name: string
-  receiver_phone: string
-  shipment_note?: string
-  created_at: string
-  updated_at: string
-  callback_count: number
-  raw_payload?: Record<string, unknown>
-}
-
-/**
- * 賣家銷售報表。
+ * 鞈?振?瑕?梯”??
  */
 export type SalesReport = {
   order_count: number
@@ -734,7 +669,7 @@ export type SalesReport = {
 }
 
 /**
- * 審核中心首頁資料。
+ * 撖拇銝剖?擐?鞈???
  */
 export type StaffReviewDashboard = {
   managed_products: Product[]
@@ -742,7 +677,7 @@ export type StaffReviewDashboard = {
 }
 
 /**
- * 管理儀表板摘要資料。
+ * 蝞∠??銵冽??鞈???
  */
 export type AdminDashboard = {
   users: Record<string, string | number>
@@ -755,7 +690,7 @@ export type AdminDashboard = {
 }
 
 /**
- * 通用選項欄位。
+ * ??賊?甈???
  */
 export type StatusChoice = {
   value: string
@@ -763,7 +698,7 @@ export type StatusChoice = {
 }
 
 /**
- * 會員中心摘要資料。
+ * ?銝剖???鞈???
  */
 export type MeDashboard = {
   user: DemoUser

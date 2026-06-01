@@ -18,7 +18,7 @@ import re
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict
-from urllib.parse import urlencode
+from urllib.parse import parse_qsl, urlencode
 
 from django.utils import timezone
 
@@ -190,6 +190,67 @@ def _build_trade_sha(cipher_hex: str, *, hash_key: str, hash_iv: str) -> str:
     return hashlib.sha256(raw.encode('utf-8')).hexdigest().upper()
 
 
+def _normalize_decoded_payload(payload: Any) -> Dict[str, Any]:
+    if isinstance(payload, dict):
+        result = payload.get('Result')
+        if isinstance(result, str):
+            result_text = result.strip()
+            if result_text:
+                try:
+                    payload = dict(payload)
+                    payload['Result'] = json.loads(result_text)
+                except json.JSONDecodeError:
+                    parsed_result = dict(parse_qsl(result_text, keep_blank_values=True))
+                    if parsed_result:
+                        payload = dict(payload)
+                        payload['Result'] = parsed_result
+        return payload
+    return {'raw': payload}
+
+
+def _decode_trade_info_payload(decrypted: str) -> Dict[str, Any]:
+    plain_text = decrypted.strip()
+    if not plain_text:
+        return {}
+
+    try:
+        return _normalize_decoded_payload(json.loads(plain_text))
+    except json.JSONDecodeError:
+        pass
+
+    parsed_payload = dict(parse_qsl(plain_text, keep_blank_values=True))
+    if parsed_payload:
+        return _normalize_decoded_payload(parsed_payload)
+
+    return {'raw': decrypted}
+
+
+def extract_callback_result_fields(decoded_payload: Any) -> Dict[str, str]:
+    merchant_order_no = ''
+    trade_no = ''
+    amount = ''
+
+    result = decoded_payload.get('Result') if isinstance(decoded_payload, dict) else {}
+    if isinstance(result, dict):
+        merchant_order_no = str(result.get('MerchantOrderNo', '')).strip()
+        trade_no = str(result.get('TradeNo', '')).strip()
+        amount = str(result.get('Amt', '')).strip()
+
+    if isinstance(decoded_payload, dict):
+        if not merchant_order_no:
+            merchant_order_no = str(decoded_payload.get('MerchantOrderNo', '')).strip()
+        if not trade_no:
+            trade_no = str(decoded_payload.get('TradeNo', '')).strip()
+        if not amount:
+            amount = str(decoded_payload.get('Amt', '')).strip()
+
+    return {
+        'merchant_order_no': merchant_order_no,
+        'trade_no': trade_no,
+        'amount': amount,
+    }
+
+
 def _build_merchant_order_no(order_id: int) -> str:
     """Build a NewebPay-compatible MerchantOrderNo.
 
@@ -335,10 +396,7 @@ def handle_callback(
         raise ValueError('MerchantID does not match configured sandbox merchant.')
 
     decrypted = _decrypt_trade_info(trade_info, hash_key=config.hash_key, hash_iv=config.hash_iv)
-    try:
-        decoded_payload = json.loads(decrypted)
-    except json.JSONDecodeError:
-        decoded_payload = {'raw': decrypted}
+    decoded_payload = _decode_trade_info_payload(decrypted)
 
     return {
         'provider': PROVIDER_NAME,
@@ -353,20 +411,10 @@ def handle_callback(
 
 def persist_callback_record(record: Dict[str, Any]) -> Dict[str, Any]:
     decoded = record.get('decoded_payload') or {}
-    result = decoded.get('Result') if isinstance(decoded, dict) else {}
-    merchant_order_no = ''
-    trade_no = ''
-    amount = ''
-    if isinstance(result, dict):
-        merchant_order_no = str(result.get('MerchantOrderNo', '')).strip()
-        trade_no = str(result.get('TradeNo', '')).strip()
-        amount = str(result.get('Amt', '')).strip()
-    if not merchant_order_no and isinstance(decoded, dict):
-        merchant_order_no = str(decoded.get('MerchantOrderNo', '')).strip()
-    if not trade_no and isinstance(decoded, dict):
-        trade_no = str(decoded.get('TradeNo', '')).strip()
-    if not amount and isinstance(decoded, dict):
-        amount = str(decoded.get('Amt', '')).strip()
+    result_fields = extract_callback_result_fields(decoded)
+    merchant_order_no = result_fields['merchant_order_no']
+    trade_no = result_fields['trade_no']
+    amount = result_fields['amount']
 
     order_id = parse_order_id_from_merchant_order_no(merchant_order_no)
     buyer_username = ''

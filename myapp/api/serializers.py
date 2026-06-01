@@ -640,43 +640,6 @@ class NewebpayPaymentCallbackSerializer(serializers.Serializer):
     result_message = serializers.CharField(required=False, allow_blank=True)
 
 
-class NewebpayLogisticsCreateSerializer(serializers.Serializer):
-    """藍新物流 mock 建立托運單請求。"""
-
-    store_type = serializers.CharField(required=False, allow_blank=True)
-    temperature = serializers.CharField(required=False, allow_blank=True)
-    shipment_note = serializers.CharField(required=False, allow_blank=True)
-
-
-class NewebpayLogisticsRecordSerializer(serializers.Serializer):
-    """藍新物流 mock 托運單資料。"""
-
-    provider = serializers.CharField()
-    mode = serializers.CharField()
-    order_id = serializers.IntegerField()
-    seller_username = serializers.CharField()
-    logistics_no = serializers.CharField()
-    status = serializers.CharField()
-    status_label = serializers.CharField(required=False, allow_blank=True)
-    store_type = serializers.CharField()
-    temperature = serializers.CharField()
-    receiver_name = serializers.CharField(required=False, allow_blank=True)
-    receiver_phone = serializers.CharField(required=False, allow_blank=True)
-    shipment_note = serializers.CharField(required=False, allow_blank=True)
-    created_at = serializers.CharField()
-    updated_at = serializers.CharField()
-    callback_count = serializers.IntegerField()
-    raw_payload = serializers.DictField(required=False)
-
-
-class NewebpayLogisticsCallbackSerializer(serializers.Serializer):
-    """藍新物流 mock callback 請求。"""
-
-    logistics_no = serializers.CharField()
-    status = serializers.ChoiceField(choices=["created", "picked_up", "delivered", "failed"])
-    result_message = serializers.CharField(required=False, allow_blank=True)
-
-
 class SellerOrderUpdateSerializer(serializers.Serializer):
     """SellerOrderUpdateSerializer。
     
@@ -1186,13 +1149,6 @@ class NewebpaySandboxPaymentCallbackSerializer(serializers.Serializer):
     TradeSha = serializers.CharField()
 
 
-class NewebpaySandboxLogisticsPrepareSerializer(serializers.Serializer):
-    """藍新物流 sandbox scaffold 參數。"""
-
-    logistics_type = serializers.CharField(required=False, allow_blank=True)
-    shipment_note = serializers.CharField(required=False, allow_blank=True)
-
-
 class CheckoutStoreMapPrepareSerializer(serializers.Serializer):
     """Prepare NewebPay convenience-store map selection."""
 
@@ -1247,29 +1203,3 @@ class NewebpayStoreMapCallbackSerializer(serializers.Serializer):
     StoreType = serializers.CharField(required=False, allow_blank=True)
     ExtraData = serializers.CharField(required=False, allow_blank=True)
     Status = serializers.CharField(required=False, allow_blank=True)
-
-
-class NewebpaySandboxLogisticsPreparedSerializer(serializers.Serializer):
-    """藍新物流 sandbox scaffold 回傳資料。"""
-
-    provider = serializers.CharField()
-    mode = serializers.CharField()
-    order_id = serializers.IntegerField()
-    seller_username = serializers.CharField()
-    logistics_type = serializers.CharField()
-    callback_url = serializers.CharField(required=False, allow_blank=True)
-    create_url = serializers.CharField(required=False, allow_blank=True)
-    status_url = serializers.CharField(required=False, allow_blank=True)
-    suggested_payload = serializers.DictField()
-    buyer_shipping_summary = serializers.DictField(required=False)
-    note = serializers.CharField()
-
-
-class NewebpaySandboxLogisticsCallbackSerializer(serializers.Serializer):
-    """藍新物流 sandbox callback 收件資料。"""
-
-    MerchantID = serializers.CharField(required=False, allow_blank=True)
-    LogisticsID = serializers.CharField(required=False, allow_blank=True)
-    MerchantOrderNo = serializers.CharField(required=False, allow_blank=True)
-    Status = serializers.CharField(required=False, allow_blank=True)
-    Message = serializers.CharField(required=False, allow_blank=True)
