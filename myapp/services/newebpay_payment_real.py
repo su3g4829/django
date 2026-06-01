@@ -31,6 +31,20 @@ DEFAULT_GATEWAY_URL = "https://ccore.newebpay.com/MPG/mpg_gateway"
 DEFAULT_VERSION = "2.2"
 DEFAULT_RESPOND_TYPE = "JSON"
 MERCHANT_ORDER_PREFIX = "ORDER"
+ENABLED_PAYMENT_FLAGS = {
+    "CREDIT": 1,
+    "WEBATM": 1,
+    "VACC": 1,
+    "CVS": 1,
+    "BARCODE": 1,
+}
+STORE_TYPE_TO_BRAND = {
+    "7-ELEVEN": "UNIMART",
+    "UNIMART": "UNIMART",
+    "FAMILY": "FAMI",
+    "FAMI": "FAMI",
+    "全家": "FAMI",
+}
 
 
 class NewebpayConfigurationError(RuntimeError):
@@ -251,6 +265,99 @@ def extract_callback_result_fields(decoded_payload: Any) -> Dict[str, str]:
     }
 
 
+def _result_payload(decoded_payload: Any) -> Dict[str, Any]:
+    if isinstance(decoded_payload, dict):
+        result = decoded_payload.get('Result')
+        if isinstance(result, dict):
+            return result
+        return decoded_payload
+    return {}
+
+
+def _normalized_payment_method(result: Dict[str, Any]) -> str:
+    payment_type = str(result.get('PaymentType', '')).strip().upper()
+    if payment_type.startswith('CREDIT'):
+        return order_service.PAYMENT_METHOD_NEWEBPAY_CREDIT
+    if payment_type.startswith('WEBATM'):
+        return order_service.PAYMENT_METHOD_NEWEBPAY_WEBATM
+    if payment_type.startswith('VACC'):
+        return order_service.PAYMENT_METHOD_NEWEBPAY_ATM
+    if payment_type.startswith('CVSCOM') or any(str(result.get(key, '')).strip() for key in ('StoreCode', 'StoreName', 'StoreAddr')):
+        return order_service.PAYMENT_METHOD_NEWEBPAY_CVSCOM
+    if payment_type.startswith('CVS'):
+        return order_service.PAYMENT_METHOD_NEWEBPAY_CVS
+    if payment_type.startswith('BARCODE'):
+        return order_service.PAYMENT_METHOD_NEWEBPAY_BARCODE
+    return order_service.PAYMENT_METHOD_NEWEBPAY
+
+
+def _normalized_payment_status(top_level_status: str, result: Dict[str, Any]) -> tuple[str, str]:
+    if top_level_status.upper() != 'SUCCESS':
+        return order_service.PAYMENT_STATUS_FAILED, f"付款失敗 / {top_level_status or 'UNKNOWN'}"
+
+    payment_type = str(result.get('PaymentType', '')).strip().upper()
+    pay_time = str(result.get('PayTime', '')).strip()
+    immediate_paid_types = ('CREDIT', 'WEBATM', 'GOOGLEPAY', 'SAMSUNGPAY', 'ANDROIDPAY', 'UNIONPAY')
+
+    if pay_time or payment_type.startswith(immediate_paid_types):
+        return order_service.PAYMENT_STATUS_PAID, order_service.PAYMENT_STATUS_LABELS[order_service.PAYMENT_STATUS_PAID]
+    return order_service.PAYMENT_STATUS_PENDING, order_service.PAYMENT_STATUS_LABELS[order_service.PAYMENT_STATUS_PENDING]
+
+
+def _extract_store_fields(result: Dict[str, Any]) -> Dict[str, str]:
+    store_type = str(result.get('StoreType', '')).strip().upper()
+    pickup_store_brand = STORE_TYPE_TO_BRAND.get(store_type, '')
+    return {
+        'pickup_store_brand': pickup_store_brand,
+        'pickup_store_code': str(result.get('StoreCode', '')).strip(),
+        'pickup_store_name': str(result.get('StoreName', '')).strip(),
+        'pickup_store_address': str(result.get('StoreAddr', '')).strip(),
+    }
+
+
+def _latest_payment_record(order_id: int, username: str) -> Dict[str, Any] | None:
+    records = [
+        item
+        for item in local_store.get_newebpay_payment_logs()
+        if item.get('mode') == MODE_NAME and item.get('order_id') == order_id and item.get('buyer_username') == username
+    ]
+    if not records:
+        return None
+    records.sort(key=lambda item: (item.get('updated_at', ''), item.get('created_at', '')), reverse=True)
+    return dict(records[0])
+
+
+def get_payment_record(order_id: int, username: str) -> Dict[str, Any] | None:
+    order = order_service.get_order_detail_for_user(order_id, username)
+    if not order:
+        raise ValueError('Order not found.')
+    return _latest_payment_record(order_id, username)
+
+
+def get_payment_debug(order_id: int) -> Dict[str, Any]:
+    order = local_store.get_order_by_id(order_id)
+    if not order:
+        raise ValueError('Order not found.')
+    records = [
+        dict(item)
+        for item in local_store.get_newebpay_payment_logs()
+        if item.get('mode') == MODE_NAME and item.get('order_id') == order_id
+    ]
+    records.sort(key=lambda item: (item.get('updated_at', ''), item.get('created_at', '')), reverse=True)
+    return {
+        'runtime': get_runtime_summary(order_id=order_id),
+        'records': records,
+    }
+
+
+def _is_payment_locked(order: Dict[str, Any], latest_record: Dict[str, Any] | None) -> bool:
+    if order.get('status') in {order_service.ORDER_STATUS_CANCELLED, order_service.ORDER_STATUS_REFUNDED}:
+        return True
+    if all(item.get('seller_status') == order_service.SELLER_STATUS_COMPLETED for item in order.get('items', [])):
+        return True
+    return bool(latest_record and latest_record.get('status') == order_service.PAYMENT_STATUS_PAID)
+
+
 def _build_merchant_order_no(order_id: int) -> str:
     """Build a NewebPay-compatible MerchantOrderNo.
 
@@ -282,6 +389,9 @@ def prepare_checkout(
     order = order_service.get_order_detail_for_user(order_id, username)
     if not order:
         raise ValueError('Order not found.')
+    latest_record = _latest_payment_record(order_id, username)
+    if _is_payment_locked(order, latest_record):
+        raise ValueError('This order can no longer create a new payment request.')
 
     item_names = [item.get('name', '') for item in order.get('items', []) if item.get('name')]
     item_desc = item_desc_override.strip() or ', '.join(item_names) or f'Order {order_id}'
@@ -306,6 +416,8 @@ def prepare_checkout(
         'Email': email.strip(),
         'LoginType': 0,
     }
+    trade_info_params.update(ENABLED_PAYMENT_FLAGS)
+    trade_info_params['CVSCOM'] = 1 if order.get('shipping_method') == order_service.SHIPPING_METHOD_CONVENIENCE_STORE else 0
     trade_info_params = {key: value for key, value in trade_info_params.items() if value not in ('', None)}
 
     plain_text = urlencode(trade_info_params)
@@ -364,6 +476,7 @@ def persist_prepared_attempt(prepared: Dict[str, Any]) -> Dict[str, Any]:
             'raw_payload': {
                 'prepared_form_fields': prepared.get('form_fields', {}),
                 'prepared_trade_info_params': trade_params,
+                'events': [],
             },
         }
         records.append(record)
@@ -372,10 +485,11 @@ def persist_prepared_attempt(prepared: Dict[str, Any]) -> Dict[str, Any]:
         record['payment_url'] = prepared.get('gateway_url', '')
         record['return_url'] = trade_params.get('ReturnURL', '')
         record['client_back_url'] = trade_params.get('ClientBackURL', '')
-        record['raw_payload'] = {
-            'prepared_form_fields': prepared.get('form_fields', {}),
-            'prepared_trade_info_params': trade_params,
-        }
+        existing_raw_payload = dict(record.get('raw_payload') or {})
+        existing_raw_payload['prepared_form_fields'] = prepared.get('form_fields', {})
+        existing_raw_payload['prepared_trade_info_params'] = trade_params
+        existing_raw_payload.setdefault('events', [])
+        record['raw_payload'] = existing_raw_payload
 
     local_store.save_newebpay_payment_logs(records)
     return dict(record)
@@ -387,6 +501,7 @@ def handle_callback(
     merchant_id: str,
     trade_info: str,
     trade_sha: str,
+    source: str = 'callback',
 ) -> Dict[str, Any]:
     config = _load_runtime_config()
     expected_sha = _build_trade_sha(trade_info, hash_key=config.hash_key, hash_iv=config.hash_iv)
@@ -401,16 +516,19 @@ def handle_callback(
     return {
         'provider': PROVIDER_NAME,
         'mode': MODE_NAME,
+        'source': source,
         'status': status,
         'merchant_id': merchant_id,
         'trade_sha_verified': True,
         'decoded_payload': decoded_payload,
         'trade_info_base64': base64.b64encode(trade_info.encode('utf-8')).decode('ascii'),
+        'received_at': _now_iso(),
     }
 
 
 def persist_callback_record(record: Dict[str, Any]) -> Dict[str, Any]:
     decoded = record.get('decoded_payload') or {}
+    result = _result_payload(decoded)
     result_fields = extract_callback_result_fields(decoded)
     merchant_order_no = result_fields['merchant_order_no']
     trade_no = result_fields['trade_no']
@@ -424,9 +542,13 @@ def persist_callback_record(record: Dict[str, Any]) -> Dict[str, Any]:
             buyer_username = str(order.get('username', '')).strip()
 
     status_value = str(record.get('status', '')).strip()
-    normalized_status = 'paid' if status_value.upper() == 'SUCCESS' else 'failed'
+    normalized_status, status_label = _normalized_payment_status(status_value, result)
+    payment_method = _normalized_payment_method(result)
+    store_fields = _extract_store_fields(result)
+    status_label = _normalized_payment_status(status_value, result)[1]
     status_label = '付款成功' if normalized_status == 'paid' else f'付款失敗 / {status_value or "UNKNOWN"}'
 
+    status_label = _normalized_payment_status(status_value, result)[1]
     logs = list(local_store.get_newebpay_payment_logs())
     existing = next((item for item in logs if merchant_order_no and item.get('merchant_order_no') == merchant_order_no), None)
     now = _now_iso()
@@ -447,10 +569,12 @@ def persist_callback_record(record: Dict[str, Any]) -> Dict[str, Any]:
             'client_back_url': '',
             'created_at': now,
             'updated_at': now,
-            'paid_at': now if normalized_status == 'paid' else '',
+            'paid_at': now if normalized_status == order_service.PAYMENT_STATUS_PAID else '',
             'note': 'sandbox callback',
             'callback_count': 1,
-            'raw_payload': record,
+            'raw_payload': {
+                'events': [dict(record)],
+            },
         }
         logs.append(existing)
     else:
@@ -461,9 +585,25 @@ def persist_callback_record(record: Dict[str, Any]) -> Dict[str, Any]:
             existing['amount'] = _format_money(amount)
         existing['updated_at'] = now
         existing['callback_count'] = int(existing.get('callback_count', 0)) + 1
-        if normalized_status == 'paid':
+        if normalized_status == order_service.PAYMENT_STATUS_PAID:
             existing['paid_at'] = now
-        existing['raw_payload'] = record
+        raw_payload = dict(existing.get('raw_payload') or {})
+        events = list(raw_payload.get('events') or [])
+        events.append(dict(record))
+        raw_payload['events'] = events
+        existing['raw_payload'] = raw_payload
 
     local_store.save_newebpay_payment_logs(logs)
+    if order_id is not None:
+        order_service.apply_newebpay_result(
+            order_id,
+            payment_method=payment_method,
+            payment_status=normalized_status,
+            trade_no=trade_no,
+            paid_at=existing.get('paid_at', ''),
+            pickup_store_brand=store_fields['pickup_store_brand'],
+            pickup_store_code=store_fields['pickup_store_code'],
+            pickup_store_name=store_fields['pickup_store_name'],
+            pickup_store_address=store_fields['pickup_store_address'],
+        )
     return dict(existing)

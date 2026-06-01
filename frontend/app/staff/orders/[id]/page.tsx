@@ -1,60 +1,42 @@
 'use client'
 
-/**
- * 管理者訂單詳情頁
- *
- * 功能：
- * - 顯示單筆訂單內容
- * - 處理售後審核
- *
- * 主要 API：
- * - GET `/api/v1/staff/orders/:id/`
- * - POST `/api/v1/staff/orders/:id/service-review/`
- */
-
 import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'next/navigation'
 
 import { apiFetch } from '@/lib/api'
-import type { Order } from '@/lib/types'
+import type { NewebpayPaymentDebug, Order } from '@/lib/types'
 
 export default function AdminOrderDetailPage() {
   const params = useParams<{ id: string }>()
-  /** 從動態路由解析出的訂單編號。 */
   const orderId = useMemo(() => params.id, [params.id])
-  /** 訂單詳情資料。 */
+
   const [order, setOrder] = useState<Order | null>(null)
-  /** 初次載入詳情時的狀態。 */
+  const [paymentDebug, setPaymentDebug] = useState<NewebpayPaymentDebug | null>(null)
   const [loading, setLoading] = useState(true)
-  /** 售後審核送出時的狀態。 */
   const [submitting, setSubmitting] = useState(false)
-  /** API 錯誤訊息。 */
   const [error, setError] = useState('')
 
-  /** 載入單筆訂單詳情。 */
   async function loadDetail() {
     setLoading(true)
     try {
-      const payload = await apiFetch<Order>(`/staff/orders/${orderId}/`)
-      setOrder(payload)
+      const [orderPayload, debugPayload] = await Promise.all([
+        apiFetch<Order>(`/staff/orders/${orderId}/`),
+        apiFetch<NewebpayPaymentDebug>(`/staff/orders/${orderId}/payment-debug/`),
+      ])
+      setOrder(orderPayload)
+      setPaymentDebug(debugPayload)
       setError('')
     } catch (err) {
-      setError(err instanceof Error ? err.message : '載入訂單詳情失敗，請稍後再試。')
+      setError(err instanceof Error ? err.message : '載入訂單資料失敗。')
     } finally {
       setLoading(false)
     }
   }
 
   useEffect(() => {
-    loadDetail()
+    void loadDetail()
   }, [orderId])
 
-  /**
-   * 審核售後申請。
-   *
-   * approved:
-   * - `true` 代表核准，`false` 代表駁回。
-   */
   async function reviewServiceRequest(approved: boolean) {
     try {
       setSubmitting(true)
@@ -62,43 +44,43 @@ export default function AdminOrderDetailPage() {
         method: 'POST',
         body: JSON.stringify({
           approved,
-          note: approved ? 'Approved in Next.js admin page.' : 'Rejected in Next.js admin page.',
+          note: approved ? 'Approved in admin page.' : 'Rejected in admin page.',
         }),
       })
       setOrder(payload)
       setError('')
     } catch (err) {
-      setError(err instanceof Error ? err.message : '審核售後申請失敗，請稍後再試。')
+      setError(err instanceof Error ? err.message : '審核售後申請失敗。')
     } finally {
       setSubmitting(false)
     }
   }
 
   if (loading) {
-    return <section className="card">載入管理端訂單詳情中…</section>
+    return <section className="card">載入後台訂單中...</section>
   }
 
   return (
     <div className="stack">
-      {/* 訂單基本資訊：顯示訂單編號、建立時間與整體狀態。 */}
       <section className="card stack">
-        <h1>管理端訂單 #{order?.id ?? orderId}</h1>
+        <h1>後台訂單 #{order?.id ?? orderId}</h1>
         {error ? <div className="notice">{error}</div> : null}
         {!order ? null : (
-          <div className="muted">
-            {order.created_at_display} ｜ {order.status_label ?? order.status}
-          </div>
+          <>
+            <div className="muted">建立時間：{order.created_at_display ?? order.created_at}</div>
+            <div className="muted">訂單狀態：{order.status_label ?? order.status}</div>
+            <div className="muted">付款狀態：{order.payment_status_label ?? order.payment_status ?? '-'}</div>
+            <div className="muted">配送方式：{order.shipping_method_label ?? order.shipping_method ?? '-'}</div>
+          </>
         )}
       </section>
 
-      {/* 商品明細：列出此訂單所有購買項目。 */}
       <section className="card stack">
         <h2>商品明細</h2>
         {!order?.items?.length ? (
-          <div className="muted">這筆訂單沒有任何商品。</div>
+          <div className="muted">這張訂單沒有商品。</div>
         ) : (
           <table className="table">
-            {/* 表頭：商品名稱、數量與金額。 */}
             <thead>
               <tr>
                 <th>商品</th>
@@ -119,25 +101,61 @@ export default function AdminOrderDetailPage() {
         )}
       </section>
 
-      {/* 售後申請審核區：管理者可查看並處理退款/取消等申請。 */}
+      <section className="card stack">
+        <h2>NewebPay Payment Debug</h2>
+        {!paymentDebug ? (
+          <div className="muted">目前沒有可顯示的付款 debug 資料。</div>
+        ) : (
+          <>
+            <div className="muted">Gateway：{paymentDebug.runtime.gateway_url}</div>
+            <div className="muted">Merchant ID：{paymentDebug.runtime.merchant_id || '-'}</div>
+            <div className="muted">Notify URL：{paymentDebug.runtime.notify_url || '-'}</div>
+            <div className="muted">Return URL：{paymentDebug.runtime.return_url || '-'}</div>
+            <div className="muted">ClientBack URL：{paymentDebug.runtime.client_back_url || '-'}</div>
+
+            {!paymentDebug.records.length ? (
+              <div className="muted">這筆訂單尚未建立任何藍新付款資料。</div>
+            ) : (
+              paymentDebug.records.map((record) => (
+                <div className="card stack" key={`${record.merchant_order_no}-${record.updated_at}`}>
+                  <div>
+                    <strong>{record.merchant_order_no}</strong>
+                  </div>
+                  <div className="muted">
+                    狀態：{record.status_label} / 交易序號：{record.trade_no || '-'}
+                  </div>
+                  <div className="muted">
+                    金額：{record.amount} {record.currency} / callback 次數：{record.callback_count}
+                  </div>
+                  <div className="muted">建立時間：{record.created_at}</div>
+                  <div className="muted">最後更新：{record.updated_at}</div>
+                  <details>
+                    <summary>送出與接收原始資料</summary>
+                    <pre>{JSON.stringify(record.raw_payload ?? {}, null, 2)}</pre>
+                  </details>
+                </div>
+              ))
+            )}
+          </>
+        )}
+      </section>
+
       <section className="card stack">
         <h2>售後申請</h2>
         {!order?.service_request ? (
           <div className="muted">目前沒有售後申請。</div>
         ) : (
           <>
-            {/* 申請摘要：類型、狀態與備註。 */}
             <div className="muted">類型：{order.service_request.type_label ?? order.service_request.type ?? '-'}</div>
             <div className="muted">狀態：{order.service_request.status_label ?? order.service_request.status ?? '-'}</div>
-            <div className="muted">備註：{order.service_request.note || '無'}</div>
+            <div className="muted">備註：{order.service_request.note || '-'}</div>
             {order.service_request.is_pending ? (
-              /* 待審時才顯示核准 / 駁回按鈕。 */
               <div className="row">
                 <button className="btn" disabled={submitting} onClick={() => reviewServiceRequest(true)} type="button">
-                  核准
+                  通過
                 </button>
                 <button className="btn btn-secondary" disabled={submitting} onClick={() => reviewServiceRequest(false)} type="button">
-                  駁回
+                  拒絕
                 </button>
               </div>
             ) : null}

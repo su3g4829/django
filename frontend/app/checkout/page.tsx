@@ -10,65 +10,18 @@ import type { CheckoutPreviewPayload, Order } from '@/lib/types'
 type CheckoutFormState = {
   address_id: number
   shipping_method: string
-  pickup_store_brand: string
-  pickup_store_code: string
-  pickup_store_name: string
-  pickup_store_address: string
   payment_method: string
   buyer_note: string
-}
-
-type StoreMapPreparedPayload = {
-  action_url: string
-  form_method: string
-  form_fields: Record<string, string>
-}
-
-type StoreSelectionPayload = {
-  selection_token: string
-  status: string
-  is_ready: boolean
-  pickup_store_brand?: string
-  pickup_store_brand_label?: string
-  pickup_store_code?: string
-  pickup_store_name?: string
-  pickup_store_address?: string
 }
 
 const INITIAL_FORM: CheckoutFormState = {
   address_id: 0,
   shipping_method: 'home_delivery',
-  pickup_store_brand: '',
-  pickup_store_code: '',
-  pickup_store_name: '',
-  pickup_store_address: '',
-  payment_method: 'newebpay_credit',
+  payment_method: 'newebpay',
   buyer_note: '',
 }
 
 const CHECKOUT_DRAFT_KEY = 'checkout-form'
-
-function sleep(ms: number) {
-  return new Promise((resolve) => window.setTimeout(resolve, ms))
-}
-
-function submitExternalForm(actionUrl: string, method: string, fields: Record<string, string>) {
-  const form = document.createElement('form')
-  form.action = actionUrl
-  form.method = method
-  form.style.display = 'none'
-
-  Object.entries(fields).forEach(([key, value]) => {
-    const input = document.createElement('input')
-    input.type = 'hidden'
-    input.name = key
-    input.value = value
-    form.appendChild(input)
-  })
-
-  document.body.appendChild(form)
-  form.submit()
-}
 
 export default function CheckoutPage() {
   const router = useRouter()
@@ -78,9 +31,6 @@ export default function CheckoutPage() {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
   const [previewReady, setPreviewReady] = useState(false)
-  const [storeMapBusy, setStoreMapBusy] = useState(false)
-  const [storeMapMessage, setStoreMapMessage] = useState('')
-  const [processedStoreMapToken, setProcessedStoreMapToken] = useState('')
 
   useEffect(() => {
     setSessionDraft(CHECKOUT_DRAFT_KEY, form)
@@ -98,23 +48,20 @@ export default function CheckoutPage() {
       const baseForm: CheckoutFormState = {
         address_id: payload.selected_address_id ?? payload.addresses[0]?.id ?? 0,
         shipping_method: payload.selected_shipping_method ?? preferredShippingMethod ?? 'home_delivery',
-        pickup_store_brand: '',
-        pickup_store_code: '',
-        pickup_store_name: '',
-        pickup_store_address: '',
-        payment_method: payload.selected_payment_method ?? 'newebpay_credit',
+        payment_method: payload.selected_payment_method ?? 'newebpay',
         buyer_note: '',
       }
       const draft = getSessionDraft<Partial<CheckoutFormState>>(CHECKOUT_DRAFT_KEY)
       const nextForm = draft ? { ...baseForm, ...draft } : baseForm
       nextForm.shipping_method = payload.selected_shipping_method ?? nextForm.shipping_method
+      nextForm.payment_method = payload.selected_payment_method ?? 'newebpay'
       if (!payload.addresses.some((address) => address.id === nextForm.address_id)) {
         nextForm.address_id = baseForm.address_id
       }
       setForm(nextForm)
       setError(payload.detail ?? '')
     } catch (err) {
-      setError(err instanceof Error ? err.message : '載入結帳預覽失敗。')
+      setError(err instanceof Error ? err.message : '載入結帳資料失敗。')
     } finally {
       setPreviewReady(true)
       setLoading(false)
@@ -139,129 +86,6 @@ export default function CheckoutPage() {
     setForm((current) => ({ ...current, [field]: value }))
   }
 
-  function updatePickupStoreBrand(value: string) {
-    setForm((current) => {
-      if (current.pickup_store_brand === value) {
-        return { ...current, pickup_store_brand: value }
-      }
-      return {
-        ...current,
-        pickup_store_brand: value,
-        pickup_store_code: '',
-        pickup_store_name: '',
-        pickup_store_address: '',
-      }
-    })
-    setStoreMapMessage('')
-  }
-
-  function applyStoreSelection(selection: StoreSelectionPayload) {
-    setForm((current) => ({
-      ...current,
-      pickup_store_brand: selection.pickup_store_brand || current.pickup_store_brand,
-      pickup_store_code: selection.pickup_store_code || '',
-      pickup_store_name: selection.pickup_store_name || '',
-      pickup_store_address: selection.pickup_store_address || '',
-    }))
-    setStoreMapMessage(
-      selection.pickup_store_name
-        ? `已回填 ${selection.pickup_store_brand_label || selection.pickup_store_brand || '超商'}門市：${selection.pickup_store_name}`
-        : '',
-    )
-  }
-
-  async function hydrateStoreSelectionFromToken(selectionToken: string) {
-    setStoreMapBusy(true)
-    let readySelection: StoreSelectionPayload | null = null
-
-    for (let attempt = 0; attempt < 8; attempt += 1) {
-      try {
-        const selection = await apiFetch<StoreSelectionPayload>(
-          `/checkout/logistics/store-selection/${toQueryString({ token: selectionToken })}`,
-        )
-        if (selection.is_ready) {
-          readySelection = selection
-          break
-        }
-      } catch {
-        // The callback may not have reached our backend yet; retry briefly.
-      }
-      await sleep(700)
-    }
-
-    if (readySelection) {
-      applyStoreSelection(readySelection)
-      router.replace('/checkout')
-    } else {
-      setStoreMapMessage('藍新門市資料尚未回填完成，請稍後重新整理，或再次點選門市地圖。')
-      router.replace('/checkout')
-    }
-
-    setStoreMapBusy(false)
-  }
-
-  useEffect(() => {
-    if (!previewReady || typeof window === 'undefined') {
-      return
-    }
-    const token = new URLSearchParams(window.location.search).get('store_map_token') ?? ''
-    if (!token || token === processedStoreMapToken) {
-      return
-    }
-    setProcessedStoreMapToken(token)
-    void hydrateStoreSelectionFromToken(token)
-  }, [previewReady, processedStoreMapToken])
-
-  const selectedAddress = useMemo(
-    () => preview?.addresses.find((address) => address.id === form.address_id) ?? null,
-    [form.address_id, preview?.addresses],
-  )
-
-  const selectedShippingMethod = useMemo(
-    () => preview?.shipping_methods.find((item) => item.value === form.shipping_method) ?? null,
-    [form.shipping_method, preview?.shipping_methods],
-  )
-
-  const selectedPaymentMethod = useMemo(
-    () => preview?.payment_methods.find((item) => item.value === form.payment_method) ?? null,
-    [form.payment_method, preview?.payment_methods],
-  )
-
-  const selectedStoreBrand = useMemo(
-    () => preview?.convenience_store_brands.find((item) => item.value === form.pickup_store_brand) ?? null,
-    [form.pickup_store_brand, preview?.convenience_store_brands],
-  )
-
-  const requiresConvenienceStoreFields = form.shipping_method === 'convenience_store'
-  const convenienceStoreFieldsComplete =
-    !requiresConvenienceStoreFields ||
-    Boolean(form.pickup_store_brand && form.pickup_store_code && form.pickup_store_name)
-
-  async function openStoreMap() {
-    if (!form.pickup_store_brand) {
-      setError('請先選擇超商品牌。')
-      return
-    }
-    try {
-      setStoreMapBusy(true)
-      setError('')
-      setStoreMapMessage('即將開啟藍新超商門市地圖...')
-      const payload = await apiFetch<StoreMapPreparedPayload>('/checkout/logistics/store-map/prepare/', {
-        method: 'POST',
-        body: JSON.stringify({
-          pickup_store_brand: form.pickup_store_brand,
-          payment_method: form.payment_method,
-          return_url: `${window.location.origin}/checkout`,
-        }),
-      })
-      submitExternalForm(payload.action_url, payload.form_method || 'POST', payload.form_fields)
-    } catch (err) {
-      setStoreMapBusy(false)
-      setStoreMapMessage('')
-      setError(err instanceof Error ? err.message : '開啟藍新門市地圖失敗。')
-    }
-  }
-
   async function confirmCheckout() {
     try {
       setSubmitting(true)
@@ -280,33 +104,45 @@ export default function CheckoutPage() {
     }
   }
 
+  const selectedAddress = useMemo(
+    () => preview?.addresses.find((address) => address.id === form.address_id) ?? null,
+    [form.address_id, preview?.addresses],
+  )
+
+  const selectedShippingMethod = useMemo(
+    () => preview?.shipping_methods.find((item) => item.value === form.shipping_method) ?? null,
+    [form.shipping_method, preview?.shipping_methods],
+  )
+
+  const selectedPaymentMethod = useMemo(
+    () => preview?.payment_methods.find((item) => item.value === form.payment_method) ?? null,
+    [form.payment_method, preview?.payment_methods],
+  )
+
+  const canSubmit =
+    !preview?.requires_login &&
+    Boolean(preview?.item_count) &&
+    Boolean(form.address_id) &&
+    !error &&
+    !submitting
+
   if (loading) {
-    return <section className="card">載入結帳預覽中...</section>
+    return <section className="card">載入結帳資料中...</section>
   }
 
   if (!preview) {
-    return <section className="card">目前無法讀取結帳資料。</section>
+    return <section className="card">目前無法取得結帳資料。</section>
   }
-
-  const canSubmit =
-    !preview.requires_login &&
-    preview.item_count > 0 &&
-    Boolean(form.address_id) &&
-    convenienceStoreFieldsComplete &&
-    !error &&
-    !submitting &&
-    !storeMapBusy
 
   return (
     <div className="stack">
       <section className="card stack">
         <h1>結帳</h1>
         <div className="muted">
-          請確認收件地址、配送方式與付款方式後送出訂單。若選擇超商取貨，請先透過藍新門市地圖完成選店。
+          結帳頁只保留配送方式選擇。付款與超商門市選擇會在藍新支付頁面完成，避免站內資料與藍新實際回傳不一致。
         </div>
-        {preview.requires_login ? <div className="notice">請先登入會員後再進行結帳。</div> : null}
+        {preview.requires_login ? <div className="notice">請先登入後再進行結帳。</div> : null}
         {error ? <div className="notice">{error}</div> : null}
-        {storeMapMessage ? <div className="notice">{storeMapMessage}</div> : null}
       </section>
 
       <div className="grid grid-2">
@@ -356,24 +192,26 @@ export default function CheckoutPage() {
                     <strong>{group.seller_display_name}</strong>
                   </div>
                   <div className="muted">商品小計 ${group.subtotal}</div>
-                  <div className="muted">{group.selected_shipping_method_label}運費 ${group.shipping_fee}</div>
+                  <div className="muted">
+                    {group.selected_shipping_method_label}運費 ${group.shipping_fee}
+                  </div>
                   <div className="muted">
                     {group.free_shipping_applied
                       ? `已達免運門檻 $${group.free_shipping_threshold}`
                       : `免運門檻 $${group.free_shipping_threshold}`}
                   </div>
                   {!group.selected_shipping_method_supported ? (
-                    <div className="notice">目前選擇的配送方式不適用於這位賣家的所有商品，請改用其他配送方式。</div>
+                    <div className="notice">目前選擇的配送方式不適用於這個賣家，請先調整配送方式。</div>
                   ) : null}
                 </div>
               ))}
             </div>
           ) : null}
           <div className="muted">
-            配送方式：{selectedShippingMethod?.label ?? '未選擇'} / 付款方式：{selectedPaymentMethod?.label ?? '未選擇'}
+            配送方式：{selectedShippingMethod?.label ?? '-'} / 付款方式：{selectedPaymentMethod?.label ?? '藍新支付'}
           </div>
           <button className="btn-primary" disabled={!canSubmit} onClick={confirmCheckout} type="button">
-            {submitting ? '建立訂單中...' : '前往付款'}
+            {submitting ? '建立訂單中...' : '建立訂單'}
           </button>
         </section>
       </div>
@@ -383,7 +221,7 @@ export default function CheckoutPage() {
           <h2>收件地址</h2>
           {!preview.addresses.length ? (
             <div className="stack">
-              <div className="muted">你尚未建立收件地址，請先到會員中心新增地址。</div>
+              <div className="muted">目前沒有可用地址，請先到會員中心新增收件地址。</div>
               <button className="btn" onClick={() => router.push('/me/addresses')} type="button">
                 前往地址管理
               </button>
@@ -420,13 +258,13 @@ export default function CheckoutPage() {
         <section className="card stack">
           <h2>發票設定</h2>
           {!preview.invoice_profile?.invoice_type ? (
-            <div className="muted">尚未設定發票資料，若需要載具或統編，請先到會員中心設定。</div>
+            <div className="muted">目前沒有發票設定，建立訂單前可以先到會員中心設定。</div>
           ) : (
             <div className="stack">
               <div>發票類型：{preview.invoice_profile.invoice_type}</div>
               {preview.invoice_profile.company_name ? <div>公司名稱：{preview.invoice_profile.company_name}</div> : null}
               {preview.invoice_profile.tax_id ? <div>統一編號：{preview.invoice_profile.tax_id}</div> : null}
-              {preview.invoice_profile.carrier_code ? <div>載具號碼：{preview.invoice_profile.carrier_code}</div> : null}
+              {preview.invoice_profile.carrier_code ? <div>載具：{preview.invoice_profile.carrier_code}</div> : null}
             </div>
           )}
           <button className="btn" onClick={() => router.push('/me/invoice')} type="button">
@@ -450,71 +288,32 @@ export default function CheckoutPage() {
             </label>
           ))}
 
-          {requiresConvenienceStoreFields ? (
+          {form.shipping_method === 'convenience_store' ? (
             <div className="card stack">
-              <strong>超商取貨門市</strong>
-              <div className="muted">先選擇超商品牌，再使用藍新門市地圖完成選店。回到結帳頁後會自動帶入門市名稱與代碼。</div>
-              <label className="field">
-                <span>超商品牌</span>
-                <select value={form.pickup_store_brand} onChange={(event) => updatePickupStoreBrand(event.target.value)}>
-                  <option value="">請選擇品牌</option>
-                  {preview.convenience_store_brands.map((brand) => (
-                    <option key={brand.value} value={brand.value}>
-                      {brand.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <div className="row" style={{ gap: '0.75rem', flexWrap: 'wrap' }}>
-                <button className="btn" disabled={!form.pickup_store_brand || storeMapBusy} onClick={openStoreMap} type="button">
-                  {storeMapBusy ? '門市地圖準備中...' : form.pickup_store_code ? '重新選擇門市' : '使用藍新門市地圖'}
-                </button>
-                {form.pickup_store_code ? (
-                  <button
-                    className="btn"
-                    onClick={() => {
-                      setStoreMapMessage('')
-                      setForm((current) => ({
-                        ...current,
-                        pickup_store_code: '',
-                        pickup_store_name: '',
-                        pickup_store_address: '',
-                      }))
-                    }}
-                    type="button"
-                  >
-                    清除門市
-                  </button>
-                ) : null}
-              </div>
-              {selectedStoreBrand ? <div className="muted">目前品牌：{selectedStoreBrand.label}</div> : null}
-              <div className="stack" style={{ gap: '0.35rem' }}>
-                <div>門市代碼：{form.pickup_store_code || '尚未選擇'}</div>
-                <div>門市名稱：{form.pickup_store_name || '尚未選擇'}</div>
-                <div className="muted">門市地址：{form.pickup_store_address || '尚未選擇'}</div>
+              <strong>超商取貨說明</strong>
+              <div className="muted">
+                建立訂單後，請在藍新付款頁面選擇付款方式與取貨門市。訂單中的超商門市資訊會以藍新實際回傳資料為準。
               </div>
             </div>
-          ) : null}
+          ) : (
+            <div className="card stack">
+              <strong>宅配到府說明</strong>
+              <div className="muted">宅配訂單會使用你目前選取的收件地址，藍新付款頁不會再要求選擇超商門市。</div>
+            </div>
+          )}
         </section>
 
         <section className="card stack">
           <h2>付款方式與備註</h2>
-          {preview.payment_methods.map((method) => (
-            <label key={method.value}>
-              <input
-                checked={form.payment_method === method.value}
-                name="payment_method"
-                onChange={() => updateForm('payment_method', method.value)}
-                type="radio"
-              />{' '}
-              {method.label}
-            </label>
-          ))}
+          <div className="card stack">
+            <strong>{selectedPaymentMethod?.label ?? '藍新支付'}</strong>
+            <div className="muted">建立訂單後，會到訂單頁再正式送往藍新付款，實際付款工具以藍新頁面選擇與回傳為準。</div>
+          </div>
 
           <label className="field">
             <span>訂單備註</span>
             <textarea
-              placeholder="例如：白天請勿按門鈴、可晚間收貨。"
+              placeholder="例如收貨時段、聯絡方式等。"
               rows={4}
               value={form.buyer_note}
               onChange={(event) => updateForm('buyer_note', event.target.value)}

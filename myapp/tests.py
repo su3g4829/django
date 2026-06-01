@@ -2952,37 +2952,77 @@ class ProductFeatureTests(SimpleTestCase):
         self.assertContains(response, "No-DB \u57fa\u790e\u8a2d\u65bd")
         self.assertContains(response, "/health/live/")
 
-    def test_newebpay_payment_mock_api_can_create_and_fetch_record(self):
+    def test_newebpay_payment_api_returns_latest_sandbox_record(self):
         self._login(username="buyer")
         self._add_product_to_cart("acme-mug", qty=1)
         order_response = self._confirm_checkout()
         order_id = order_response.json()["id"]
-
-        create_response = self._post_json(
-            f"/api/v1/me/orders/{order_id}/newebpay-payment/",
-            {"return_url": "https://example.com/server-return", "client_back_url": "https://example.com/front-return"},
-        )
-        self.assertEqual(create_response.status_code, 201)
+        env = {
+            "NEWEBPAY_MERCHANT_ID": "MS123456789",
+            "NEWEBPAY_HASH_KEY": "12345678901234567890123456789012",
+            "NEWEBPAY_HASH_IV": "1234567890123456",
+            "NEWEBPAY_PAYMENT_NOTIFY_URL": "https://backend.example/api/v1/integrations/newebpay/payment/sandbox/callback/",
+            "NEWEBPAY_PAYMENT_RETURN_URL": "https://backend.example/api/v1/integrations/newebpay/payment/sandbox/return/",
+            "NEWEBPAY_PAYMENT_CLIENT_BACK_URL": "https://frontend.example/orders/1",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            create_response = self._post_json(f"/api/v1/me/orders/{order_id}/newebpay-payment/sandbox/", {})
+        self.assertEqual(create_response.status_code, 200)
         self.assertEqual(create_response.json()["provider"], "NewebPay Payment")
-        self.assertEqual(create_response.json()["status"], "pending")
 
         get_response = self.client.get(f"/api/v1/me/orders/{order_id}/newebpay-payment/")
         self.assertEqual(get_response.status_code, 200)
         self.assertEqual(get_response.json()["order_id"], order_id)
+        self.assertEqual(get_response.json()["status"], "pending")
 
-    def test_newebpay_payment_mock_callback_updates_status(self):
+    def test_newebpay_payment_sandbox_prepare_sets_cvscom_by_shipping_method(self):
         self._login(username="buyer")
         self._add_product_to_cart("acme-mug", qty=1)
-        order_id = self._confirm_checkout().json()["id"]
-        create_response = self._post_json(f"/api/v1/me/orders/{order_id}/newebpay-payment/", {})
-        trade_no = create_response.json()["trade_no"]
+        home_order_id = self._confirm_checkout().json()["id"]
 
-        callback_response = self._post_json(
-            "/api/v1/integrations/newebpay/payment/callback/",
-            {"trade_no": trade_no, "status": "paid", "paid_amount": "12.90", "result_message": "mock paid"},
+        self._add_product_to_cart("acme-mug", qty=1)
+        address_id = self.client.post(
+            "/api/v1/me/addresses/",
+            data=json.dumps(
+                {
+                    "label": "Store Pickup",
+                    "recipient": "Buyer",
+                    "phone": "0912345678",
+                    "city": "Taipei",
+                    "district": "Da'an",
+                    "postal_code": "106",
+                    "address_line": "No. 2, Xinyi Rd.",
+                }
+            ),
+            content_type="application/json",
+        ).json()["id"]
+        store_order_response = self._post_json(
+            "/api/v1/checkout/confirm/",
+            {
+                "address_id": address_id,
+                "shipping_method": "convenience_store",
+                "payment_method": "newebpay",
+            },
         )
-        self.assertEqual(callback_response.status_code, 200)
-        self.assertEqual(callback_response.json()["record"]["status"], "paid")
+        self.assertEqual(store_order_response.status_code, 201)
+        store_order_id = store_order_response.json()["id"]
+
+        env = {
+            "NEWEBPAY_MERCHANT_ID": "MS123456789",
+            "NEWEBPAY_HASH_KEY": "12345678901234567890123456789012",
+            "NEWEBPAY_HASH_IV": "1234567890123456",
+            "NEWEBPAY_PAYMENT_NOTIFY_URL": "https://backend.example/api/v1/integrations/newebpay/payment/sandbox/callback/",
+            "NEWEBPAY_PAYMENT_RETURN_URL": "https://backend.example/api/v1/integrations/newebpay/payment/sandbox/return/",
+            "NEWEBPAY_PAYMENT_CLIENT_BACK_URL": "https://frontend.example/orders/1",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            home_prepare = self._post_json(f"/api/v1/me/orders/{home_order_id}/newebpay-payment/sandbox/", {})
+            store_prepare = self._post_json(f"/api/v1/me/orders/{store_order_id}/newebpay-payment/sandbox/", {})
+
+        self.assertEqual(home_prepare.status_code, 200)
+        self.assertEqual(home_prepare.json()["trade_info_params"]["CVSCOM"], 0)
+        self.assertEqual(store_prepare.status_code, 200)
+        self.assertEqual(store_prepare.json()["trade_info_params"]["CVSCOM"], 1)
 
     def test_newebpay_payment_sandbox_prepare_requires_configuration(self):
         self._login(username="buyer")
@@ -3036,6 +3076,8 @@ class ProductFeatureTests(SimpleTestCase):
             "MerchantOrderNo": merchant_order_no,
             "TradeNo": "NPAYTEST123",
             "Amt": "13",
+            "PaymentType": "CREDIT",
+            "PayTime": "2026-06-01 12:00:00",
         }
         decrypted_trade_info = urlencode(
             {
@@ -3074,6 +3116,149 @@ class ProductFeatureTests(SimpleTestCase):
         callback_log = next(item for item in logs if item.get("merchant_order_no") == merchant_order_no)
         self.assertEqual(callback_log["trade_no"], "NPAYTEST123")
         self.assertEqual(callback_log["status"], "paid")
+        order = local_store.get_order_by_id(order_id)
+        self.assertEqual(order["payment_method"], "newebpay_credit")
+        self.assertEqual(order["payment_status"], "paid")
+
+    def test_newebpay_payment_sandbox_callback_updates_order_store_fields(self):
+        self._login(username="buyer")
+        self._add_product_to_cart("acme-mug", qty=1)
+        address_id = self.client.post(
+            "/api/v1/me/addresses/",
+            data=json.dumps(
+                {
+                    "label": "Store Pickup",
+                    "recipient": "Buyer",
+                    "phone": "0912345678",
+                    "city": "Taipei",
+                    "district": "Da'an",
+                    "postal_code": "106",
+                    "address_line": "No. 2, Xinyi Rd.",
+                }
+            ),
+            content_type="application/json",
+        ).json()["id"]
+        order_response = self._post_json(
+            "/api/v1/checkout/confirm/",
+            {
+                "address_id": address_id,
+                "shipping_method": "convenience_store",
+                "payment_method": "newebpay",
+            },
+        )
+        order_id = order_response.json()["id"]
+
+        env = {
+            "NEWEBPAY_MERCHANT_ID": "MS123456789",
+            "NEWEBPAY_HASH_KEY": "12345678901234567890123456789012",
+            "NEWEBPAY_HASH_IV": "1234567890123456",
+            "NEWEBPAY_PAYMENT_NOTIFY_URL": "https://backend.example/api/v1/integrations/newebpay/payment/sandbox/callback/",
+            "NEWEBPAY_PAYMENT_RETURN_URL": "https://backend.example/api/v1/integrations/newebpay/payment/sandbox/return/",
+            "NEWEBPAY_PAYMENT_CLIENT_BACK_URL": "https://frontend.example/orders/1",
+        }
+        merchant_order_no = f"ORDER{order_id}_1710000001"
+        result_payload = {
+            "MerchantID": env["NEWEBPAY_MERCHANT_ID"],
+            "MerchantOrderNo": merchant_order_no,
+            "TradeNo": "NPAYSTORE123",
+            "Amt": "13",
+            "PaymentType": "CVSCOM",
+            "StoreCode": "149741",
+            "StoreName": "台北測試門市",
+            "StoreAddr": "台北市大安區測試路 1 號",
+            "StoreType": "UNIMART",
+        }
+        decrypted_trade_info = urlencode(
+            {
+                "Status": "SUCCESS",
+                "Message": "Test message",
+                "Result": json.dumps(result_payload),
+            }
+        )
+
+        with patch.dict(os.environ, env, clear=False):
+            trade_info = newebpay_payment_real_service._encrypt_trade_info(
+                decrypted_trade_info,
+                hash_key=env["NEWEBPAY_HASH_KEY"],
+                hash_iv=env["NEWEBPAY_HASH_IV"],
+            )
+            trade_sha = newebpay_payment_real_service._build_trade_sha(
+                trade_info,
+                hash_key=env["NEWEBPAY_HASH_KEY"],
+                hash_iv=env["NEWEBPAY_HASH_IV"],
+            )
+            callback_response = self._post_json(
+                "/api/v1/integrations/newebpay/payment/sandbox/callback/",
+                {
+                    "Status": "SUCCESS",
+                    "MerchantID": env["NEWEBPAY_MERCHANT_ID"],
+                    "TradeInfo": trade_info,
+                    "TradeSha": trade_sha,
+                },
+            )
+
+        self.assertEqual(callback_response.status_code, 200)
+        order = local_store.get_order_by_id(order_id)
+        self.assertEqual(order["payment_method"], "newebpay_cvscom")
+        self.assertEqual(order["payment_status"], "pending")
+        self.assertEqual(order["pickup_store_code"], "149741")
+        self.assertEqual(order["pickup_store_name"], "台北測試門市")
+        self.assertEqual(order["shipping_method"], "convenience_store")
+
+    def test_newebpay_payment_sandbox_prepare_rejects_paid_order(self):
+        self._login(username="buyer")
+        self._add_product_to_cart("acme-mug", qty=1)
+        order_id = self._confirm_checkout().json()["id"]
+
+        env = {
+            "NEWEBPAY_MERCHANT_ID": "MS123456789",
+            "NEWEBPAY_HASH_KEY": "12345678901234567890123456789012",
+            "NEWEBPAY_HASH_IV": "1234567890123456",
+            "NEWEBPAY_PAYMENT_NOTIFY_URL": "https://backend.example/api/v1/integrations/newebpay/payment/sandbox/callback/",
+            "NEWEBPAY_PAYMENT_RETURN_URL": "https://backend.example/api/v1/integrations/newebpay/payment/sandbox/return/",
+            "NEWEBPAY_PAYMENT_CLIENT_BACK_URL": "https://frontend.example/orders/1",
+        }
+        merchant_order_no = f"ORDER{order_id}_1710000002"
+        result_payload = {
+            "MerchantID": env["NEWEBPAY_MERCHANT_ID"],
+            "MerchantOrderNo": merchant_order_no,
+            "TradeNo": "NPAYPAID123",
+            "Amt": "13",
+            "PaymentType": "CREDIT",
+            "PayTime": "2026-06-01 12:00:00",
+        }
+        decrypted_trade_info = urlencode(
+            {
+                "Status": "SUCCESS",
+                "Message": "Test message",
+                "Result": json.dumps(result_payload),
+            }
+        )
+
+        with patch.dict(os.environ, env, clear=False):
+            trade_info = newebpay_payment_real_service._encrypt_trade_info(
+                decrypted_trade_info,
+                hash_key=env["NEWEBPAY_HASH_KEY"],
+                hash_iv=env["NEWEBPAY_HASH_IV"],
+            )
+            trade_sha = newebpay_payment_real_service._build_trade_sha(
+                trade_info,
+                hash_key=env["NEWEBPAY_HASH_KEY"],
+                hash_iv=env["NEWEBPAY_HASH_IV"],
+            )
+            callback_response = self._post_json(
+                "/api/v1/integrations/newebpay/payment/sandbox/callback/",
+                {
+                    "Status": "SUCCESS",
+                    "MerchantID": env["NEWEBPAY_MERCHANT_ID"],
+                    "TradeInfo": trade_info,
+                    "TradeSha": trade_sha,
+                },
+            )
+            self.assertEqual(callback_response.status_code, 200)
+            prepare_response = self._post_json(f"/api/v1/me/orders/{order_id}/newebpay-payment/sandbox/", {})
+
+        self.assertEqual(prepare_response.status_code, 404)
 
     def test_checkout_store_map_prepare_and_callback_round_trip(self):
         self._login(username="buyer")

@@ -1048,12 +1048,10 @@ class CheckoutConfirmSerializer(serializers.Serializer):
     pickup_store_address = serializers.CharField(required=False, allow_blank=True)
     payment_method = serializers.ChoiceField(
         choices=[
-            "newebpay_credit",
-            "bank_transfer",
-            "cash_on_delivery",
+            "newebpay",
         ],
         required=False,
-        default="newebpay_credit",
+        default="newebpay",
     )
     buyer_note = serializers.CharField(required=False, allow_blank=True)
 

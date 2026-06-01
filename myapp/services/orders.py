@@ -59,18 +59,36 @@ SHIPPING_METHOD_CHOICES = [
     {"value": SHIPPING_METHOD_CONVENIENCE_STORE, "label": "超商取貨"},
 ]
 SHIPPING_METHOD_LABELS = {item["value"]: item["label"] for item in SHIPPING_METHOD_CHOICES}
-LOGISTICS_CHECKOUT_ENABLED = False
+LOGISTICS_CHECKOUT_ENABLED = True
 
+PAYMENT_METHOD_NEWEBPAY = "newebpay"
 PAYMENT_METHOD_NEWEBPAY_CREDIT = "newebpay_credit"
-
-PAYMENT_METHOD_BANK_TRANSFER = "bank_transfer"
-PAYMENT_METHOD_CASH_ON_DELIVERY = "cash_on_delivery"
+PAYMENT_METHOD_NEWEBPAY_WEBATM = "newebpay_webatm"
+PAYMENT_METHOD_NEWEBPAY_ATM = "newebpay_atm"
+PAYMENT_METHOD_NEWEBPAY_CVS = "newebpay_cvs"
+PAYMENT_METHOD_NEWEBPAY_BARCODE = "newebpay_barcode"
+PAYMENT_METHOD_NEWEBPAY_CVSCOM = "newebpay_cvscom"
 PAYMENT_METHOD_CHOICES = [
-    {"value": PAYMENT_METHOD_NEWEBPAY_CREDIT, "label": "藍新信用卡"},
-    {"value": PAYMENT_METHOD_BANK_TRANSFER, "label": "ATM / 匯款"},
-    {"value": PAYMENT_METHOD_CASH_ON_DELIVERY, "label": "貨到付款"},
+    {"value": PAYMENT_METHOD_NEWEBPAY, "label": "藍新支付"},
 ]
-PAYMENT_METHOD_LABELS = {item["value"]: item["label"] for item in PAYMENT_METHOD_CHOICES}
+PAYMENT_METHOD_LABELS = {
+    item["value"]: item["label"] for item in PAYMENT_METHOD_CHOICES
+} | {
+    PAYMENT_METHOD_NEWEBPAY_CREDIT: "藍新信用卡",
+    PAYMENT_METHOD_NEWEBPAY_WEBATM: "藍新 WebATM",
+    PAYMENT_METHOD_NEWEBPAY_ATM: "藍新 ATM 轉帳",
+    PAYMENT_METHOD_NEWEBPAY_CVS: "藍新超商代碼",
+    PAYMENT_METHOD_NEWEBPAY_BARCODE: "藍新超商條碼",
+    PAYMENT_METHOD_NEWEBPAY_CVSCOM: "藍新超商取貨",
+}
+PAYMENT_STATUS_PENDING = "pending"
+PAYMENT_STATUS_PAID = "paid"
+PAYMENT_STATUS_FAILED = "failed"
+PAYMENT_STATUS_LABELS = {
+    PAYMENT_STATUS_PENDING: "待付款",
+    PAYMENT_STATUS_PAID: "已付款",
+    PAYMENT_STATUS_FAILED: "付款失敗",
+}
 
 CONVENIENCE_STORE_BRAND_CHOICES = [
     {"value": "UNIMART", "label": "7-ELEVEN"},
@@ -584,8 +602,13 @@ def _enrich_order_common(order: Dict[str, Any]) -> Dict[str, Any]:
     item["invoice_profile"] = dict(invoice_profile) if isinstance(invoice_profile, dict) else {}
     item["shipping_method"] = item.get("shipping_method", SHIPPING_METHOD_HOME_DELIVERY)
     item["shipping_method_label"] = SHIPPING_METHOD_LABELS.get(item["shipping_method"], item["shipping_method"])
-    item["payment_method"] = item.get("payment_method", PAYMENT_METHOD_NEWEBPAY_CREDIT)
+    item["payment_method"] = item.get("payment_method", PAYMENT_METHOD_NEWEBPAY)
     item["payment_method_label"] = PAYMENT_METHOD_LABELS.get(item["payment_method"], item["payment_method"])
+    item["payment_status"] = item.get("payment_status", PAYMENT_STATUS_PENDING)
+    item["payment_status_label"] = PAYMENT_STATUS_LABELS.get(item["payment_status"], item["payment_status"])
+    item["payment_trade_no"] = item.get("payment_trade_no", "")
+    item["payment_completed_at"] = item.get("payment_completed_at", "")
+    item["is_convenience_store_shipping"] = item["shipping_method"] == SHIPPING_METHOD_CONVENIENCE_STORE
     item["pickup_store_brand"] = item.get("pickup_store_brand", "")
     item["pickup_store_brand_label"] = CONVENIENCE_STORE_BRAND_LABELS.get(item["pickup_store_brand"], item["pickup_store_brand"])
     item["pickup_store_code"] = item.get("pickup_store_code", "")
@@ -608,7 +631,7 @@ def create_order_from_cart(
     pickup_store_code: str = "",
     pickup_store_name: str = "",
     pickup_store_address: str = "",
-    payment_method: str = PAYMENT_METHOD_NEWEBPAY_CREDIT,
+    payment_method: str = PAYMENT_METHOD_NEWEBPAY,
     buyer_note: str = "",
 ) -> Dict[str, Any]:
     """把購物車內容轉成正式訂單，並清空已結帳品項。
@@ -639,12 +662,6 @@ def create_order_from_cart(
     if not selected_address:
         raise ValueError("Please select a shipping address.")
 
-    if shipping_method == SHIPPING_METHOD_CONVENIENCE_STORE:
-        if not pickup_store_brand.strip() or not pickup_store_code.strip() or not pickup_store_name.strip():
-            raise ValueError("Convenience-store pickup requires store brand, code, and name.")
-        if pickup_store_brand.strip() not in CONVENIENCE_STORE_BRAND_LABELS:
-            raise ValueError("Invalid convenience-store brand.")
-
     checkout_pricing = build_checkout_totals(session, shipping_method=shipping_method)
     if checkout_pricing["unsupported_sellers"]:
         raise ValueError(
@@ -672,6 +689,10 @@ def create_order_from_cart(
         "pickup_store_name": pickup_store_name.strip(),
         "pickup_store_address": pickup_store_address.strip(),
         "payment_method": payment_method,
+        "payment_status": PAYMENT_STATUS_PENDING,
+        "payment_status_label": PAYMENT_STATUS_LABELS[PAYMENT_STATUS_PENDING],
+        "payment_trade_no": "",
+        "payment_completed_at": "",
         "invoice_profile": customer_center.get_invoice_profile(user["username"]),
         "service_request": _empty_service_request(),
         "buyer_note": buyer_note.strip(),
@@ -826,6 +847,52 @@ def confirm_order_completion(order_id: int, username: str) -> Dict[str, Any]:
         item["shipment_groups"] = _build_buyer_shipment_groups(item["items"])
         return item
     raise ValueError("Order not found.")
+
+
+def apply_newebpay_result(
+    order_id: int,
+    *,
+    payment_method: str,
+    payment_status: str,
+    trade_no: str = "",
+    paid_at: str = "",
+    pickup_store_brand: str = "",
+    pickup_store_code: str = "",
+    pickup_store_name: str = "",
+    pickup_store_address: str = "",
+) -> Dict[str, Any] | None:
+    """Persist NewebPay callback data back onto the stored order."""
+    orders = list(local_store.get_orders())
+    for order in orders:
+        if order.get("id") != order_id:
+            continue
+        clean_payment_method = payment_method.strip() or order.get("payment_method", PAYMENT_METHOD_NEWEBPAY)
+        clean_payment_status = payment_status.strip() or order.get("payment_status", PAYMENT_STATUS_PENDING)
+        order["payment_method"] = clean_payment_method
+        order["payment_status"] = clean_payment_status
+        order["payment_status_label"] = PAYMENT_STATUS_LABELS.get(clean_payment_status, clean_payment_status)
+        if trade_no.strip():
+            order["payment_trade_no"] = trade_no.strip()
+        if paid_at.strip():
+            order["payment_completed_at"] = paid_at.strip()
+
+        has_store_selection = bool(pickup_store_code.strip() and pickup_store_name.strip())
+        if has_store_selection:
+            order["shipping_method"] = SHIPPING_METHOD_CONVENIENCE_STORE
+            order["pickup_store_brand"] = pickup_store_brand.strip()
+            order["pickup_store_code"] = pickup_store_code.strip()
+            order["pickup_store_name"] = pickup_store_name.strip()
+            order["pickup_store_address"] = pickup_store_address.strip()
+        elif order.get("shipping_method") != SHIPPING_METHOD_CONVENIENCE_STORE:
+            order["pickup_store_brand"] = ""
+            order["pickup_store_code"] = ""
+            order["pickup_store_name"] = ""
+            order["pickup_store_address"] = ""
+
+        local_store.save_orders(orders)
+        refreshed = local_store.get_order_by_id(order_id) or order
+        return _enrich_order_common(refreshed)
+    return None
 
 
 def _build_seller_order_view(order: Dict[str, Any], seller_username: str) -> Optional[Dict[str, Any]]:

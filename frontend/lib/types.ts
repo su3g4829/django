@@ -501,8 +501,13 @@ export type Order = {
   shipping_address?: Address
   shipping_method?: string
   shipping_method_label?: string
+  is_convenience_store_shipping?: boolean
   payment_method?: string
   payment_method_label?: string
+  payment_status?: string
+  payment_status_label?: string
+  payment_trade_no?: string
+  payment_completed_at?: string
   pickup_store_brand?: string
   pickup_store_brand_label?: string
   pickup_store_code?: string
@@ -641,6 +646,11 @@ export type NewebpayPaymentRecord = {
   note?: string
   callback_count: number
   raw_payload?: Record<string, unknown>
+}
+
+export type NewebpayPaymentDebug = {
+  runtime: NewebpaySandboxPaymentSummary
+  records: NewebpayPaymentRecord[]
 }
 
 /**

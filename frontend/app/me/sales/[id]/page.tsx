@@ -25,7 +25,6 @@ export default function SellerOrderDetailPage() {
   const [order, setOrder] = useState<Order | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-
   const [fulfillmentForm, setFulfillmentForm] = useState<SellerFulfillmentFormState>(INITIAL_FULFILLMENT_FORM)
   const [fulfillmentSubmitting, setFulfillmentSubmitting] = useState(false)
   const [fulfillmentMessage, setFulfillmentMessage] = useState('')
@@ -68,11 +67,11 @@ export default function SellerOrderDetailPage() {
       })
       setFulfillmentMessageType('success')
       if ((payload.seller_status ?? fulfillmentForm.seller_status) === 'completed') {
-        setFulfillmentMessage('已直接結案。')
+        setFulfillmentMessage('已直接標記完成。')
       } else if ((payload.seller_status ?? fulfillmentForm.seller_status) === 'pending_shipment') {
-        setFulfillmentMessage('已更新為待出貨。')
+        setFulfillmentMessage('已改回待出貨。')
       } else {
-        setFulfillmentMessage('已標記為已出貨，買家現在可在訂單頁完成訂單。')
+        setFulfillmentMessage('出貨狀態已更新。')
       }
     } catch (err) {
       setFulfillmentMessageType('error')
@@ -92,46 +91,61 @@ export default function SellerOrderDetailPage() {
         <h1>賣家訂單 #{order?.id ?? orderId}</h1>
         {error ? <div className="notice">{error}</div> : null}
         {!order ? null : (
-          <div className="muted">
-            建立時間：{order.created_at_display ?? order.created_at} / 目前狀態：
-            {order.seller_status_label ?? order.seller_status ?? order.status_label ?? order.status}
-          </div>
+          <>
+            <div className="muted">
+              建立時間：{order.created_at_display ?? order.created_at} / 目前狀態：
+              {order.seller_status_label ?? order.seller_status ?? order.status_label ?? order.status}
+            </div>
+            <div className="muted">
+              付款狀態：{order.payment_status_label ?? order.payment_status ?? '-'} / 付款方式：
+              {order.payment_method_label ?? order.payment_method ?? '-'}
+            </div>
+          </>
         )}
       </section>
 
       <div className="grid grid-2">
-        <section className="card stack">
-          <h2>超商取貨資訊</h2>
-          {order?.pickup_store_name ? (
-            <div className="card stack">
-              <strong>門市資料</strong>
-              <div>
-                {order.pickup_store_brand_label ?? order.pickup_store_brand} / {order.pickup_store_name}
-              </div>
-              <div className="muted">門市代碼：{order.pickup_store_code || '-'}</div>
-              <div className="muted">門市地址：{order.pickup_store_address || '-'}</div>
-            </div>
-          ) : (
-            <div className="muted">這張訂單沒有超商門市資訊。</div>
-          )}
-        </section>
+        {order?.is_convenience_store_shipping ? (
+          <section className="card stack">
+            <h2>超商取貨資訊</h2>
+            {order.pickup_store_name ? (
+              <>
+                <div>
+                  {order.pickup_store_brand_label ?? order.pickup_store_brand} / {order.pickup_store_name}
+                </div>
+                <div className="muted">門市代碼：{order.pickup_store_code || '-'}</div>
+                <div className="muted">門市地址：{order.pickup_store_address || '-'}</div>
+              </>
+            ) : (
+              <div className="muted">這張訂單尚未收到超商門市資料。</div>
+            )}
+          </section>
+        ) : (
+          <section className="card stack">
+            <h2>收件資訊</h2>
+            {order?.shipping_address ? (
+              <>
+                <div>收件人：{order.shipping_address.recipient}</div>
+                <div className="muted">電話：{order.shipping_address.phone}</div>
+                <div className="muted">
+                  {order.shipping_address.postal_code ? `${order.shipping_address.postal_code} ` : ''}
+                  {order.shipping_address.city}
+                  {order.shipping_address.district}
+                  {order.shipping_address.address_line}
+                </div>
+              </>
+            ) : (
+              <div className="muted">這張訂單沒有收件地址。</div>
+            )}
+          </section>
+        )}
 
         <section className="card stack">
-          <h2>收件資訊</h2>
-          {order?.shipping_address ? (
-            <>
-              <div>收件人：{order.shipping_address.recipient}</div>
-              <div className="muted">電話：{order.shipping_address.phone}</div>
-              <div className="muted">
-                {order.shipping_address.postal_code ? `${order.shipping_address.postal_code} ` : ''}
-                {order.shipping_address.city}
-                {order.shipping_address.district}
-                {order.shipping_address.address_line}
-              </div>
-            </>
-          ) : (
-            <div className="muted">這張訂單沒有宅配地址。</div>
-          )}
+          <h2>訂單摘要</h2>
+          <div className="muted">配送方式：{order?.shipping_method_label ?? order?.shipping_method ?? '-'}</div>
+          <div className="muted">付款方式：{order?.payment_method_label ?? order?.payment_method ?? '-'}</div>
+          <div className="muted">付款狀態：{order?.payment_status_label ?? order?.payment_status ?? '-'}</div>
+          <div className="muted">藍新交易序號：{order?.payment_trade_no || '-'}</div>
         </section>
       </div>
 
@@ -167,20 +181,12 @@ export default function SellerOrderDetailPage() {
 
       <section className="card stack">
         <h2>出貨操作</h2>
-        <div className="muted">
-          這裡可以先標記已出貨，買家端就會出現「完成訂單」按鈕。
-          如果只是 sandbox 測試，也可以直接把賣家狀態改成已完成。
-        </div>
-        {fulfillmentMessage ? (
-          <div className={fulfillmentMessageType === 'success' ? 'notice success' : 'notice'}>{fulfillmentMessage}</div>
-        ) : null}
+        <div className="muted">標記出貨後，買家端才會出現完成訂單按鈕。sandbox 測試需要時，仍可直接標記為已完成。</div>
+        {fulfillmentMessage ? <div className={fulfillmentMessageType === 'success' ? 'notice success' : 'notice'}>{fulfillmentMessage}</div> : null}
         <form className="stack" onSubmit={handleUpdateFulfillment}>
           <label className="stack">
             <span>賣家履約狀態</span>
-            <select
-              value={fulfillmentForm.seller_status}
-              onChange={(event) => updateFulfillmentForm('seller_status', event.target.value)}
-            >
+            <select value={fulfillmentForm.seller_status} onChange={(event) => updateFulfillmentForm('seller_status', event.target.value)}>
               <option value="pending_shipment">待出貨</option>
               <option value="shipped">已出貨</option>
               <option value="completed">已完成（測試用）</option>
@@ -197,7 +203,7 @@ export default function SellerOrderDetailPage() {
           <label className="stack">
             <span>出貨備註</span>
             <textarea
-              placeholder="例如：已包裝完成，今晚交寄。"
+              placeholder="例如已包裝完成，今晚交寄。"
               rows={3}
               value={fulfillmentForm.shipping_note}
               onChange={(event) => updateFulfillmentForm('shipping_note', event.target.value)}

@@ -270,7 +270,7 @@ def _build_checkout_preview_payload(request) -> Dict[str, Any]:
     payload["payment_methods"] = order_service.get_checkout_payment_methods()
     payload["convenience_store_brands"] = order_service.get_convenience_store_brands()
     payload["selected_shipping_method"] = selected_shipping_method
-    payload["selected_payment_method"] = order_service.PAYMENT_METHOD_NEWEBPAY_CREDIT
+    payload["selected_payment_method"] = order_service.PAYMENT_METHOD_NEWEBPAY
     payload["user"] = user
     payload["requires_login"] = user is None
     payload["can_confirm"] = bool(
@@ -1088,39 +1088,20 @@ class BuyerOrderCompleteApi(APIView):
 
 
 class BuyerNewebpayPaymentApi(APIView):
-    """藍新支付 mock 測試 API。
-
-    提供買家建立付款交易與查詢最新 mock 支付紀錄。
-    """
+    """Provide the latest real NewebPay sandbox payment record for the buyer order."""
 
     permission_classes = [IsDemoAuthenticated]
 
     def get(self, request, order_id: int):
-        """讀取某張訂單目前最新的藍新支付 mock 紀錄。"""
+        """Read the latest NewebPay sandbox payment record."""
         user = get_demo_user(request)
         try:
-            record = newebpay_payment_service.get_payment_record(order_id, user["username"])
+            record = newebpay_payment_real_service.get_payment_record(order_id, user["username"])
         except ValueError as exc:
             return _error(str(exc), status.HTTP_404_NOT_FOUND)
         if not record:
             return _error("Payment record not found.", status.HTTP_404_NOT_FOUND)
         return Response(record)
-
-    def post(self, request, order_id: int):
-        """建立一筆新的藍新支付 mock 交易。"""
-        user = get_demo_user(request)
-        payload = _validated(sz.NewebpayPaymentCreateSerializer, request.data)
-        try:
-            record = newebpay_payment_service.create_payment_request(
-                order_id,
-                user["username"],
-                return_url=str(payload.get("return_url", "")),
-                client_back_url=str(payload.get("client_back_url", "")),
-                note=str(payload.get("note", "")),
-            )
-        except ValueError as exc:
-            return _error(str(exc), status.HTTP_404_NOT_FOUND)
-        return Response(record, status=status.HTTP_201_CREATED)
 
 
 class NewebpayPaymentCallbackApi(APIView):
@@ -1213,6 +1194,7 @@ class NewebpaySandboxPaymentCallbackApi(APIView):
                 merchant_id=str(payload["MerchantID"]),
                 trade_info=str(payload["TradeInfo"]),
                 trade_sha=str(payload["TradeSha"]),
+                source="callback",
             )
         except newebpay_payment_real_service.NewebpayConfigurationError as exc:
             return _error(str(exc), status.HTTP_503_SERVICE_UNAVAILABLE)
@@ -1257,6 +1239,7 @@ class NewebpaySandboxPaymentReturnApi(APIView):
                 merchant_id=required["MerchantID"],
                 trade_info=required["TradeInfo"],
                 trade_sha=required["TradeSha"],
+                source="return",
             )
         except Exception as exc:  # pragma: no cover - redirect fallback
             return HttpResponseRedirect(self._redirect_url(None, {"payment_callback": "failed", "message": str(exc)}))
@@ -1377,6 +1360,19 @@ class AdminOrderDetailApi(APIView):
         if not order:
             return _error("Order not found.", status.HTTP_404_NOT_FOUND)
         return Response(order)
+
+
+class AdminOrderPaymentDebugApi(APIView):
+    """Provide staff-only NewebPay sandbox request/callback debug data for one order."""
+
+    permission_classes = [IsAdminDemoUser]
+
+    def get(self, request, order_id: int):
+        try:
+            payload = newebpay_payment_real_service.get_payment_debug(order_id)
+        except ValueError as exc:
+            return _error(str(exc), status.HTTP_404_NOT_FOUND)
+        return Response(payload)
 
 
 class AdminOrderServiceReviewApi(APIView):
@@ -1818,7 +1814,7 @@ class CheckoutConfirmApi(APIView):
                 pickup_store_code=str(payload.get("pickup_store_code", "")),
                 pickup_store_name=str(payload.get("pickup_store_name", "")),
                 pickup_store_address=str(payload.get("pickup_store_address", "")),
-                payment_method=str(payload.get("payment_method", order_service.PAYMENT_METHOD_NEWEBPAY_CREDIT)),
+                payment_method=str(payload.get("payment_method", order_service.PAYMENT_METHOD_NEWEBPAY)),
                 buyer_note=str(payload.get("buyer_note", "")),
             )
         except ValueError as exc:

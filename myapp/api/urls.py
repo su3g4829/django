@@ -99,6 +99,11 @@ urlpatterns = [
     path("staff/banners/<int:banner_id>/", views.AdminBannerDetailApi.as_view(), name="api-admin-banner-detail"),
     path("staff/orders/", views.AdminOrdersApi.as_view(), name="api-admin-orders"),
     path("staff/orders/<int:order_id>/", views.AdminOrderDetailApi.as_view(), name="api-admin-order-detail"),
+    path(
+        "staff/orders/<int:order_id>/payment-debug/",
+        views.AdminOrderPaymentDebugApi.as_view(),
+        name="api-admin-order-payment-debug",
+    ),
     path("staff/orders/<int:order_id>/service-review/", views.AdminOrderServiceReviewApi.as_view(), name="api-admin-order-service-review"),
     path("staff/users/", views.AdminUsersApi.as_view(), name="api-admin-users"),
     path("staff/products/", views.AdminProductsApi.as_view(), name="api-admin-products"),
