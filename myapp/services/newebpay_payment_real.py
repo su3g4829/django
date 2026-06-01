@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict
 from urllib.parse import parse_qsl, urlencode
+from urllib.request import Request, urlopen
 
 from django.utils import timezone
 
@@ -28,8 +29,10 @@ from . import orders as order_service
 PROVIDER_NAME = "NewebPay Payment"
 MODE_NAME = "sandbox"
 DEFAULT_GATEWAY_URL = "https://ccore.newebpay.com/MPG/mpg_gateway"
+DEFAULT_QUERY_URL = "https://ccore.newebpay.com/API/QueryTradeInfo"
 DEFAULT_VERSION = "2.2"
 DEFAULT_RESPOND_TYPE = "JSON"
+DEFAULT_QUERY_VERSION = "1.3"
 MERCHANT_ORDER_PREFIX = "ORDER"
 DEFAULT_PAYMENT_FLAG_VALUES = {
     "CREDIT": 0,
@@ -77,6 +80,7 @@ class NewebpayRuntimeConfig:
     notify_url: str
     return_url: str
     client_back_url: str
+    query_url: str
 
 
 def _now_timestamp() -> int:
@@ -164,6 +168,7 @@ def _load_runtime_config() -> NewebpayRuntimeConfig:
     notify_url = os.getenv('NEWEBPAY_PAYMENT_NOTIFY_URL', '').strip()
     return_url = os.getenv('NEWEBPAY_PAYMENT_RETURN_URL', '').strip()
     client_back_url = os.getenv('NEWEBPAY_PAYMENT_CLIENT_BACK_URL', '').strip()
+    query_url = os.getenv('NEWEBPAY_PAYMENT_QUERY_URL', DEFAULT_QUERY_URL).strip() or DEFAULT_QUERY_URL
 
     missing = [
         name
@@ -187,6 +192,7 @@ def _load_runtime_config() -> NewebpayRuntimeConfig:
         notify_url=notify_url,
         return_url=return_url,
         client_back_url=client_back_url,
+        query_url=query_url,
     )
 
 
@@ -212,6 +218,7 @@ def get_runtime_summary(order_id: int | None = None) -> Dict[str, Any]:
     summary['notify_url'] = config.notify_url
     summary['return_url'] = _normalize_return_url(config.return_url)
     summary['client_back_url'] = _normalize_client_back_url(config.client_back_url, order_id) if order_id is not None else config.client_back_url
+    summary['query_url'] = config.query_url
     summary['enabled_payment_flags'] = _enabled_payment_flags()
     return summary
 
@@ -350,6 +357,41 @@ def _extract_store_fields(result: Dict[str, Any]) -> Dict[str, str]:
     }
 
 
+def _build_query_check_value(*, hash_key: str, hash_iv: str, merchant_id: str, merchant_order_no: str, amount: str) -> str:
+    payload = urlencode(
+        [
+            ('Amt', str(amount).strip()),
+            ('MerchantID', merchant_id.strip()),
+            ('MerchantOrderNo', merchant_order_no.strip()),
+        ]
+    )
+    raw = f"IV={hash_iv}&{payload}&Key={hash_key}"
+    return hashlib.sha256(raw.encode('utf-8')).hexdigest().upper()
+
+
+def _request_query_trade_info(config: NewebpayRuntimeConfig, *, merchant_order_no: str, amount: str) -> Dict[str, Any]:
+    payload = {
+        'MerchantID': config.merchant_id,
+        'Version': DEFAULT_QUERY_VERSION,
+        'RespondType': config.respond_type,
+        'CheckValue': _build_query_check_value(
+            hash_key=config.hash_key,
+            hash_iv=config.hash_iv,
+            merchant_id=config.merchant_id,
+            merchant_order_no=merchant_order_no,
+            amount=amount,
+        ),
+        'TimeStamp': _now_timestamp(),
+        'MerchantOrderNo': merchant_order_no,
+        'Amt': str(amount).strip(),
+    }
+    encoded = urlencode(payload).encode('utf-8')
+    request = Request(config.query_url, data=encoded, headers={'Content-Type': 'application/x-www-form-urlencoded'})
+    with urlopen(request, timeout=20) as response:  # nosec B310
+        raw = response.read().decode('utf-8')
+    return _normalize_decoded_payload(json.loads(raw))
+
+
 def _latest_payment_record(order_id: int, username: str) -> Dict[str, Any] | None:
     records = [
         item
@@ -362,10 +404,88 @@ def _latest_payment_record(order_id: int, username: str) -> Dict[str, Any] | Non
     return dict(records[0])
 
 
+def _latest_payment_record_for_order(order_id: int) -> Dict[str, Any] | None:
+    records = [
+        item
+        for item in local_store.get_newebpay_payment_logs()
+        if item.get('mode') == MODE_NAME and item.get('order_id') == order_id
+    ]
+    if not records:
+        return None
+    records.sort(key=lambda item: (item.get('updated_at', ''), item.get('created_at', '')), reverse=True)
+    return dict(records[0])
+
+
+def _should_sync_from_query(order: Dict[str, Any], latest_record: Dict[str, Any] | None) -> bool:
+    if not latest_record:
+        return False
+    merchant_order_no = str(latest_record.get('merchant_order_no', '')).strip()
+    amount = str(latest_record.get('amount', '')).strip()
+    if not merchant_order_no or not amount:
+        return False
+    if order.get('status') in {order_service.ORDER_STATUS_CANCELLED, order_service.ORDER_STATUS_REFUNDED}:
+        return False
+    if order.get('payment_method') == order_service.PAYMENT_METHOD_NEWEBPAY:
+        return True
+    if not str(order.get('payment_trade_no', '')).strip():
+        return True
+    if latest_record.get('status') == order_service.PAYMENT_STATUS_PENDING:
+        return True
+    return False
+
+
+def sync_order_payment_state(order_id: int) -> Dict[str, Any] | None:
+    order = local_store.get_order_by_id(order_id)
+    if not order:
+        return None
+
+    latest_record = _latest_payment_record_for_order(order_id)
+    if not _should_sync_from_query(order, latest_record):
+        return latest_record
+
+    merchant_order_no = str(latest_record.get('merchant_order_no', '')).strip()
+    amount = str(latest_record.get('amount', '')).strip()
+    if not merchant_order_no or not amount:
+        return latest_record
+
+    try:
+        config = _load_runtime_config()
+        decoded_payload = _request_query_trade_info(
+            config,
+            merchant_order_no=merchant_order_no,
+            amount=amount,
+        )
+    except Exception:
+        return latest_record
+
+    result_fields = extract_callback_result_fields(decoded_payload)
+    if not result_fields['merchant_order_no']:
+        return latest_record
+
+    persist_callback_record(
+        {
+            'provider': PROVIDER_NAME,
+            'mode': MODE_NAME,
+            'source': 'query',
+            'status': str(decoded_payload.get('Status', '')),
+            'merchant_id': config.merchant_id,
+            'trade_sha_verified': True,
+            'decoded_payload': decoded_payload,
+            'received_at': _now_iso(),
+        }
+    )
+    refreshed_order = local_store.get_order_by_id(order_id) or order
+    buyer_username = str(refreshed_order.get('username', '')).strip()
+    if buyer_username:
+        return _latest_payment_record(order_id, buyer_username)
+    return _latest_payment_record_for_order(order_id)
+
+
 def get_payment_record(order_id: int, username: str) -> Dict[str, Any] | None:
     order = order_service.get_order_detail_for_user(order_id, username)
     if not order:
         raise ValueError('Order not found.')
+    sync_order_payment_state(order_id)
     return _latest_payment_record(order_id, username)
 
 
@@ -373,6 +493,7 @@ def get_payment_debug(order_id: int) -> Dict[str, Any]:
     order = local_store.get_order_by_id(order_id)
     if not order:
         raise ValueError('Order not found.')
+    sync_order_payment_state(order_id)
     records = [
         dict(item)
         for item in local_store.get_newebpay_payment_logs()

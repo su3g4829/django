@@ -1041,6 +1041,7 @@ class BuyerOrderDetailApi(APIView):
     def get(self, request, order_id: int):
         """回傳買家訂單明細。"""
         user = get_demo_user(request)
+        newebpay_payment_real_service.sync_order_payment_state(order_id)
         order = order_service.get_order_detail_for_user(order_id, user["username"])
         if not order:
             return _error("Order not found.", status.HTTP_404_NOT_FOUND)
@@ -1293,6 +1294,7 @@ class SellerOrderDetailApi(APIView):
     def get(self, request, order_id: int):
         """回傳賣家訂單明細。"""
         user = get_demo_user(request)
+        newebpay_payment_real_service.sync_order_payment_state(order_id)
         order = order_service.get_order_detail_for_seller(order_id, user["username"])
         if not order:
             return _error("Order not found.", status.HTTP_404_NOT_FOUND)
