@@ -3282,6 +3282,48 @@ class ProductFeatureTests(SimpleTestCase):
         self.assertEqual(seller_order_response.json()["payment_status"], "paid")
         self.assertEqual(seller_order_response.json()["payment_trade_no"], "NPAYQUERY123")
 
+    def test_newebpay_payment_query_uses_integer_amount(self):
+        env = {
+            "NEWEBPAY_MERCHANT_ID": "MS123456789",
+            "NEWEBPAY_HASH_KEY": "12345678901234567890123456789012",
+            "NEWEBPAY_HASH_IV": "1234567890123456",
+            "NEWEBPAY_PAYMENT_NOTIFY_URL": "https://backend.example/api/v1/integrations/newebpay/payment/sandbox/callback/",
+            "NEWEBPAY_PAYMENT_RETURN_URL": "https://backend.example/api/v1/integrations/newebpay/payment/sandbox/return/",
+            "NEWEBPAY_PAYMENT_CLIENT_BACK_URL": "https://frontend.example/orders/1",
+        }
+
+        class _FakeResponse:
+            def __init__(self, body: str):
+                self.body = body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return self.body.encode("utf-8")
+
+        captured = {}
+
+        def fake_urlopen(request, timeout=0):
+            captured["body"] = request.data.decode("utf-8")
+            captured["timeout"] = timeout
+            return _FakeResponse('{"Status":"SUCCESS","Result":{"MerchantOrderNo":"ORDER1_1"}}')
+
+        with patch.dict(os.environ, env, clear=False):
+            config = newebpay_payment_real_service._load_runtime_config()
+            with patch("myapp.services.newebpay_payment_real.urlopen", side_effect=fake_urlopen):
+                newebpay_payment_real_service._request_query_trade_info(
+                    config,
+                    merchant_order_no="ORDER1_1",
+                    amount="680.00",
+                )
+
+        self.assertIn("Amt=680", captured["body"])
+        self.assertNotIn("Amt=680.00", captured["body"])
+
     def test_newebpay_payment_sandbox_callback_updates_order_store_fields(self):
         self._login(username="buyer")
         self._add_product_to_cart("acme-mug", qty=1)

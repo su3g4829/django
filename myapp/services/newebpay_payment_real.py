@@ -357,10 +357,15 @@ def _extract_store_fields(result: Dict[str, Any]) -> Dict[str, str]:
     }
 
 
+def _query_amount_string(value: Any) -> str:
+    return str(_normalize_amount(value))
+
+
 def _build_query_check_value(*, hash_key: str, hash_iv: str, merchant_id: str, merchant_order_no: str, amount: str) -> str:
+    normalized_amount = _query_amount_string(amount)
     payload = urlencode(
         [
-            ('Amt', str(amount).strip()),
+            ('Amt', normalized_amount),
             ('MerchantID', merchant_id.strip()),
             ('MerchantOrderNo', merchant_order_no.strip()),
         ]
@@ -370,6 +375,7 @@ def _build_query_check_value(*, hash_key: str, hash_iv: str, merchant_id: str, m
 
 
 def _request_query_trade_info(config: NewebpayRuntimeConfig, *, merchant_order_no: str, amount: str) -> Dict[str, Any]:
+    normalized_amount = _query_amount_string(amount)
     payload = {
         'MerchantID': config.merchant_id,
         'Version': DEFAULT_QUERY_VERSION,
@@ -379,11 +385,11 @@ def _request_query_trade_info(config: NewebpayRuntimeConfig, *, merchant_order_n
             hash_iv=config.hash_iv,
             merchant_id=config.merchant_id,
             merchant_order_no=merchant_order_no,
-            amount=amount,
+            amount=normalized_amount,
         ),
         'TimeStamp': _now_timestamp(),
         'MerchantOrderNo': merchant_order_no,
-        'Amt': str(amount).strip(),
+        'Amt': normalized_amount,
     }
     encoded = urlencode(payload).encode('utf-8')
     request = Request(config.query_url, data=encoded, headers={'Content-Type': 'application/x-www-form-urlencoded'})
@@ -414,6 +420,20 @@ def _latest_payment_record_for_order(order_id: int) -> Dict[str, Any] | None:
         return None
     records.sort(key=lambda item: (item.get('updated_at', ''), item.get('created_at', '')), reverse=True)
     return dict(records[0])
+
+
+def _record_query_diagnostic(order_id: int, **values: Any) -> None:
+    logs = list(local_store.get_newebpay_payment_logs())
+    records = [item for item in logs if item.get('mode') == MODE_NAME and item.get('order_id') == order_id]
+    if not records:
+        return
+    records.sort(key=lambda item: (item.get('updated_at', ''), item.get('created_at', '')), reverse=True)
+    target = records[0]
+    raw_payload = dict(target.get('raw_payload') or {})
+    raw_payload.update(values)
+    raw_payload['last_query_at'] = _now_iso()
+    target['raw_payload'] = raw_payload
+    local_store.save_newebpay_payment_logs(logs)
 
 
 def _should_sync_from_query(order: Dict[str, Any], latest_record: Dict[str, Any] | None) -> bool:
@@ -455,13 +475,33 @@ def sync_order_payment_state(order_id: int) -> Dict[str, Any] | None:
             merchant_order_no=merchant_order_no,
             amount=amount,
         )
-    except Exception:
+    except Exception as exc:
+        _record_query_diagnostic(
+            order_id,
+            last_query_error=str(exc),
+            last_query_amount=_query_amount_string(amount),
+            last_query_merchant_order_no=merchant_order_no,
+        )
         return latest_record
 
     result_fields = extract_callback_result_fields(decoded_payload)
     if not result_fields['merchant_order_no']:
+        _record_query_diagnostic(
+            order_id,
+            last_query_error='Query response missing MerchantOrderNo.',
+            last_query_amount=_query_amount_string(amount),
+            last_query_merchant_order_no=merchant_order_no,
+            last_query_response=decoded_payload,
+        )
         return latest_record
 
+    _record_query_diagnostic(
+        order_id,
+        last_query_error='',
+        last_query_amount=_query_amount_string(amount),
+        last_query_merchant_order_no=merchant_order_no,
+        last_query_response=decoded_payload,
+    )
     persist_callback_record(
         {
             'provider': PROVIDER_NAME,
