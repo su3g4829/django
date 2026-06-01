@@ -32,11 +32,12 @@ DEFAULT_VERSION = "2.2"
 DEFAULT_RESPOND_TYPE = "JSON"
 MERCHANT_ORDER_PREFIX = "ORDER"
 ENABLED_PAYMENT_FLAGS = {
-    "CREDIT": 1,
     "WEBATM": 1,
     "VACC": 1,
     "CVS": 1,
     "BARCODE": 1,
+    "ANDROIDPAY": 1,
+    "SAMSUNGPAY": 1,
 }
 STORE_TYPE_TO_BRAND = {
     "7-ELEVEN": "UNIMART",
@@ -278,6 +279,10 @@ def _normalized_payment_method(result: Dict[str, Any]) -> str:
     payment_type = str(result.get('PaymentType', '')).strip().upper()
     if payment_type.startswith('CREDIT'):
         return order_service.PAYMENT_METHOD_NEWEBPAY_CREDIT
+    if payment_type.startswith('GOOGLEPAY') or payment_type.startswith('ANDROIDPAY'):
+        return order_service.PAYMENT_METHOD_NEWEBPAY_GOOGLE_PAY
+    if payment_type.startswith('SAMSUNGPAY'):
+        return order_service.PAYMENT_METHOD_NEWEBPAY_SAMSUNG_PAY
     if payment_type.startswith('WEBATM'):
         return order_service.PAYMENT_METHOD_NEWEBPAY_WEBATM
     if payment_type.startswith('VACC'):

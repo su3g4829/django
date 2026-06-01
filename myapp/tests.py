@@ -3020,6 +3020,9 @@ class ProductFeatureTests(SimpleTestCase):
             store_prepare = self._post_json(f"/api/v1/me/orders/{store_order_id}/newebpay-payment/sandbox/", {})
 
         self.assertEqual(home_prepare.status_code, 200)
+        self.assertNotIn("CREDIT", home_prepare.json()["trade_info_params"])
+        self.assertEqual(home_prepare.json()["trade_info_params"]["ANDROIDPAY"], 1)
+        self.assertEqual(home_prepare.json()["trade_info_params"]["SAMSUNGPAY"], 1)
         self.assertEqual(home_prepare.json()["trade_info_params"]["CVSCOM"], 0)
         self.assertEqual(store_prepare.status_code, 200)
         self.assertEqual(store_prepare.json()["trade_info_params"]["CVSCOM"], 1)
@@ -3076,7 +3079,7 @@ class ProductFeatureTests(SimpleTestCase):
             "MerchantOrderNo": merchant_order_no,
             "TradeNo": "NPAYTEST123",
             "Amt": "13",
-            "PaymentType": "CREDIT",
+            "PaymentType": "GOOGLEPAY",
             "PayTime": "2026-06-01 12:00:00",
         }
         decrypted_trade_info = urlencode(
@@ -3117,7 +3120,7 @@ class ProductFeatureTests(SimpleTestCase):
         self.assertEqual(callback_log["trade_no"], "NPAYTEST123")
         self.assertEqual(callback_log["status"], "paid")
         order = local_store.get_order_by_id(order_id)
-        self.assertEqual(order["payment_method"], "newebpay_credit")
+        self.assertEqual(order["payment_method"], "newebpay_google_pay")
         self.assertEqual(order["payment_status"], "paid")
 
     def test_newebpay_payment_sandbox_callback_updates_order_store_fields(self):
@@ -3224,7 +3227,7 @@ class ProductFeatureTests(SimpleTestCase):
             "MerchantOrderNo": merchant_order_no,
             "TradeNo": "NPAYPAID123",
             "Amt": "13",
-            "PaymentType": "CREDIT",
+            "PaymentType": "SAMSUNGPAY",
             "PayTime": "2026-06-01 12:00:00",
         }
         decrypted_trade_info = urlencode(
