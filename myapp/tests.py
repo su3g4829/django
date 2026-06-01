@@ -3021,11 +3021,33 @@ class ProductFeatureTests(SimpleTestCase):
 
         self.assertEqual(home_prepare.status_code, 200)
         self.assertNotIn("CREDIT", home_prepare.json()["trade_info_params"])
-        self.assertEqual(home_prepare.json()["trade_info_params"]["ANDROIDPAY"], 1)
-        self.assertEqual(home_prepare.json()["trade_info_params"]["SAMSUNGPAY"], 1)
+        self.assertNotIn("ANDROIDPAY", home_prepare.json()["trade_info_params"])
+        self.assertNotIn("SAMSUNGPAY", home_prepare.json()["trade_info_params"])
         self.assertEqual(home_prepare.json()["trade_info_params"]["CVSCOM"], 0)
         self.assertEqual(store_prepare.status_code, 200)
         self.assertEqual(store_prepare.json()["trade_info_params"]["CVSCOM"], 1)
+
+    def test_newebpay_payment_sandbox_prepare_allows_optional_mobile_wallet_flags(self):
+        self._login(username="buyer")
+        self._add_product_to_cart("acme-mug", qty=1)
+        order_id = self._confirm_checkout().json()["id"]
+
+        env = {
+            "NEWEBPAY_MERCHANT_ID": "MS123456789",
+            "NEWEBPAY_HASH_KEY": "12345678901234567890123456789012",
+            "NEWEBPAY_HASH_IV": "1234567890123456",
+            "NEWEBPAY_PAYMENT_NOTIFY_URL": "https://backend.example/api/v1/integrations/newebpay/payment/sandbox/callback/",
+            "NEWEBPAY_PAYMENT_RETURN_URL": "https://backend.example/api/v1/integrations/newebpay/payment/sandbox/return/",
+            "NEWEBPAY_PAYMENT_CLIENT_BACK_URL": "https://frontend.example/orders/1",
+            "NEWEBPAY_ENABLE_ANDROIDPAY": "1",
+            "NEWEBPAY_ENABLE_SAMSUNGPAY": "1",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            prepare_response = self._post_json(f"/api/v1/me/orders/{order_id}/newebpay-payment/sandbox/", {})
+
+        self.assertEqual(prepare_response.status_code, 200)
+        self.assertEqual(prepare_response.json()["trade_info_params"]["ANDROIDPAY"], 1)
+        self.assertEqual(prepare_response.json()["trade_info_params"]["SAMSUNGPAY"], 1)
 
     def test_newebpay_payment_sandbox_prepare_requires_configuration(self):
         self._login(username="buyer")

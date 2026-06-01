@@ -31,13 +31,23 @@ DEFAULT_GATEWAY_URL = "https://ccore.newebpay.com/MPG/mpg_gateway"
 DEFAULT_VERSION = "2.2"
 DEFAULT_RESPOND_TYPE = "JSON"
 MERCHANT_ORDER_PREFIX = "ORDER"
-ENABLED_PAYMENT_FLAGS = {
+DEFAULT_PAYMENT_FLAG_VALUES = {
+    "CREDIT": 0,
     "WEBATM": 1,
     "VACC": 1,
     "CVS": 1,
     "BARCODE": 1,
-    "ANDROIDPAY": 1,
-    "SAMSUNGPAY": 1,
+    "ANDROIDPAY": 0,
+    "SAMSUNGPAY": 0,
+}
+PAYMENT_FLAG_ENV_MAP = {
+    "CREDIT": "NEWEBPAY_ENABLE_CREDIT",
+    "WEBATM": "NEWEBPAY_ENABLE_WEBATM",
+    "VACC": "NEWEBPAY_ENABLE_VACC",
+    "CVS": "NEWEBPAY_ENABLE_CVS",
+    "BARCODE": "NEWEBPAY_ENABLE_BARCODE",
+    "ANDROIDPAY": "NEWEBPAY_ENABLE_ANDROIDPAY",
+    "SAMSUNGPAY": "NEWEBPAY_ENABLE_SAMSUNGPAY",
 }
 STORE_TYPE_TO_BRAND = {
     "7-ELEVEN": "UNIMART",
@@ -125,6 +135,25 @@ def _format_money(value: Any) -> str:
     return str(Decimal(str(value)).quantize(Decimal('0.01')))
 
 
+def _env_flag(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip().lower()
+    if not raw:
+        return default
+    if raw in {"1", "true", "yes", "on"}:
+        return 1
+    if raw in {"0", "false", "no", "off"}:
+        return 0
+    return default
+
+
+def _enabled_payment_flags() -> Dict[str, int]:
+    return {
+        flag: _env_flag(PAYMENT_FLAG_ENV_MAP[flag], default)
+        for flag, default in DEFAULT_PAYMENT_FLAG_VALUES.items()
+        if _env_flag(PAYMENT_FLAG_ENV_MAP[flag], default)
+    }
+
+
 def _load_runtime_config() -> NewebpayRuntimeConfig:
     merchant_id = os.getenv('NEWEBPAY_MERCHANT_ID', '').strip()
     hash_key = os.getenv('NEWEBPAY_HASH_KEY', '').strip()
@@ -183,6 +212,7 @@ def get_runtime_summary(order_id: int | None = None) -> Dict[str, Any]:
     summary['notify_url'] = config.notify_url
     summary['return_url'] = _normalize_return_url(config.return_url)
     summary['client_back_url'] = _normalize_client_back_url(config.client_back_url, order_id) if order_id is not None else config.client_back_url
+    summary['enabled_payment_flags'] = _enabled_payment_flags()
     return summary
 
 
@@ -421,7 +451,7 @@ def prepare_checkout(
         'Email': email.strip(),
         'LoginType': 0,
     }
-    trade_info_params.update(ENABLED_PAYMENT_FLAGS)
+    trade_info_params.update(_enabled_payment_flags())
     trade_info_params['CVSCOM'] = 1 if order.get('shipping_method') == order_service.SHIPPING_METHOD_CONVENIENCE_STORE else 0
     trade_info_params = {key: value for key, value in trade_info_params.items() if value not in ('', None)}
 
