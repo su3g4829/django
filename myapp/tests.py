@@ -1,8 +1,7 @@
-﻿"""å°æ¡æ¸¬è©¦éåã
+﻿"""專案測試集合。
 
-éè£¡ä¸»è¦ä½¿ç¨ `SimpleTestCase` æ­é
-æ¬å° JSON fixtureï¼
-é©è­é é¢æµç¨ãDRF APIãè³¼ç©è»ãè¨å®ãè³£å®¶ä¸­å¿èç®¡çå¾å°åè½ã
+這裡主要使用 `SimpleTestCase` 搭配本地 JSON fixture，
+驗證頁面流程、DRF API、購物車、訂單、賣家中心與管理後台功能。
 """
 
 import json
@@ -247,10 +246,10 @@ USERS_FIXTURE = [
 
 
 def build_extra_products():
-    """å»ºç«é¡å¤åå fixtureã
+    """建立額外商品 fixture。
 
     Returns:
-        list[dict]: å ä¸å»¶ä¼¸ååå¾çæ¸¬è©¦è³æã
+        list[dict]: 加上延伸商品後的測試資料。
     """
     return PRODUCTS_FIXTURE + [
         {
@@ -287,10 +286,10 @@ def build_extra_products():
 
 
 def build_catalog_products():
-    """å»ºç«ååç®éæ¸¬è©¦å°ç¨ fixtureã
+    """建立商品目錄測試專用 fixture。
 
     Returns:
-        list[dict]: åååè¡¨é æç¨å°çå®æ´æ¸¬è©¦ååè³æã
+        list[dict]: 商品列表頁會用到的完整測試商品資料。
     """
     return [
         {
@@ -372,12 +371,9 @@ def build_catalog_products():
 
 
 def build_public_and_draft_products():
-    """å»ºç«åæå
-å«å
-¬éèèç¨¿ååç fixtureã
-
+    """建立同時包含公開與草稿商品的 fixture。
     Returns:
-        list[dict]: å¯ç¨ä¾é©è­å¯è¦æ§è¦åçååè³æã
+        list[dict]: 可用來驗證可見性規則的商品資料。
     """
     return [
         {
@@ -417,10 +413,10 @@ def build_public_and_draft_products():
 
 
 def build_seller_order_products():
-    """å»ºç«è³£å®¶è¨å®ç¸éæ¸¬è©¦ååã
+    """建立賣家訂單相關測試商品。
 
     Returns:
-        list[dict]: å«è³£å®¶è³è¨çååè³æã
+        list[dict]: 含賣家資訊的商品資料。
     """
     return [
         {
@@ -457,10 +453,10 @@ def build_seller_order_products():
 
 
 def build_variant_products():
-    """å»ºç«å«è®é«è SKU çæ¸¬è©¦ååã
+    """建立含變體與 SKU 的測試商品。
 
     Returns:
-        list[dict]: è®é«åè½æ¸¬è©¦ç¨ååè³æã
+        list[dict]: 變體功能測試用商品資料。
     """
     return [
         {
@@ -503,10 +499,10 @@ def build_variant_products():
 
 
 def build_attribute_products():
-    """å»ºç«å±¬æ§éæ¿¾æ¸¬è©¦ç¨ååã
+    """建立屬性過濾測試用商品。
 
     Returns:
-        list[dict]: å«é¡è²ãå°ºå¯¸ç­å±¬æ§çååè³æã
+        list[dict]: 含顏色、尺寸等屬性的商品資料。
     """
     return build_variant_products() + [
         {
@@ -539,12 +535,12 @@ def build_attribute_products():
 
 
 class ProductFeatureTests(SimpleTestCase):
-    """é©è­ååãè³¼ç©æµç¨è API çä¸»è¦æ´åè¡çºã"""
+    """驗證商品、購物流程與 API 的主要整合行為。"""
     def setUp(self):
-        """å»ºç«æ¸¬è©¦éè¦ç fixture è clientã
+        """建立測試需要的 fixture 與 client。
 
         Args:
-            self: ç®åæ¸¬è©¦é¡å¥å¯¦ä¾ã
+            self: 目前測試類別實例。
         """
         self.temp_dir = TemporaryDirectory()
         base_dir = Path(self.temp_dir.name)
@@ -567,89 +563,83 @@ class ProductFeatureTests(SimpleTestCase):
         self.client = Client()
 
     def tearDown(self):
-        """æ¸
-çæ¸¬è©¦ç¨æ«å­æªè override settingsã
+        """清理測試用暫存檔與 override settings。
 
         Args:
-            self: ç®åæ¸¬è©¦é¡å¥å¯¦ä¾ã
+            self: 目前測試類別實例。
         """
         local_store.clear_cache()
         self.override.disable()
         self.temp_dir.cleanup()
 
     def _write_json(self, path: Path, payload):
-        """å°æ¸¬è©¦è³æå¯«å
-¥ JSON æªæ¡ã
+        """將測試資料寫入 JSON 檔案。
 
         Args:
-            self: ç®åæ¸¬è©¦é¡å¥å¯¦ä¾ã
-            path: è¦å¯«å
-¥çæªæ¡è·¯å¾ã
-            payload: è¦å²å­ç Python è³æã
+            self: 目前測試類別實例。
+            path: 要寫入的檔案路徑。
+            payload: 要儲存的 Python 資料。
         """
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _write_products(self, products):
-        """å¿«éè¦å¯« products fixture å
-§å®¹ã
+        """快速覆寫 products fixture 內容。
 
         Args:
-            self: ç®åæ¸¬è©¦é¡å¥å¯¦ä¾ã
-            products: è¦å¯«å
-¥çåå fixture æ¸
-å®ã
+            self: 目前測試類別實例。
+            products: 要寫入的商品 fixture 清單。
         """
         data_dir = Path(self.temp_dir.name) / "data"
         self._write_json(data_dir / "products.json", products)
         local_store.clear_cache()
 
     def _post_json(self, path, payload):
-        """ä»¥ JSON request body ç¼åº POST è«æ±ã
+        """以 JSON request body 發出 POST 請求。
 
         Args:
-            self: ç®åæ¸¬è©¦é¡å¥å¯¦ä¾ã
-            path: ç®æ¨è·¯ç±ã
-            payload: è¦éåºç JSON payloadã
+            self: 目前測試類別實例。
+            path: 目標路由。
+            payload: 要送出的 JSON payload。
         """
         return self.client.post(path, data=json.dumps(payload), content_type="application/json")
 
     def _put_json(self, path, payload):
-        """ä»¥ JSON request body ç¼åº PUT è«æ±ã
+        """以 JSON request body 發出 PUT 請求。
 
         Args:
-            self: ç®åæ¸¬è©¦é¡å¥å¯¦ä¾ã
-            path: ç®æ¨è·¯ç±ã
-            payload: è¦éåºç JSON payloadã
+            self: 目前測試類別實例。
+            path: 目標路由。
+            payload: 要送出的 JSON payload。
         """
         return self.client.put(path, data=json.dumps(payload), content_type="application/json")
 
     def _patch_json(self, path, payload):
-        """æ¸¬è©¦è¼å©æ¹æ³ï¼_patch_jsonã
+        """測試輔助方法：_patch_json。
         
                 Args:
-                    self: ç¶åé¡å¥æ API view å¯¦ä¾ã
-                    path: æ¸¬è©¦æè·¯ç±è·¯å¾ã
-                    payload: è¦éåºæå¯«å¥çè³æã
+                    self: 當前類別或 API view 實例。
+                    path: 測試或路由路徑。
+                    payload: 要送出或寫入的資料。
                 """
         return self.client.patch(path, data=json.dumps(payload), content_type="application/json")
 
     def _add_to_cart(self, qty=1):
-        """æ¸¬è©¦è¼å©æ¹æ³ï¼_add_to_cartã
+        """測試輔助方法：_add_to_cart。
         
                 Args:
-                    self: ç¶åé¡å¥æ API view å¯¦ä¾ã
-                    qty: è©²æ¸¬è©¦ä½¿ç¨çåæ¸ã
+                    self: 當前類別或 API view 實例。
+                    qty: 該測試使用的參數。
                 """
         return self._add_product_to_cart("acme-mug", qty=qty)
 
     def _add_product_to_cart(self, slug, qty=1, variant_id=""):
-        """æ¸¬è©¦è¼å©æ¹æ³ï¼_add_product_to_cartã
+        """測試輔助方法：_add_product_to_cart。
         
                 Args:
-                    self: ç¶åé¡å¥æ API view å¯¦ä¾ã
-                    slug: åå slugã
-                    qty: è©²æ¸¬è©¦ä½¿ç¨çåæ¸ã
-                    variant_id: è©²æ¸¬è©¦ä½¿ç¨çåæ¸ã
+                    self: 當前類別或 API view 實例。
+                    slug: 商品 slug。
+                    qty: 該測試使用的參數。
+                    variant_id: 該測試使用的參數。
                 """
         payload = {"slug": slug, "qty": qty}
         if variant_id:
@@ -657,21 +647,21 @@ class ProductFeatureTests(SimpleTestCase):
         return self._post_json("/api/v1/cart/items/", payload)
 
     def _login(self, username="alice", password="demo123", next_url="/"):
-        """æ¸¬è©¦è¼å©æ¹æ³ï¼_loginã
+        """測試輔助方法：_login。
         
                 Args:
-                    self: ç¶åé¡å¥æ API view å¯¦ä¾ã
-                    username: æå¡å¸³èã
-                    password: è©²æ¸¬è©¦ä½¿ç¨çåæ¸ã
-                    next_url: å®æåä½å¾è¦å°åçç¶²åã
+                    self: 當前類別或 API view 實例。
+                    username: 會員帳號。
+                    password: 該測試使用的參數。
+                    next_url: 完成動作後要導向的網址。
                 """
         return self._post_json("/api/v1/auth/login/", {"username": username, "password": password})
 
     def _logout(self):
-        """æ¸¬è©¦è¼å©æ¹æ³ï¼_logoutã
+        """測試輔助方法：_logout。
         
                 Args:
-                    self: ç¶åé¡å¥æ API view å¯¦ä¾ã
+                    self: 當前類別或 API view 實例。
                 """
         return self.client.post("/api/v1/auth/logout/")
 
@@ -681,10 +671,10 @@ class ProductFeatureTests(SimpleTestCase):
         self.assertEqual(response["Location"], f"{settings.FRONTEND_ORIGIN}{path}")
 
     def _confirm_checkout(self):
-        """æ¸¬è©¦è¼å©æ¹æ³ï¼_confirm_checkoutã
+        """測試輔助方法：_confirm_checkout。
         
                 Args:
-                    self: ç¶åé¡å¥æ API view å¯¦ä¾ã
+                    self: 當前類別或 API view 實例。
                 """
         address_id = None
         addresses_response = self.client.get("/api/v1/me/addresses/")
