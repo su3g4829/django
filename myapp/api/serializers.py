@@ -10,6 +10,12 @@ from __future__ import annotations
 from rest_framework import serializers
 
 
+# ---------------------------------------------------------------------------
+# 商品瀏覽 / 商品主資料
+# 這一段描述商品總覽、商品明細、分類、比較頁會用到的 payload 結構。
+# 來源模組為 DRF `rest_framework.serializers`。
+# 功能是替 API view 做輸入驗證與輸出結構約束。
+# ---------------------------------------------------------------------------
 class ProductListQuerySerializer(serializers.Serializer):
     """ProductListQuerySerializer。
     
@@ -56,6 +62,7 @@ class ProductSerializer(serializers.Serializer):
     
     DRF Serializer，用來驗證請求資料或整理 API 回應格式。
     """
+    # 商品主識別與基本展示欄位
     id = serializers.IntegerField()
     slug = serializers.CharField()
     name = serializers.CharField()
@@ -63,10 +70,16 @@ class ProductSerializer(serializers.Serializer):
     compare_at_price = serializers.FloatField(required=False, allow_null=True)
     brand = serializers.CharField()
     category = serializers.CharField()
+    category_slug = serializers.CharField(required=False, allow_blank=True)
+    category_label = serializers.CharField(required=False, allow_blank=True)
+
+    # 商品附屬內容：tag、圖片、規格
     tags = serializers.ListField(child=serializers.CharField(), required=False)
     images = serializers.ListField(child=serializers.CharField(), required=False)
     primary_image = serializers.CharField(required=False, allow_blank=True)
     specs = serializers.DictField(required=False)
+
+    # 商品狀態 / 擁有者 / 建立時間
     stock = serializers.IntegerField(required=False, allow_null=True)
     status = serializers.CharField(required=False)
     owner_user_id = serializers.IntegerField(required=False, allow_null=True)
@@ -76,6 +89,8 @@ class ProductSerializer(serializers.Serializer):
     updated_at = serializers.CharField(required=False, allow_blank=True)
     created_at_display = serializers.CharField(required=False, allow_blank=True)
     updated_at_display = serializers.CharField(required=False, allow_blank=True)
+
+    # 變體與前端顯示輔助欄位
     has_variants = serializers.BooleanField(required=False)
     variant_count = serializers.IntegerField(required=False)
     variant_price_min = serializers.FloatField(required=False)
@@ -111,6 +126,32 @@ class ProductListResponseSerializer(serializers.Serializer):
     filters = serializers.DictField(required=False)
 
 
+class ProductCategorySerializer(serializers.Serializer):
+    """商品分類主表回應格式。"""
+
+    id = serializers.IntegerField(required=False)
+    slug = serializers.CharField()
+    label = serializers.CharField()
+    description = serializers.CharField(required=False, allow_blank=True)
+    is_active = serializers.BooleanField(required=False)
+    sort_order = serializers.IntegerField(required=False)
+
+
+class ProductCategoryListResponseSerializer(serializers.Serializer):
+    """商品分類列表回應格式。"""
+
+    items = ProductCategorySerializer(many=True)
+
+
+class ProductCategoryCreateSerializer(serializers.Serializer):
+    """建立商品分類的請求格式。"""
+
+    name = serializers.CharField()
+    slug = serializers.CharField(required=False, allow_blank=True)
+    description = serializers.CharField(required=False, allow_blank=True)
+    is_active = serializers.BooleanField(required=False, default=True)
+
+
 class ProductCompareResponseSerializer(serializers.Serializer):
     """商品比較頁的回應結構。"""
 
@@ -118,6 +159,9 @@ class ProductCompareResponseSerializer(serializers.Serializer):
     slugs = serializers.ListField(child=serializers.CharField())
 
 
+# ---------------------------------------------------------------------------
+# 商品評論 / 問答 / 推薦 / 比價
+# ---------------------------------------------------------------------------
 class ReviewSerializer(serializers.Serializer):
     """ReviewSerializer。
     
@@ -254,15 +298,20 @@ class PriceComparisonSerializer(serializers.Serializer):
     - 資料是否為 mock
     """
 
+    # 本站商品資訊
     our_product_slug = serializers.CharField()
     our_product_name = serializers.CharField()
     our_product_id = serializers.IntegerField()
     our_price = serializers.FloatField()
     currency = serializers.CharField()
+
+    # 比價來源摘要
     is_mock = serializers.BooleanField()
     source_type = serializers.CharField()
     last_refreshed_at = serializers.CharField()
     last_refreshed_at_display = serializers.CharField()
+
+    # 比價結論
     lowest_price = serializers.FloatField()
     our_store_is_lowest = serializers.BooleanField()
     items = CompetitorPriceItemSerializer(many=True)
@@ -275,6 +324,9 @@ class PriceComparisonRefreshSerializer(serializers.Serializer):
     result = PriceComparisonSerializer()
 
 
+# ---------------------------------------------------------------------------
+# 社群 / 論壇
+# ---------------------------------------------------------------------------
 class CommunityReplySerializer(serializers.Serializer):
     """CommunityReplySerializer。
     
@@ -360,10 +412,16 @@ class VoteResponseSerializer(serializers.Serializer):
     votes = serializers.IntegerField()
 
 
+# ---------------------------------------------------------------------------
+# 會員 / 地址 / 發票 / 運費
+# ---------------------------------------------------------------------------
 class DemoUserSerializer(serializers.Serializer):
-    """DemoUserSerializer。
-    
-    DRF Serializer，用來驗證請求資料或整理 API 回應格式。
+    """目前 demo 會員 snapshot 的回應格式。
+
+    主要供：
+    - `/api/v1/me/`
+    - `/api/v1/app/bootstrap/`
+    - 會員中心與後台會員管理頁
     """
     id = serializers.IntegerField()
     username = serializers.CharField()
@@ -400,9 +458,11 @@ class ToggleStateSerializer(serializers.Serializer):
 
 
 class AddressSerializer(serializers.Serializer):
-    """AddressSerializer。
-    
-    DRF Serializer，用來驗證請求資料或整理 API 回應格式。
+    """會員地址簿中的單筆地址格式。
+
+    主要供：
+    - 地址管理頁
+    - checkout 地址選擇區塊
     """
     id = serializers.IntegerField()
     label = serializers.CharField()
@@ -439,10 +499,7 @@ class AddressListResponseSerializer(serializers.Serializer):
 
 
 class InvoiceProfileSerializer(serializers.Serializer):
-    """InvoiceProfileSerializer。
-    
-    DRF Serializer，用來驗證請求資料或整理 API 回應格式。
-    """
+    """會員發票設定資料格式。"""
     invoice_type = serializers.CharField()
     carrier_code = serializers.CharField(required=False, allow_blank=True)
     company_name = serializers.CharField(required=False, allow_blank=True)
@@ -462,7 +519,10 @@ class InvoiceProfileUpdateSerializer(serializers.Serializer):
 
 
 class SellerShippingRulesSerializer(serializers.Serializer):
-    """Seller-level shipping rules."""
+    """賣家運費規則資料格式。
+
+    主要供賣家運費設定頁與商品運送規則覆寫邏輯使用。
+    """
 
     home_delivery_enabled = serializers.BooleanField()
     home_delivery_fee = serializers.CharField()
@@ -471,6 +531,9 @@ class SellerShippingRulesSerializer(serializers.Serializer):
     free_shipping_threshold = serializers.CharField()
 
 
+# ---------------------------------------------------------------------------
+# 訂單 / 付款 / 出貨
+# ---------------------------------------------------------------------------
 class OrderServiceRequestCreateSerializer(serializers.Serializer):
     """OrderServiceRequestCreateSerializer。
     
@@ -480,9 +543,9 @@ class OrderServiceRequestCreateSerializer(serializers.Serializer):
 
 
 class ServiceRequestSerializer(serializers.Serializer):
-    """ServiceRequestSerializer。
-    
-    DRF Serializer，用來驗證請求資料或整理 API 回應格式。
+    """訂單售後服務請求格式。
+
+    用來描述取消 / 退款申請目前的狀態、原因與審核資訊。
     """
     type = serializers.CharField(allow_blank=True)
     status = serializers.CharField(allow_blank=True)
@@ -498,9 +561,12 @@ class ServiceRequestSerializer(serializers.Serializer):
 
 
 class SellerLineSerializer(serializers.Serializer):
-    """SellerLineSerializer。
-    
-    DRF Serializer，用來驗證請求資料或整理 API 回應格式。
+    """訂單中的單一賣家商品列格式。
+
+    這份結構會同時出現在：
+    - 買家訂單明細
+    - 賣家訂單明細
+    - 平台訂單明細
     """
     id = serializers.IntegerField()
     slug = serializers.CharField()
@@ -524,9 +590,9 @@ class SellerLineSerializer(serializers.Serializer):
 
 
 class ShipmentGroupSerializer(serializers.Serializer):
-    """ShipmentGroupSerializer。
-    
-    DRF Serializer，用來驗證請求資料或整理 API 回應格式。
+    """賣家出貨分組格式。
+
+    用來把同一張訂單內屬於同一賣家的 item 合併展示成一組。
     """
     seller_username = serializers.CharField()
     seller_display_name = serializers.CharField()
@@ -547,14 +613,23 @@ class CheckoutChoiceSerializer(serializers.Serializer):
 
 
 class OrderSerializer(serializers.Serializer):
-    """OrderSerializer。
-    
-    DRF Serializer，用來驗證請求資料或整理 API 回應格式。
+    """訂單主體回應格式。
+
+    這是買家、賣家、管理端訂單頁共用的核心結構，
+    會依視角附帶：
+    - 收件資訊
+    - 付款資訊
+    - 超商門市資訊
+    - 出貨分組
+    - 售後申請
     """
+    # 訂單主識別與買家資訊
     id = serializers.IntegerField()
     buyer_user_id = serializers.IntegerField(required=False, allow_null=True)
     username = serializers.CharField()
     display_name = serializers.CharField()
+
+    # 訂單與付款 / 履約狀態摘要
     status = serializers.CharField()
     status_label = serializers.CharField(required=False)
     coupon = serializers.CharField(required=False, allow_blank=True, allow_null=True)
@@ -571,6 +646,8 @@ class OrderSerializer(serializers.Serializer):
     tracking_number = serializers.CharField(required=False, allow_blank=True)
     shipped_at_display = serializers.CharField(required=False, allow_blank=True)
     completed_at_display = serializers.CharField(required=False, allow_blank=True)
+
+    # 收件 / 配送 / 付款資訊 snapshot
     shipping_address = serializers.DictField(required=False)
     shipping_method = serializers.CharField(required=False, allow_blank=True)
     shipping_method_label = serializers.CharField(required=False, allow_blank=True)
@@ -583,6 +660,8 @@ class OrderSerializer(serializers.Serializer):
     pickup_store_address = serializers.CharField(required=False, allow_blank=True)
     invoice_profile = serializers.DictField(required=False)
     buyer_note = serializers.CharField(required=False, allow_blank=True)
+
+    # 售後與明細區塊
     service_request = ServiceRequestSerializer(required=False)
     can_request_cancel = serializers.BooleanField(required=False)
     can_request_refund = serializers.BooleanField(required=False)
@@ -608,21 +687,32 @@ class NewebpayPaymentCreateSerializer(serializers.Serializer):
 
 
 class NewebpayPaymentRecordSerializer(serializers.Serializer):
-    """藍新支付 mock 交易資料。"""
+    """藍新付款紀錄格式。
 
+    用來描述一筆已建立或已收到 callback 的 payment record，
+    供買家頁與 staff debug 顯示。
+    """
+
+    # 交易來源與識別
     provider = serializers.CharField()
     mode = serializers.CharField()
     order_id = serializers.IntegerField()
     buyer_username = serializers.CharField()
     merchant_order_no = serializers.CharField()
     trade_no = serializers.CharField()
+
+    # 交易狀態與金額
     status = serializers.CharField()
     status_label = serializers.CharField(required=False, allow_blank=True)
     amount = serializers.CharField()
     currency = serializers.CharField()
+
+    # 回前端 / 回商店相關網址
     payment_url = serializers.CharField()
     return_url = serializers.CharField(required=False, allow_blank=True)
     client_back_url = serializers.CharField(required=False, allow_blank=True)
+
+    # 建立、更新與 callback 歷程
     created_at = serializers.CharField()
     updated_at = serializers.CharField()
     paid_at = serializers.CharField(required=False, allow_blank=True)
@@ -640,6 +730,9 @@ class NewebpayPaymentCallbackSerializer(serializers.Serializer):
     result_message = serializers.CharField(required=False, allow_blank=True)
 
 
+# ---------------------------------------------------------------------------
+# 平台報表 / 管理端查詢
+# ---------------------------------------------------------------------------
 class SellerOrderUpdateSerializer(serializers.Serializer):
     """SellerOrderUpdateSerializer。
     
@@ -651,10 +744,7 @@ class SellerOrderUpdateSerializer(serializers.Serializer):
 
 
 class SalesReportSerializer(serializers.Serializer):
-    """SalesReportSerializer。
-    
-    DRF Serializer，用來驗證請求資料或整理 API 回應格式。
-    """
+    """賣家銷售報表格式。"""
     order_count = serializers.IntegerField()
     units_sold = serializers.IntegerField()
     revenue = serializers.CharField()
@@ -680,10 +770,7 @@ class DashboardSummarySerializer(serializers.Serializer):
 
 
 class AdminDashboardSerializer(serializers.Serializer):
-    """AdminDashboardSerializer。
-    
-    DRF Serializer，用來驗證請求資料或整理 API 回應格式。
-    """
+    """後台儀表板摘要格式。"""
     users = serializers.DictField()
     products = serializers.DictField()
     orders = serializers.DictField()
@@ -741,7 +828,7 @@ class AdminOrdersQuerySerializer(serializers.Serializer):
 
 
 class AdminProductsQuerySerializer(serializers.Serializer):
-    """Admin products query filters."""
+    """後台商品管理列表的查詢條件。"""
 
     q = serializers.CharField(required=False, allow_blank=True)
     status = serializers.CharField(required=False, allow_blank=True)
@@ -751,21 +838,21 @@ class AdminProductsQuerySerializer(serializers.Serializer):
 
 
 class AdminReviewsQuerySerializer(serializers.Serializer):
-    """Admin reviews query filters."""
+    """後台評論審核列表的查詢條件。"""
 
     q = serializers.CharField(required=False, allow_blank=True)
     rating = serializers.CharField(required=False, allow_blank=True)
 
 
 class AdminQuestionsQuerySerializer(serializers.Serializer):
-    """Admin questions query filters."""
+    """後台問答管理列表的查詢條件。"""
 
     q = serializers.CharField(required=False, allow_blank=True)
     answered = serializers.CharField(required=False, allow_blank=True)
 
 
 class AdminPostsQuerySerializer(serializers.Serializer):
-    """Admin posts query filters."""
+    """後台社群文章管理列表的查詢條件。"""
 
     q = serializers.CharField(required=False, allow_blank=True)
     topic = serializers.CharField(required=False, allow_blank=True)
@@ -936,10 +1023,14 @@ class ProductReviewDecisionSerializer(serializers.Serializer):
     note = serializers.CharField(required=False, allow_blank=True)
 
 
+# ---------------------------------------------------------------------------
+# 購物車 / Checkout
+# 這一段是前台交易主流程最常用到的 serializer。
+# ---------------------------------------------------------------------------
 class CartItemSerializer(serializers.Serializer):
-    """CartItemSerializer。
-    
-    DRF Serializer，用來驗證請求資料或整理 API 回應格式。
+    """購物車單項格式。
+
+    用來描述一筆 cart line，包括商品、變體、數量與行小計。
     """
     key = serializers.CharField()
     id = serializers.IntegerField()
@@ -955,10 +1046,7 @@ class CartItemSerializer(serializers.Serializer):
 
 
 class CartTotalsSerializer(serializers.Serializer):
-    """CartTotalsSerializer。
-    
-    DRF Serializer，用來驗證請求資料或整理 API 回應格式。
-    """
+    """購物車 / checkout 使用的金額摘要格式。"""
     subtotal = serializers.DecimalField(max_digits=10, decimal_places=2)
     shipping = serializers.DecimalField(max_digits=10, decimal_places=2)
     discount = serializers.DecimalField(max_digits=10, decimal_places=2)
@@ -966,16 +1054,25 @@ class CartTotalsSerializer(serializers.Serializer):
 
 
 class CartResponseSerializer(serializers.Serializer):
-    """CartResponseSerializer。
-    
-    負責定義 API 回應結構，讓前端可以穩定取得固定欄位。
+    """購物車頁主要回應格式。
+
+    供前端一次拿到：
+    - items
+    - totals
+    - 運送方式
+    - 分賣家運費資訊
     """
+    # cart line items
     items = CartItemSerializer(many=True)
     coupon = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     item_count = serializers.IntegerField()
+
+    # 金額與結帳選項
     totals = CartTotalsSerializer()
     shipping_methods = CheckoutChoiceSerializer(many=True, required=False)
     selected_shipping_method = serializers.CharField(required=False, allow_blank=True)
+
+    # 分賣家運費資訊與提示訊息
     seller_shipping_groups = serializers.ListField(child=serializers.DictField(), required=False)
     detail = serializers.CharField(required=False)
 
@@ -1007,23 +1104,30 @@ class CartUpdateSerializer(serializers.Serializer):
 
 
 class CheckoutPreviewSerializer(serializers.Serializer):
-    """CheckoutPreviewSerializer。
-    
-    DRF Serializer，用來驗證請求資料或整理 API 回應格式。
+    """checkout 頁預覽資料格式。
+
+    這是前端繪製 checkout 畫面時最完整的一包 snapshot。
     """
+    # 購物車摘要
     items = CartItemSerializer(many=True)
     coupon = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     item_count = serializers.IntegerField()
     totals = CartTotalsSerializer()
+
+    # 會員結帳資料
     addresses = AddressSerializer(many=True, required=False)
     default_address = serializers.DictField(required=False, allow_null=True)
     invoice_profile = serializers.DictField(required=False)
+
+    # 可選的配送 / 付款 / 超商品牌
     shipping_methods = CheckoutChoiceSerializer(many=True, required=False)
     payment_methods = CheckoutChoiceSerializer(many=True, required=False)
     convenience_store_brands = CheckoutChoiceSerializer(many=True, required=False)
     selected_address_id = serializers.IntegerField(required=False, allow_null=True)
     selected_shipping_method = serializers.CharField(required=False, allow_blank=True)
     selected_payment_method = serializers.CharField(required=False, allow_blank=True)
+
+    # 其他前端控制欄位
     seller_shipping_groups = serializers.ListField(child=serializers.DictField(), required=False)
     user = DemoUserSerializer(required=False, allow_null=True)
     requires_login = serializers.BooleanField()
@@ -1056,6 +1160,9 @@ class CheckoutConfirmSerializer(serializers.Serializer):
     buyer_note = serializers.CharField(required=False, allow_blank=True)
 
 
+# ---------------------------------------------------------------------------
+# 賣家商品寫入 / staff review / NewebPay store map
+# ---------------------------------------------------------------------------
 class StatusChoiceSerializer(serializers.Serializer):
     """StatusChoiceSerializer。
     
@@ -1066,10 +1173,11 @@ class StatusChoiceSerializer(serializers.Serializer):
 
 
 class SellerProductWriteSerializer(serializers.Serializer):
-    """SellerProductWriteSerializer。
-    
-    DRF Serializer，用來驗證請求資料或整理 API 回應格式。
+    """賣家商品建立 / 更新表單格式。
+
+    對應賣家商品新增頁與編輯頁送出的欄位。
     """
+    # 商品主資料
     name = serializers.CharField()
     price = serializers.CharField()
     compare_at_price = serializers.CharField(required=False, allow_blank=True)
@@ -1080,11 +1188,15 @@ class SellerProductWriteSerializer(serializers.Serializer):
     variants = serializers.CharField(required=False, allow_blank=True)
     status = serializers.CharField(required=False, allow_blank=True)
     stock = serializers.CharField(required=False, allow_blank=True)
+
+    # 商品運送規則設定
     use_seller_shipping_rules = serializers.CharField(required=False, allow_blank=True)
     allow_home_delivery = serializers.CharField(required=False, allow_blank=True)
     allow_convenience_store = serializers.CharField(required=False, allow_blank=True)
     override_home_delivery_fee = serializers.CharField(required=False, allow_blank=True)
     override_convenience_store_fee = serializers.CharField(required=False, allow_blank=True)
+
+    # 前端編輯商品圖片時的保留 / 移除清單
     existing_image_paths = serializers.ListField(child=serializers.CharField(), required=False)
     remove_image_paths = serializers.ListField(child=serializers.CharField(), required=False)
 
@@ -1099,10 +1211,7 @@ class SellerProductListResponseSerializer(serializers.Serializer):
 
 
 class StaffReviewDashboardSerializer(serializers.Serializer):
-    """StaffReviewDashboardSerializer。
-    
-    DRF Serializer，用來驗證請求資料或整理 API 回應格式。
-    """
+    """staff review dashboard 的回應格式。"""
     managed_products = ProductSerializer(many=True)
     seller_requests = DemoUserSerializer(many=True)
 
@@ -1124,15 +1233,23 @@ class NewebpaySandboxPaymentPrepareSerializer(serializers.Serializer):
 
 
 class NewebpaySandboxPaymentPreparedSerializer(serializers.Serializer):
-    """藍新 sandbox form post payload。"""
+    """藍新 sandbox form post payload。
 
+    前端會用這份資料建立 auto-submit form，導頁到藍新 gateway。
+    """
+
+    # 平台與訂單辨識
     provider = serializers.CharField()
     mode = serializers.CharField()
     order_id = serializers.IntegerField()
     buyer_username = serializers.CharField()
+    merchant_order_no = serializers.CharField()
+
+    # 前端真正送往藍新的 gateway 設定
     gateway_url = serializers.CharField()
     form_method = serializers.CharField()
-    merchant_order_no = serializers.CharField()
+
+    # staff debug 可讀的明文 / 密文欄位
     trade_info_params = serializers.DictField()
     form_fields = serializers.DictField()
     note = serializers.CharField()
@@ -1148,7 +1265,7 @@ class NewebpaySandboxPaymentCallbackSerializer(serializers.Serializer):
 
 
 class CheckoutStoreMapPrepareSerializer(serializers.Serializer):
-    """Prepare NewebPay convenience-store map selection."""
+    """準備藍新超商選店所需的請求欄位。"""
 
     pickup_store_brand = serializers.CharField()
     payment_method = serializers.CharField(required=False, allow_blank=True)
@@ -1156,8 +1273,9 @@ class CheckoutStoreMapPrepareSerializer(serializers.Serializer):
 
 
 class CheckoutStoreMapPreparedSerializer(serializers.Serializer):
-    """Return the auto-submit form payload for NewebPay storeMap."""
+    """藍新 store-map 自動送出 payload 的回應格式。"""
 
+    # 基本識別資訊
     provider = serializers.CharField()
     mode = serializers.CharField()
     selection_token = serializers.CharField()
@@ -1166,17 +1284,21 @@ class CheckoutStoreMapPreparedSerializer(serializers.Serializer):
     pickup_store_brand_label = serializers.CharField()
     payment_method = serializers.CharField(required=False, allow_blank=True)
     merchant_order_no = serializers.CharField()
+
+    # 實際送往藍新的表單資訊
     action_url = serializers.CharField()
     form_method = serializers.CharField()
     callback_url = serializers.CharField()
     return_url = serializers.CharField()
+
+    # debug / 檢查用途
     plain_params = serializers.DictField()
     form_fields = serializers.DictField()
     note = serializers.CharField()
 
 
 class CheckoutStoreSelectionSerializer(serializers.Serializer):
-    """Return the selected convenience-store data for checkout."""
+    """checkout 回填超商門市時使用的資料格式。"""
 
     selection_token = serializers.CharField()
     status = serializers.CharField()
@@ -1191,7 +1313,7 @@ class CheckoutStoreSelectionSerializer(serializers.Serializer):
 
 
 class NewebpayStoreMapCallbackSerializer(serializers.Serializer):
-    """Receive NewebPay store-map callback payload."""
+    """藍新 store-map callback 原始欄位。"""
 
     MerchantID = serializers.CharField(required=False, allow_blank=True)
     MerchantOrderNo = serializers.CharField(required=False, allow_blank=True)

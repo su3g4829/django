@@ -1,13 +1,18 @@
-"""Registry of DRF API routes used by the API docs page.
+"""API 文件頁使用的 DRF route 註冊表。
 
-This module keeps a curated list of:
-- canonical API routes
-- legacy aliases
-- related DRF views
-- short implementation notes
+這個模組不是 Django `urlpatterns` 本體，而是給文件頁 / 路由說明頁使用的
+靜態描述資料。它會整理：
+- canonical API route
+- legacy alias
+- 對應的 DRF view 類別
+- 簡短的用途與實作註記
 """
 from __future__ import annotations
 
+# 這份靜態資料主要提供：
+# - 前端 docs / routes 頁
+# - API 文件整理頁
+# - 舊路由與新路由的人工對照
 API_ROUTE_GROUPS = [
     {
         "group": "Schema",

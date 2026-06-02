@@ -4,12 +4,14 @@ import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 
 import { apiFetch, toQueryString } from '@/lib/api'
+import type { ProductCategoryOption } from '@/lib/types'
 
 type AdminProduct = {
   id: number
   slug: string
   name: string
   category: string
+  category_slug?: string
   brand: string
   price: number
   compare_at_price?: number | null
@@ -53,7 +55,9 @@ function compareNullableNumber(a?: number | null, b?: number | null) {
 
 export default function AdminProductsPage() {
   const [items, setItems] = useState<AdminProduct[]>([])
+  const [categories, setCategories] = useState<ProductCategoryOption[]>([])
   const [filters, setFilters] = useState(EMPTY_FILTERS)
+  const [categoryForm, setCategoryForm] = useState({ name: '', slug: '' })
   const [sortBy, setSortBy] = useState<ProductSortKey>('updated_desc')
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
@@ -67,14 +71,25 @@ export default function AdminProductsPage() {
       setItems(payload.items)
       setError('')
     } catch (err) {
-      setError(err instanceof Error ? err.message : '讀取商品列表失敗。')
+      setError(err instanceof Error ? err.message : '無法載入商品列表。')
     } finally {
       setLoading(false)
     }
   }
 
+  async function loadCategories() {
+    try {
+      const payload = await apiFetch<{ items: ProductCategoryOption[] }>('/staff/product-categories/')
+      setCategories(payload.items)
+      setError('')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '無法載入商品分類。')
+    }
+  }
+
   useEffect(() => {
     void loadProducts()
+    void loadCategories()
   }, [])
 
   const sortedItems = useMemo(() => {
@@ -115,7 +130,33 @@ export default function AdminProductsPage() {
   async function handleStaleProduct() {
     await loadProducts(filters)
     setError('')
-    setMessage('這筆商品已不存在，列表已重新同步。')
+    setMessage('商品列表已重新整理。')
+  }
+
+  async function createCategory() {
+    const name = categoryForm.name.trim()
+    if (!name) {
+      setError('請輸入分類名稱。')
+      return
+    }
+    try {
+      setSubmitting(true)
+      setMessage('')
+      await apiFetch('/staff/product-categories/', {
+        method: 'POST',
+        body: JSON.stringify({
+          name,
+          slug: categoryForm.slug.trim(),
+        }),
+      })
+      setCategoryForm({ name: '', slug: '' })
+      await loadCategories()
+      setMessage('商品分類已建立。')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '建立商品分類失敗。')
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   async function archiveProduct(slug: string) {
@@ -163,7 +204,7 @@ export default function AdminProductsPage() {
   }
 
   async function deleteProduct(slug: string) {
-    if (!window.confirm('確定要刪除這筆商品嗎？此操作無法復原。')) {
+    if (!window.confirm('確定要刪除此商品嗎？這個動作無法復原。')) {
       return
     }
     try {
@@ -188,16 +229,55 @@ export default function AdminProductsPage() {
     <section className="card stack">
       <div className="stack" style={{ gap: '0.25rem' }}>
         <h1>商品管理</h1>
-        <p className="muted">管理者可快速查看全站商品、依條件篩選，並直接進行查看、編輯、上架、下架或刪除。</p>
+        <p className="muted">管理者可在此檢視商品、建立商品分類，並對商品執行上架、下架或刪除。</p>
       </div>
+
+      <section className="card stack">
+        <div className="stack" style={{ gap: '0.25rem' }}>
+          <h2>商品分類主表</h2>
+          <p className="muted">賣家新增或編輯商品時，分類選單與前台商品篩選都會讀這份主表。</p>
+        </div>
+
+        <div className="grid grid-3">
+          <label className="field">
+            <span>分類名稱</span>
+            <input
+              value={categoryForm.name}
+              onChange={(event) => setCategoryForm((current) => ({ ...current, name: event.target.value }))}
+              placeholder="例如：上衣"
+            />
+          </label>
+          <label className="field">
+            <span>分類 slug</span>
+            <input
+              value={categoryForm.slug}
+              onChange={(event) => setCategoryForm((current) => ({ ...current, slug: event.target.value }))}
+              placeholder="可留空，自動產生"
+            />
+          </label>
+          <div className="field" style={{ alignSelf: 'end' }}>
+            <button className="btn" disabled={submitting} onClick={() => void createCategory()} type="button">
+              建立分類
+            </button>
+          </div>
+        </div>
+
+        <div className="row" style={{ flexWrap: 'wrap', gap: '0.5rem' }}>
+          {categories.map((category) => (
+            <span key={category.slug} className="badge">
+              {category.label} ({category.slug})
+            </span>
+          ))}
+        </div>
+      </section>
 
       <div className="grid grid-3">
         <label className="field">
-          <span>搜尋關鍵字</span>
+          <span>關鍵字</span>
           <input
             value={filters.q}
             onChange={(event) => setFilters((prev) => ({ ...prev, q: event.target.value }))}
-            placeholder="商品名稱、slug、賣家"
+            placeholder="商品名稱、slug、品牌或賣家"
           />
         </label>
         <label className="field">
@@ -211,7 +291,14 @@ export default function AdminProductsPage() {
         </label>
         <label className="field">
           <span>分類</span>
-          <input value={filters.category} onChange={(event) => setFilters((prev) => ({ ...prev, category: event.target.value }))} />
+          <select value={filters.category} onChange={(event) => setFilters((prev) => ({ ...prev, category: event.target.value }))}>
+            <option value="">全部分類</option>
+            {categories.map((category) => (
+              <option key={category.slug} value={category.slug}>
+                {category.label}
+              </option>
+            ))}
+          </select>
         </label>
         <label className="field">
           <span>品牌</span>
@@ -224,12 +311,12 @@ export default function AdminProductsPage() {
         <label className="field">
           <span>排序</span>
           <select value={sortBy} onChange={(event) => setSortBy(event.target.value as ProductSortKey)}>
-            <option value="updated_desc">最後更新：新到舊</option>
-            <option value="updated_asc">最後更新：舊到新</option>
+            <option value="updated_desc">更新時間：新到舊</option>
+            <option value="updated_asc">更新時間：舊到新</option>
             <option value="created_desc">建立時間：新到舊</option>
             <option value="created_asc">建立時間：舊到新</option>
-            <option value="price_desc">售價：高到低</option>
-            <option value="price_asc">售價：低到高</option>
+            <option value="price_desc">價格：高到低</option>
+            <option value="price_asc">價格：低到高</option>
             <option value="stock_desc">庫存：高到低</option>
             <option value="stock_asc">庫存：低到高</option>
             <option value="name_asc">名稱：A 到 Z</option>
@@ -249,7 +336,7 @@ export default function AdminProductsPage() {
           }}
           type="button"
         >
-          清除條件
+          清除篩選
         </button>
       </div>
 
@@ -257,7 +344,7 @@ export default function AdminProductsPage() {
       {message ? <div className="notice success">{message}</div> : null}
 
       {loading ? (
-        <div className="muted">正在讀取商品列表...</div>
+        <div className="muted">載入商品中...</div>
       ) : !sortedItems.length ? (
         <div className="muted">目前沒有符合條件的商品。</div>
       ) : (
@@ -265,16 +352,16 @@ export default function AdminProductsPage() {
           <table className="table">
             <thead>
               <tr>
-                <th>商品圖片</th>
-                <th>商品名稱</th>
-                <th>商品分類</th>
+                <th>縮圖</th>
+                <th>商品</th>
+                <th>分類</th>
                 <th>品牌</th>
                 <th>原價</th>
                 <th>售價</th>
                 <th>庫存</th>
                 <th>狀態</th>
                 <th>賣家</th>
-                <th>上架時間</th>
+                <th>建立時間</th>
                 <th>操作</th>
               </tr>
             </thead>
@@ -306,11 +393,11 @@ export default function AdminProductsPage() {
                   <td>
                     <div className="stack" style={{ gap: '0.5rem' }}>
                       {item.status === 'active' ? (
-                        <Link href={`/products/${item.slug}`}>查看</Link>
+                        <Link href={`/products/${item.slug}`}>查看前台</Link>
                       ) : (
-                        <span className="muted">未公開</span>
+                        <span className="muted">尚未公開</span>
                       )}
-                      <Link href={`/me/products/${item.slug}?returnTo=/staff/products`}>編輯</Link>
+                      <Link href={`/me/products/${item.slug}?returnTo=/staff/products`}>編輯商品</Link>
                       {item.status === 'active' ? (
                         <button
                           className="btn btn-secondary"

@@ -14,6 +14,7 @@ import {
   sumSizeRowStock,
 } from '@/lib/product-variants'
 import { clearSessionDraft, getSessionDraft, setSessionDraft } from '@/lib/session-drafts'
+import type { ProductCategoryOption } from '@/lib/types'
 
 type ProductDraftForm = {
   name: string
@@ -151,6 +152,7 @@ function SizeStockEditor({
 export default function SellerProductCreatePage() {
   const [mounted, setMounted] = useState(false)
   const [form, setForm] = useState<ProductDraftForm>(EMPTY_FORM)
+  const [categories, setCategories] = useState<ProductCategoryOption[]>([])
   const [files, setFiles] = useState<FileList | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
@@ -170,6 +172,30 @@ export default function SellerProductCreatePage() {
     }
     setDraftLoaded(true)
   }, [mounted])
+
+  useEffect(() => {
+    if (!mounted) {
+      return
+    }
+
+    async function loadCategories() {
+      try {
+        const payload = await apiFetch<{ items: ProductCategoryOption[] }>('/product-categories/')
+        setCategories(payload.items)
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to load product categories.')
+      }
+    }
+
+    void loadCategories()
+  }, [mounted])
+
+  useEffect(() => {
+    if (!categories.length || form.category) {
+      return
+    }
+    setForm((current) => ({ ...current, category: categories[0]?.slug ?? '' }))
+  }, [categories, form.category])
 
   useEffect(() => {
     if (!draftLoaded) {
@@ -386,7 +412,14 @@ export default function SellerProductCreatePage() {
 
         <label className="field">
           <span>分類</span>
-          <input value={form.category} onChange={(event) => setForm((current) => ({ ...current, category: event.target.value }))} />
+          <select value={form.category} onChange={(event) => setForm((current) => ({ ...current, category: event.target.value }))}>
+            <option value="">請選擇分類</option>
+            {categories.map((category) => (
+              <option key={category.slug} value={category.slug}>
+                {category.label}
+              </option>
+            ))}
+          </select>
         </label>
         <label className="field">
           <span>標籤</span>

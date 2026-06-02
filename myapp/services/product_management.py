@@ -18,6 +18,13 @@ from django.utils.text import slugify
 from ..repositories import local_store
 from . import auth_demo
 
+# 這支 service 同時負責：
+# - 商品分類主表
+# - 前台商品瀏覽 / 篩選 / facets
+# - 賣家商品建立、編輯、封存、複製
+# - 管理端商品審核、上架、刪除
+# - 庫存預留與回補
+
 PUBLIC_STATUSES = {"active"}
 SELLER_FORM_STATUSES = {"draft", "active"}
 ADMIN_FORM_STATUSES = {"draft", "active", "archived"}
@@ -44,7 +51,166 @@ DEFAULT_PRODUCT_SHIPPING_PROFILE = {
     "override_convenience_store_fee": None,
 }
 
+# ---------------------------------------------------------------------------
+# 商品分類主表
+# 這一段負責正式分類主表的讀取、驗證、slug 對應與管理端新增。
+# 前端會用在：
+# - 賣家新增商品頁的分類選單
+# - 商品總覽頁的分類 facets
+# - `/categories/[slug]` 這類分類頁
+# ---------------------------------------------------------------------------
+def _category_sort_key(category: Dict[str, Any]) -> tuple[int, str]:
+    return int(category.get("sort_order") or 0), str(category.get("name") or "")
 
+
+def list_product_categories(*, include_inactive: bool = False) -> List[Dict[str, Any]]:
+    """讀取商品分類主表。"""
+    items: List[Dict[str, Any]] = []
+    for raw_category in local_store.get_categories():
+        item = {
+            "id": int(raw_category.get("id") or 0),
+            "slug": str(raw_category.get("slug") or "").strip().lower(),
+            "name": str(raw_category.get("name") or "").strip(),
+            "label": str(raw_category.get("name") or "").strip(),
+            "description": str(raw_category.get("description") or "").strip(),
+            "is_active": bool(raw_category.get("is_active", True)),
+            "sort_order": int(raw_category.get("sort_order") or 0),
+            "created_at": str(raw_category.get("created_at") or ""),
+            "updated_at": str(raw_category.get("updated_at") or ""),
+        }
+        if not item["slug"] or not item["name"]:
+            continue
+        if include_inactive or item["is_active"]:
+            items.append(item)
+    return sorted(items, key=_category_sort_key)
+
+
+def list_active_product_categories() -> List[Dict[str, Any]]:
+    """讀取啟用中的商品分類，供賣家表單與前台篩選使用。"""
+    return list_product_categories(include_inactive=False)
+
+
+def get_product_category_by_slug(category_slug: str, *, include_inactive: bool = True) -> Dict[str, Any] | None:
+    """依 slug 查詢單一商品分類主表項目。"""
+    clean_slug = str(category_slug or "").strip().lower()
+    if not clean_slug:
+        return None
+    for category in list_product_categories(include_inactive=include_inactive):
+        if category["slug"] == clean_slug:
+            return category
+    return None
+
+
+def _resolve_product_category_record(product: Dict[str, Any]) -> Dict[str, Any] | None:
+    """把商品上既有的分類欄位對應回分類主表。"""
+    stored_slug = str(product.get("category_slug") or "").strip().lower()
+    if stored_slug:
+        category = get_product_category_by_slug(stored_slug, include_inactive=True)
+        if category:
+            return category
+
+    raw_category = str(product.get("category") or "").strip()
+    if not raw_category:
+        return None
+
+    lowered_name = raw_category.lower()
+    for category in list_product_categories(include_inactive=True):
+        if category["name"] == raw_category or category["slug"] == lowered_name:
+            return category
+        if slugify(category["name"]) and slugify(category["name"]) == lowered_name:
+            return category
+    return None
+
+
+def _product_category_slug(product: Dict[str, Any]) -> str:
+    """取得商品分類的 canonical slug，供 catalog filter 使用。"""
+    category = _resolve_product_category_record(product)
+    if category:
+        return category["slug"]
+    stored_slug = str(product.get("category_slug") or "").strip().lower()
+    if stored_slug:
+        return stored_slug
+    return slugify(str(product.get("category") or "").strip())
+
+
+def _product_category_label(product: Dict[str, Any]) -> str:
+    """取得商品分類顯示名稱。"""
+    category = _resolve_product_category_record(product)
+    if category:
+        return category["name"]
+    return str(product.get("category") or "").strip()
+
+
+def _require_product_category(category_value: str) -> Dict[str, Any]:
+    """驗證送入的分類值是否存在於分類主表。"""
+    clean_value = str(category_value or "").strip().lower()
+    if not clean_value:
+        raise ValueError("Category is required.")
+    for category in list_product_categories(include_inactive=False):
+        if category["slug"] == clean_value:
+            return category
+        if str(category["name"]).strip().lower() == clean_value:
+            return category
+        if slugify(str(category["name"])) == clean_value:
+            return category
+    raise ValueError("Selected category is not available.")
+
+
+def _next_category_id(categories: List[Dict[str, Any]]) -> int:
+    return max((int(item.get("id") or 0) for item in categories), default=0) + 1
+
+
+def _generate_category_slug(name: str, categories: List[Dict[str, Any]], *, requested_slug: str = "") -> str:
+    """為管理端新增分類產生唯一 slug。"""
+    base = slugify(requested_slug.strip() or name.strip()) or "category"
+    existing = {str(item.get("slug") or "").strip().lower() for item in categories}
+    candidate = base
+    suffix = 2
+    while candidate in existing:
+        candidate = f"{base}-{suffix}"
+        suffix += 1
+    return candidate
+
+
+def create_product_category(
+    *,
+    name: str,
+    slug: str = "",
+    description: str = "",
+    is_active: bool = True,
+) -> Dict[str, Any]:
+    """由管理端建立新的商品分類主表項目。"""
+    clean_name = str(name or "").strip()
+    if not clean_name:
+        raise ValueError("Category name is required.")
+
+    categories = deepcopy(local_store.get_categories())
+    if any(str(item.get("name") or "").strip() == clean_name for item in categories):
+        raise ValueError("Category name already exists.")
+
+    now = timezone.now().isoformat()
+    category = {
+        "id": _next_category_id(categories),
+        "slug": _generate_category_slug(clean_name, categories, requested_slug=str(slug or "")),
+        "name": clean_name,
+        "description": str(description or "").strip(),
+        "is_active": bool(is_active),
+        "sort_order": len(categories) + 1,
+        "created_at": now,
+        "updated_at": now,
+    }
+    categories.append(category)
+    local_store.save_categories(categories)
+    return get_product_category_by_slug(category["slug"], include_inactive=True) or category
+
+
+# ---------------------------------------------------------------------------
+# 商品可見性 / 權限判斷
+# 這一段決定：
+# - 哪些商品能在前台看見
+# - 賣家能不能管理自己的商品
+# - staff / admin 能不能審核與檢視
+# ---------------------------------------------------------------------------
 def is_public_product(product: Dict[str, Any]) -> bool:
     """判斷 商品管理 條件是否成立。
 
@@ -107,7 +273,12 @@ def can_view_product(user: Dict[str, str] | None, product: Dict[str, Any]) -> bo
     return is_public_product(product) or can_manage_product(user, product) or can_review_product(user)
 
 
+# ---------------------------------------------------------------------------
+# 商品查詢主流程
+# 這一段提供前台、賣家、管理端各自的商品清單與單筆查詢。
+# ---------------------------------------------------------------------------
 def list_public_products() -> List[Dict[str, Any]]:
+    """列出前台可見商品。"""
     """列出 商品管理 相關資料，供頁面或 API 顯示。
 
     回傳:
@@ -117,6 +288,7 @@ def list_public_products() -> List[Dict[str, Any]]:
 
 
 def list_products_for_user(username: str) -> List[Dict[str, Any]]:
+    """列出指定賣家名下商品。"""
     """列出 商品管理 相關資料，供頁面或 API 顯示。
 
     參數:
@@ -131,6 +303,7 @@ def list_products_for_user(username: str) -> List[Dict[str, Any]]:
 
 
 def list_pending_products() -> List[Dict[str, Any]]:
+    """列出待審核商品。"""
     """列出 商品管理 相關資料，供頁面或 API 顯示。
 
     回傳:
@@ -142,6 +315,7 @@ def list_pending_products() -> List[Dict[str, Any]]:
 
 
 def list_moderation_products() -> List[Dict[str, Any]]:
+    """列出後台審核中心需要關注的商品。"""
     """列出目前已上架的商品，供管理者進行強制下架。"""
     products = [product for product in local_store.get_products() if _canonical_status(product.get("status")) == ACTIVE_STATUS]
     ordered = sorted(products, key=lambda item: item.get("updated_at", item.get("created_at", "")), reverse=True)
@@ -149,6 +323,7 @@ def list_moderation_products() -> List[Dict[str, Any]]:
 
 
 def list_products_for_admin() -> List[Dict[str, Any]]:
+    """列出管理端可見的全站商品。"""
     """Return every product for admin management."""
     products = sorted(
         local_store.get_products(),
@@ -159,6 +334,7 @@ def list_products_for_admin() -> List[Dict[str, Any]]:
 
 
 def get_user_product(username: str, slug: str) -> Dict[str, Any] | None:
+    """讀取賣家自己的單一商品。"""
     """取得 商品管理 流程中指定條件的資料。
 
     參數:
@@ -175,6 +351,7 @@ def get_user_product(username: str, slug: str) -> Dict[str, Any] | None:
 
 
 def get_visible_product(slug: str, user: Dict[str, str] | None = None) -> Dict[str, Any] | None:
+    """讀取前台目前可見的單一商品。"""
     """取得 商品管理 流程中指定條件的資料。
 
     參數:
@@ -191,12 +368,14 @@ def get_visible_product(slug: str, user: Dict[str, str] | None = None) -> Dict[s
 
 
 def get_product_for_admin(slug: str) -> Dict[str, Any] | None:
+    """讀取管理端可見的單一商品。"""
     """Return any product record for admin management."""
     product = local_store.get_product_by_slug(slug)
     return prepare_product_for_display(product) if product else None
 
 
 def get_product_for_review(slug: str) -> Dict[str, Any] | None:
+    """讀取審核流程用的單一商品。"""
     """取得 商品管理 流程中指定條件的資料。
 
     參數:
@@ -221,6 +400,11 @@ def _next_product_id(products: List[Dict[str, Any]]) -> int:
     return max([int(item.get("id", 0)) for item in products] or [0]) + 1
 
 
+# ---------------------------------------------------------------------------
+# 商品欄位正規化
+# 這一段把表單送進來的 tags / specs / price / stock / shipping profile /
+# variants 等欄位整理成一致格式，供 create / update 流程重用。
+# ---------------------------------------------------------------------------
 def _normalize_tags(raw_tags: str) -> List[str]:
     """正規化輸入資料，降低 商品管理 流程中的格式差異。
 
@@ -784,7 +968,12 @@ def _extract_filter_attributes(product: Dict[str, Any]) -> Dict[str, List[str]]:
     }
 
 
+# ---------------------------------------------------------------------------
+# Catalog 篩選 / facets / 排序
+# 這一段提供商品總覽頁與分類頁使用的篩選能力。
+# ---------------------------------------------------------------------------
 def build_catalog_facets(products: List[Dict[str, Any]]) -> Dict[str, List[str]]:
+    """建立商品總覽頁需要的分類 / 品牌 / tags / attribute facets。"""
     """彙整並建立 商品管理 所需的輸出資料。
 
     參數:
@@ -800,7 +989,13 @@ def build_catalog_facets(products: List[Dict[str, Any]]) -> Dict[str, List[str]]
         colors.update(attributes.get("color", []))
         sizes.update(attributes.get("size", []))
     return {
-        "categories": sorted({str(product.get("category", "")).lower() for product in products if product.get("category")}),
+        "categories": [
+            {
+                "slug": category["slug"],
+                "label": category["name"],
+            }
+            for category in list_active_product_categories()
+        ],
         "brands": sorted({str(product.get("brand", "")) for product in products if product.get("brand")}),
         "tags": sorted({tag_item for product in products for tag_item in product.get("tags", [])}),
         "colors": sorted(colors, key=str.lower),
@@ -838,6 +1033,7 @@ def filter_products(
     color: str = "",
     size: str = "",
 ) -> List[Dict[str, Any]]:
+    """依 catalog 篩選條件過濾商品。"""
     """依條件篩選 商品管理 資料列表。
 
     參數:
@@ -864,7 +1060,7 @@ def filter_products(
             or any(q in tag_item.lower() for tag_item in product.get("tags", []))
         ]
     if category:
-        filtered = [product for product in filtered if str(product.get("category", "")).lower() == category]
+        filtered = [product for product in filtered if _product_category_slug(product) == category]
     if brand:
         filtered = [product for product in filtered if str(product.get("brand", "")).lower() == brand]
     if tag:
@@ -881,6 +1077,7 @@ def filter_products(
 
 
 def sort_products(products: List[Dict[str, Any]], sort: str) -> List[Dict[str, Any]]:
+    """依指定排序規則重排商品清單。"""
     """依指定規則排序 商品管理 資料。
 
     參數:
@@ -904,6 +1101,7 @@ def sort_products(products: List[Dict[str, Any]], sort: str) -> List[Dict[str, A
 
 
 def get_brand_by_slug(brand_slug: str) -> str | None:
+    """由品牌 slug 反查品牌顯示名稱。"""
     """取得 商品管理 流程中指定條件的資料。
 
     參數:
@@ -920,6 +1118,7 @@ def get_brand_by_slug(brand_slug: str) -> str | None:
 
 
 def get_category_by_slug(category_slug: str) -> str | None:
+    """由分類 slug 反查分類顯示名稱。"""
     """取得 商品管理 流程中指定條件的資料。
 
     參數:
@@ -928,14 +1127,14 @@ def get_category_by_slug(category_slug: str) -> str | None:
     回傳:
         整理後的資料字典；若查無資料，部分函式可能回傳 `None`。
     """
-    for product in list_public_products():
-        category = str(product.get("category", "")).strip().lower()
-        if category and slugify(category) == category_slug:
-            return category
+    category = get_product_category_by_slug(category_slug, include_inactive=False)
+    if category:
+        return category["name"]
     return None
 
 
 def get_compare_products(slugs: List[str], user: Dict[str, str] | None = None) -> List[Dict[str, Any]]:
+    """依 compare slugs 取回商品比較頁所需商品。"""
     """取得 商品管理 流程中指定條件的資料。
 
     參數:
@@ -954,6 +1153,7 @@ def get_compare_products(slugs: List[str], user: Dict[str, str] | None = None) -
 
 
 def available_stock(product: Dict[str, Any], variant_id: str = "") -> int | None:
+    """查詢商品或指定變體目前可用庫存。"""
     """處理 商品管理 相關流程。
 
     參數:
@@ -986,6 +1186,7 @@ def available_stock(product: Dict[str, Any], variant_id: str = "") -> int | None
 
 
 def get_variant(product: Dict[str, Any], variant_id: str) -> Dict[str, Any] | None:
+    """由 variant id 取回單一商品變體。"""
     """取得 商品管理 流程中指定條件的資料。
 
     參數:
@@ -1017,7 +1218,12 @@ def _find_variant_ref(product: Dict[str, Any], variant_id: str) -> Dict[str, Any
     return None
 
 
+# ---------------------------------------------------------------------------
+# 前台商品輸出整理
+# 這一段會把原始商品資料整理成前端可直接使用的 display payload。
+# ---------------------------------------------------------------------------
 def prepare_product_for_display(product: Dict[str, Any]) -> Dict[str, Any]:
+    """把原始商品資料整理成前台 / API 可直接輸出的 payload。"""
     """處理 商品管理 相關流程。
 
     參數:
@@ -1088,7 +1294,9 @@ def prepare_product_for_display(product: Dict[str, Any]) -> Dict[str, Any]:
     item["primary_image"] = item["images"][0] if item["images"] else ""
     item["shipping_profile"] = _normalize_shipping_profile(item.get("shipping_profile"))
     item["brand_slug"] = slugify(str(item.get("brand", "")))
-    item["category_slug"] = slugify(str(item.get("category", "")))
+    item["category"] = _product_category_label(item)
+    item["category_label"] = item["category"]
+    item["category_slug"] = _product_category_slug(item)
     created_at_value = str(item.get("created_at") or "")
     updated_at_value = str(item.get("updated_at") or "")
     created_at = parse_datetime(created_at_value) if created_at_value else None
@@ -1099,6 +1307,7 @@ def prepare_product_for_display(product: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def get_status_choices(user: Dict[str, str]) -> List[Dict[str, str]]:
+    """依角色回傳商品狀態選單。"""
     """取得 商品管理 流程中指定條件的資料。
 
     參數:
@@ -1113,7 +1322,12 @@ def get_status_choices(user: Dict[str, str]) -> List[Dict[str, str]]:
     ]
 
 
+# ---------------------------------------------------------------------------
+# 賣家 / 管理端商品寫入
+# 這一段是真正的 create / update / archive / delete / duplicate / review 流程。
+# ---------------------------------------------------------------------------
 def create_product(owner: Dict[str, str], form_data: Dict[str, str], uploaded_files: Iterable[UploadedFile] = ()) -> Dict[str, Any]:
+    """建立新商品。"""
     """建立新商品並處理圖片、變體與狀態欄位。
 
     參數:
@@ -1128,13 +1342,11 @@ def create_product(owner: Dict[str, str], form_data: Dict[str, str], uploaded_fi
     now = timezone.now().isoformat()
     name = form_data.get("name", "").strip()
     brand = form_data.get("brand", "").strip()
-    category = form_data.get("category", "").strip().lower()
+    category = _require_product_category(form_data.get("category", ""))
     if not name:
         raise ValueError("Product name is required.")
     if not brand:
         raise ValueError("Brand is required.")
-    if not category:
-        raise ValueError("Category is required.")
 
     slug = _generate_unique_slug(name, products)
     status = _normalize_status(form_data.get("status", DRAFT_STATUS), owner)
@@ -1159,7 +1371,8 @@ def create_product(owner: Dict[str, str], form_data: Dict[str, str], uploaded_fi
         "price": float(price),
         "compare_at_price": base_compare_at_price,
         "brand": brand,
-        "category": category,
+        "category": category["name"],
+        "category_slug": category["slug"],
         "tags": _normalize_tags(form_data.get("tags", "")),
         "images": images,
         "specs": _normalize_specs(form_data.get("specs", "")),
@@ -1180,6 +1393,7 @@ def create_product(owner: Dict[str, str], form_data: Dict[str, str], uploaded_fi
 
 
 def update_product(owner: Dict[str, str], slug: str, form_data: Dict[str, str], uploaded_files: Iterable[UploadedFile] = ()) -> Dict[str, Any]:
+    """由賣家更新自己的商品。"""
     """更新既有商品資料，並同步處理圖片與變體調整。
 
     參數:
@@ -1197,14 +1411,11 @@ def update_product(owner: Dict[str, str], slug: str, form_data: Dict[str, str], 
             continue
         name = form_data.get("name", "").strip()
         brand = form_data.get("brand", "").strip()
-        category = form_data.get("category", "").strip().lower()
+        category = _require_product_category(form_data.get("category", ""))
         if not name:
             raise ValueError("Product name is required.")
         if not brand:
             raise ValueError("Brand is required.")
-        if not category:
-            raise ValueError("Category is required.")
-
         next_slug = _generate_unique_slug(name, products, current_slug=item.get("slug"))
         price = _parse_price(form_data.get("price", ""))
         compare_at_price = _parse_optional_price(form_data.get("compare_at_price", ""))
@@ -1222,7 +1433,8 @@ def update_product(owner: Dict[str, str], slug: str, form_data: Dict[str, str], 
         item["price"] = float(price)
         item["compare_at_price"] = base_compare_at_price
         item["brand"] = brand
-        item["category"] = category
+        item["category"] = category["name"]
+        item["category_slug"] = category["slug"]
         item["tags"] = _normalize_tags(form_data.get("tags", ""))
         item["specs"] = _normalize_specs(form_data.get("specs", ""))
         item["stock"] = stock
@@ -1243,6 +1455,7 @@ def admin_update_product(
     form_data: Dict[str, str],
     uploaded_files: Iterable[UploadedFile] = (),
 ) -> Dict[str, Any]:
+    """由管理端更新指定商品。"""
     """Update any product as an admin."""
     products = deepcopy(local_store.get_products())
     for item in products:
@@ -1250,14 +1463,11 @@ def admin_update_product(
             continue
         name = form_data.get("name", "").strip()
         brand = form_data.get("brand", "").strip()
-        category = form_data.get("category", "").strip().lower()
+        category = _require_product_category(form_data.get("category", ""))
         if not name:
             raise ValueError("Product name is required.")
         if not brand:
             raise ValueError("Brand is required.")
-        if not category:
-            raise ValueError("Category is required.")
-
         next_slug = _generate_unique_slug(name, products, current_slug=item.get("slug"))
         price = _parse_price(form_data.get("price", ""))
         compare_at_price = _parse_optional_price(form_data.get("compare_at_price", ""))
@@ -1275,7 +1485,8 @@ def admin_update_product(
         item["price"] = float(price)
         item["compare_at_price"] = base_compare_at_price
         item["brand"] = brand
-        item["category"] = category
+        item["category"] = category["name"]
+        item["category_slug"] = category["slug"]
         item["tags"] = _normalize_tags(form_data.get("tags", ""))
         item["specs"] = _normalize_specs(form_data.get("specs", ""))
         item["stock"] = stock
@@ -1295,6 +1506,7 @@ def admin_update_product(
 
 
 def archive_product(owner: Dict[str, str], slug: str) -> Dict[str, Any]:
+    """由賣家將商品封存 / 下架。"""
     """將商品封存，使其不再公開顯示。
 
     參數:
@@ -1316,6 +1528,7 @@ def archive_product(owner: Dict[str, str], slug: str) -> Dict[str, Any]:
 
 
 def delete_product(owner: Dict[str, str], slug: str) -> None:
+    """由賣家刪除自己的商品。"""
     """永久刪除商品與相關圖片資料。
 
     參數:
@@ -1341,6 +1554,7 @@ def delete_product(owner: Dict[str, str], slug: str) -> None:
 
 
 def admin_delete_product(slug: str) -> None:
+    """由管理端直接刪除商品。"""
     """Delete any product as an admin."""
     products = deepcopy(local_store.get_products())
     next_products = []
@@ -1358,6 +1572,7 @@ def admin_delete_product(slug: str) -> None:
 
 
 def duplicate_product_as_draft(owner: Dict[str, str], slug: str) -> Dict[str, Any]:
+    """以既有商品複製出新的草稿商品。"""
     """複製既有商品為新的草稿商品，方便賣家快速延伸上架。
 
     參數:
@@ -1390,6 +1605,7 @@ def duplicate_product_as_draft(owner: Dict[str, str], slug: str) -> Dict[str, An
 
 
 def review_product(slug: str, approved: bool, note: str = "") -> Dict[str, Any]:
+    """審核待審商品並決定核准或退回。"""
     """審核商品是否可以上架公開。
 
     參數:
@@ -1413,6 +1629,7 @@ def review_product(slug: str, approved: bool, note: str = "") -> Dict[str, Any]:
 
 
 def admin_archive_product(slug: str, note: str = "") -> Dict[str, Any]:
+    """由管理端強制下架商品。"""
     """提供管理者強制下架商品。"""
     products = deepcopy(local_store.get_products())
     for item in products:
@@ -1427,6 +1644,7 @@ def admin_archive_product(slug: str, note: str = "") -> Dict[str, Any]:
 
 
 def admin_publish_product(slug: str, note: str = "") -> Dict[str, Any]:
+    """由管理端強制上架商品。"""
     """Force publish a product as active."""
     products = deepcopy(local_store.get_products())
     for item in products:
@@ -1458,7 +1676,12 @@ def _resolve_inventory_target(product: Dict[str, Any], line: Dict[str, Any]) -> 
     return "", None, available_stock(product)
 
 
+# ---------------------------------------------------------------------------
+# 庫存異動
+# 這一段由結帳 / 售後流程呼叫，用於預留庫存與取消時回補。
+# ---------------------------------------------------------------------------
 def reserve_stock(items: List[Dict[str, Any]]) -> None:
+    """在建單時預留商品 / 變體庫存。"""
     """在成立訂單時預扣商品或變體庫存。
 
     參數:
@@ -1498,6 +1721,7 @@ def reserve_stock(items: List[Dict[str, Any]]) -> None:
 
 
 def restock_items(items: List[Dict[str, Any]]) -> None:
+    """在取消訂單或退款時回補商品 / 變體庫存。"""
     """在取消或退款核准後回補商品庫存。
 
     參數:

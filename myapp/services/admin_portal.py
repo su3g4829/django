@@ -134,7 +134,7 @@ def list_admin_products(
             continue
         if status_value and str(item.get("status") or "").lower() != status_value:
             continue
-        if category_value and str(item.get("category") or "").lower() != category_value:
+        if category_value and str(item.get("category_slug") or "").lower() != category_value:
             continue
         if brand_value and str(item.get("brand") or "").lower() != brand_value:
             continue

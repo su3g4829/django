@@ -1,7 +1,17 @@
-"""我的內容頁彙整服務模組。
+"""會員中心 / 個人首頁資料組裝 service。
 
-將會員的評論、問答、文章、商品與個人化資料整理成單一儀表板。
+來源模組：
+- `myapp.repositories.local_store`
+- `myapp.services.orders`
+- `myapp.services.personalization`
+- `myapp.services.product_management`
+
+用途：
+- 整理會員中心首頁需要的各種資料
+- 將評論、問答、回答、文章、商品、訂單、收藏、最近瀏覽整合成單一 payload
+- 供 `myapp.api.views.MeDashboardApi` 使用
 """
+
 from __future__ import annotations
 
 from typing import Any, Dict, List
@@ -16,41 +26,40 @@ from . import product_management
 
 
 def _format_created_at(value: str) -> str:
-    """格式化 我的內容頁 流程中使用的時間或顯示值。
+    """把 ISO datetime 字串轉成前端較好閱讀的本地時間格式。
 
-    參數:
-        value: 待格式化、待解析或待判斷的值。
+    來源模組：
+    - `django.utils.dateparse.parse_datetime`
+    - `django.utils.timezone.localtime`
 
-    回傳:
-        依函式用途回傳對應資料。
+    用途：
+    - 會員中心列表頁只需要簡短時間字串
+    - 避免前端每個區塊都各自做時間格式化
     """
+
     parsed = parse_datetime(value) if value else None
     return timezone.localtime(parsed).strftime("%Y-%m-%d %H:%M") if parsed else ""
 
 
 def _matches_user(item: Dict[str, Any], username: str, display_name: str) -> bool:
-    """判斷 我的內容頁 條件是否成立。
+    """判斷一筆內容是否屬於目前會員。
 
-    參數:
-        item: 單一品項資料。
-        username: 會員帳號，通常也是 JSON 資料中的唯一識別鍵。
-        display_name: 前台顯示名稱，用來顯示在頁面或內容作者資訊中。
-
-    回傳:
-        布林值，用來表示條件是否成立或操作是否成功。
+    用途：
+    - 評論、問題、回答、社群文章目前都可能同時保存 `author_username` 或 `author`
+    - 這裡統一比對 username 與 display_name，避免不同資料來源格式不一致
     """
+
     return item.get("author_username") == username or item.get("author") == display_name
 
 
 def _product_stub(product_id: int) -> Dict[str, Any] | None:
-    """處理 我的內容頁 相關流程。
+    """用商品 id 取回精簡商品資訊。
 
-    參數:
-        product_id: 商品整數編號。
-
-    回傳:
-        依函式用途回傳對應資料。
+    用途：
+    - 評論 / 問答 / 回答清單只需要最小商品資訊
+    - 避免把完整商品 payload 都塞進會員中心列表
     """
+
     product = local_store.get_product_by_id(product_id)
     if not product:
         return None
@@ -62,15 +71,17 @@ def _product_stub(product_id: int) -> Dict[str, Any] | None:
 
 
 def list_user_reviews(username: str, display_name: str) -> List[Dict[str, Any]]:
-    """列出 我的內容頁 相關資料，供頁面或 API 顯示。
+    """列出會員撰寫過的商品評論。
 
-    參數:
-        username: 會員帳號，通常也是 JSON 資料中的唯一識別鍵。
-        display_name: 前台顯示名稱，用來顯示在頁面或內容作者資訊中。
+    前端使用頁面：
+    - 會員中心首頁
+    - 未來若有「我的評論」頁也可重用
 
-    回傳:
-        列表資料，可直接提供給頁面或 API 進一步使用。
+    功能：
+    - 從 reviews JSON 篩出目前會員的評論
+    - 補上商品 stub 與格式化時間
     """
+
     items = []
     for review in sorted(local_store.get_reviews(), key=lambda item: item.get("created_at", ""), reverse=True):
         if not _matches_user(review, username, display_name):
@@ -83,15 +94,16 @@ def list_user_reviews(username: str, display_name: str) -> List[Dict[str, Any]]:
 
 
 def list_user_questions(username: str, display_name: str) -> List[Dict[str, Any]]:
-    """列出 我的內容頁 相關資料，供頁面或 API 顯示。
+    """列出會員提出過的商品問題。
 
-    參數:
-        username: 會員帳號，通常也是 JSON 資料中的唯一識別鍵。
-        display_name: 前台顯示名稱，用來顯示在頁面或內容作者資訊中。
+    前端使用頁面：
+    - 會員中心首頁
 
-    回傳:
-        列表資料，可直接提供給頁面或 API 進一步使用。
+    功能：
+    - 從 questions JSON 篩出目前會員提問
+    - 補上商品 stub、格式化時間與回答數量
     """
+
     items = []
     for question in sorted(local_store.get_questions(), key=lambda item: item.get("created_at", ""), reverse=True):
         if not _matches_user(question, username, display_name):
@@ -105,15 +117,17 @@ def list_user_questions(username: str, display_name: str) -> List[Dict[str, Any]
 
 
 def list_user_answers(username: str, display_name: str) -> List[Dict[str, Any]]:
-    """列出 我的內容頁 相關資料，供頁面或 API 顯示。
+    """列出會員回答過的商品問答。
 
-    參數:
-        username: 會員帳號，通常也是 JSON 資料中的唯一識別鍵。
-        display_name: 前台顯示名稱，用來顯示在頁面或內容作者資訊中。
+    前端使用頁面：
+    - 會員中心首頁
 
-    回傳:
-        列表資料，可直接提供給頁面或 API 進一步使用。
+    功能：
+    - 逐題展開 question answers
+    - 找出目前會員留下的回答
+    - 補上問題標題、商品 stub 與格式化時間
     """
+
     items = []
     for question in local_store.get_questions():
         product = _product_stub(question["product_id"])
@@ -129,15 +143,16 @@ def list_user_answers(username: str, display_name: str) -> List[Dict[str, Any]]:
 
 
 def list_user_posts(username: str, display_name: str) -> List[Dict[str, Any]]:
-    """列出 我的內容頁 相關資料，供頁面或 API 顯示。
+    """列出會員建立過的社群文章。
 
-    參數:
-        username: 會員帳號，通常也是 JSON 資料中的唯一識別鍵。
-        display_name: 前台顯示名稱，用來顯示在頁面或內容作者資訊中。
+    前端使用頁面：
+    - 會員中心首頁
 
-    回傳:
-        列表資料，可直接提供給頁面或 API 進一步使用。
+    功能：
+    - 從 posts JSON 篩出目前會員的貼文
+    - 補上格式化時間與回覆數量
     """
+
     items = []
     for post in sorted(local_store.get_posts(), key=lambda item: item.get("created_at", ""), reverse=True):
         if not _matches_user(post, username, display_name):
@@ -150,14 +165,17 @@ def list_user_posts(username: str, display_name: str) -> List[Dict[str, Any]]:
 
 
 def list_user_products(username: str) -> List[Dict[str, Any]]:
-    """列出 我的內容頁 相關資料，供頁面或 API 顯示。
+    """列出會員名下商品。
 
-    參數:
-        username: 會員帳號，通常也是 JSON 資料中的唯一識別鍵。
+    前端使用頁面：
+    - 會員中心首頁的賣家摘要
+    - 後續若有「我建立的商品」摘要也可重用
 
-    回傳:
-        列表資料，可直接提供給頁面或 API 進一步使用。
+    功能：
+    - 讀取賣家自己的商品
+    - 補上 created / updated 顯示時間
     """
+
     items = []
     for product in product_management.list_products_for_user(username):
         item = dict(product)
@@ -168,15 +186,17 @@ def list_user_products(username: str) -> List[Dict[str, Any]]:
 
 
 def build_profile_dashboard(user: Dict[str, str], session) -> Dict[str, Any]:
-    """組合會員中心首頁所需的所有內容區塊資料。
+    """組裝會員中心首頁需要的完整 dashboard payload。
 
-    參數:
-        user: 目前操作中的會員快照資料。
-        session: Django session 物件，用來保存登入狀態、購物車與個人化資料。
+    前端使用頁面：
+    - `frontend/app/me/page.tsx` 或對應會員中心首頁
 
-    回傳:
-        整理後的資料字典；若查無資料，部分函式可能回傳 `None`。
+    功能：
+    - 聚合會員自己的內容資料
+    - 聚合訂單、收藏、最近瀏覽
+    - 回傳給 `MeDashboardApi` 一次輸出
     """
+
     username = user["username"]
     display_name = user["display_name"]
     return {

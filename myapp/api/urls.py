@@ -1,4 +1,15 @@
-"""Canonical DRF API routes for the store project."""
+"""Store 專案的 canonical DRF API 路由表。
+
+來源模組：
+- `django.urls.path`
+- `drf_spectacular` 文件 view
+- `myapp.api.views` 內的 APIView
+
+用途：
+- 集中維護 `/api/v1/...` 的正式 API 路由
+- 讓前端頁面、service、文件頁都能對照同一份 canonical route
+- 避免舊 alias 或零散路由讓 API 邊界變得不清楚
+"""
 
 from django.urls import path
 from drf_spectacular.views import SpectacularAPIView, SpectacularRedocView, SpectacularSwaggerView
@@ -6,20 +17,37 @@ from drf_spectacular.views import SpectacularAPIView, SpectacularRedocView, Spec
 from . import views
 
 urlpatterns = [
-    # OpenAPI / Swagger
+    # ------------------------------------------------------------------
+    # OpenAPI / API 文件
+    # 給開發者查看 schema、Swagger UI、ReDoc。
+    # 不直接參與前台業務功能。
+    # ------------------------------------------------------------------
     path("schema/", SpectacularAPIView.as_view(), name="api-schema"),
     path("schema/swagger-ui/", SpectacularSwaggerView.as_view(url_name="api-schema"), name="api-swagger-ui"),
     path("schema/redoc/", SpectacularRedocView.as_view(url_name="api-schema"), name="api-redoc"),
 
-    # Auth / session / app bootstrap
+    # ------------------------------------------------------------------
+    # Auth / session / app bootstrap / 公開初始化資料
+    # 對應：
+    # - 登入 / 註冊 / 登出頁
+    # - Next.js app 啟動時的 bootstrap
+    # - 首頁 banner 與公開商品分類主表
+    # ------------------------------------------------------------------
     path("auth/csrf/", views.AuthCsrfApi.as_view(), name="api-auth-csrf"),
     path("auth/login/", views.LoginApi.as_view(), name="api-login"),
     path("auth/register/", views.RegisterApi.as_view(), name="api-register"),
     path("auth/logout/", views.LogoutApi.as_view(), name="api-logout"),
     path("app/bootstrap/", views.AppBootstrapApi.as_view(), name="api-app-bootstrap"),
     path("banners/", views.BannerListApi.as_view(), name="api-banners"),
+    path("product-categories/", views.ProductCategoriesApi.as_view(), name="api-product-categories"),
 
-    # Member center
+    # ------------------------------------------------------------------
+    # Member center / buyer account / seller center
+    # 對應：
+    # - 會員中心首頁 / 會員資料 / 地址 / 發票 / 賣家申請
+    # - 買家訂單列表與明細
+    # - 賣家訂單列表、明細、銷售報表
+    # ------------------------------------------------------------------
     path("me/", views.MeApi.as_view(), name="api-me"),
     path("me/profile/", views.MeProfileApi.as_view(), name="api-me-profile"),
     path("me/shipping-rules/", views.MeShippingRulesApi.as_view(), name="api-me-shipping-rules"),
@@ -46,13 +74,32 @@ urlpatterns = [
     path("me/sales/<int:order_id>/", views.SellerOrderDetailApi.as_view(), name="api-seller-order-detail"),
     path("me/sales/<int:order_id>/update/", views.SellerOrderUpdateApi.as_view(), name="api-seller-order-update"),
 
+    # ------------------------------------------------------------------
     # Seller product management
+    # 對應：
+    # - 賣家商品列表
+    # - 賣家新增商品頁
+    # - 賣家商品編輯 / 下架 / 複製
+    # ------------------------------------------------------------------
     path("me/products/", views.SellerProductsApi.as_view(), name="api-seller-products"),
     path("me/products/<slug:slug>/", views.SellerProductDetailApi.as_view(), name="api-seller-product-detail"),
     path("me/products/<slug:slug>/archive/", views.SellerProductArchiveApi.as_view(), name="api-seller-product-archive"),
     path("me/products/<slug:slug>/duplicate/", views.SellerProductDuplicateApi.as_view(), name="api-seller-product-duplicate"),
 
-    # Cart / checkout / integrations
+    # ------------------------------------------------------------------
+    # Cart / checkout / NewebPay integrations
+    # 對應：
+    # - 購物車頁
+    # - checkout 頁
+    # - 買家訂單頁的前往藍新付款
+    # - staff NewebPay debug / store-map debug
+    #
+    # 這一組同時包含：
+    # - cart CRUD
+    # - checkout preview / confirm
+    # - 超商地圖選店 flow
+    # - NewebPay payment callback / return
+    # ------------------------------------------------------------------
     path("cart/", views.CartApi.as_view(), name="api-cart"),
     path("cart/items/", views.CartAddApi.as_view(), name="api-cart-add"),
     path("cart/items/<path:item_key>/", views.CartItemApi.as_view(), name="api-cart-item"),
@@ -90,7 +137,13 @@ urlpatterns = [
         name="api-newebpay-payment-sandbox-return",
     ),
 
-    # Staff / admin
+    # ------------------------------------------------------------------
+    # Staff / admin / moderation
+    # 對應：
+    # - staff dashboard
+    # - staff 訂單 / 商品 / 會員 / Banner / 內容管理
+    # - staff 審核中心與 payment debug
+    # ------------------------------------------------------------------
     path("staff/reviews/", views.StaffReviewDashboardApi.as_view(), name="api-admin-review-dashboard"),
     path("staff/dashboard/", views.AdminDashboardApi.as_view(), name="api-admin-dashboard"),
     path("staff/banners/", views.AdminBannersApi.as_view(), name="api-admin-banners"),
@@ -107,6 +160,7 @@ urlpatterns = [
     path("staff/orders/<int:order_id>/service-review/", views.AdminOrderServiceReviewApi.as_view(), name="api-admin-order-service-review"),
     path("staff/users/", views.AdminUsersApi.as_view(), name="api-admin-users"),
     path("staff/products/", views.AdminProductsApi.as_view(), name="api-admin-products"),
+    path("staff/product-categories/", views.AdminProductCategoriesApi.as_view(), name="api-admin-product-categories"),
     path("staff/products/<slug:slug>/publish/", views.AdminProductPublishApi.as_view(), name="api-admin-product-publish"),
     path("staff/users/<slug:username>/status/", views.AdminUserStatusApi.as_view(), name="api-admin-user-status"),
     path("staff/products/<slug:slug>/", views.AdminProductDeleteApi.as_view(), name="api-admin-product-delete"),
@@ -123,7 +177,14 @@ urlpatterns = [
     ),
     path("staff/products/<slug:slug>/archive/", views.AdminProductArchiveApi.as_view(), name="api-admin-product-archive"),
 
-    # Product browsing / interaction
+    # ------------------------------------------------------------------
+    # Product browsing / interaction / price compare
+    # 對應：
+    # - 商品總覽頁
+    # - 商品詳情頁
+    # - 商品比較頁
+    # - 商品評論 / 問答 / 推薦 / 收藏 / 比價
+    # ------------------------------------------------------------------
     path("products/", views.ProductListApi.as_view(), name="api-products"),
     path("products/compare/", views.CompareListApi.as_view(), name="api-product-compare-list"),
     path("products/<slug:slug>/", views.ProductDetailApi.as_view(), name="api-product-detail"),
@@ -136,7 +197,13 @@ urlpatterns = [
     path("products/<slug:slug>/price-compare/", views.ProductPriceCompareApi.as_view(), name="api-product-price-compare"),
     path("products/<slug:slug>/price-compare/refresh/", views.ProductPriceCompareRefreshApi.as_view(), name="api-product-price-compare-refresh"),
 
-    # Community
+    # ------------------------------------------------------------------
+    # Community / forum
+    # 對應：
+    # - 社群文章列表
+    # - 社群文章詳情頁
+    # - 回覆 / 投票 / 內文圖片上傳
+    # ------------------------------------------------------------------
     path("community/posts/", views.CommunityPostsApi.as_view(), name="api-community-posts"),
     path("community/uploads/images/", views.CommunityImageUploadApi.as_view(), name="api-community-image-upload"),
     path("community/posts/<int:post_id>/", views.CommunityPostDetailApi.as_view(), name="api-community-post-detail"),

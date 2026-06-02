@@ -70,6 +70,49 @@ PRODUCTS_FIXTURE = [
     },
 ]
 
+CATEGORIES_FIXTURE = [
+    {
+        "id": 1,
+        "slug": "tops",
+        "name": "上衣",
+        "description": "上衣分類",
+        "is_active": True,
+        "sort_order": 1,
+    },
+    {
+        "id": 2,
+        "slug": "pants",
+        "name": "褲子",
+        "description": "褲子分類",
+        "is_active": True,
+        "sort_order": 2,
+    },
+    {
+        "id": 3,
+        "slug": "kitchen",
+        "name": "kitchen",
+        "description": "legacy kitchen category for tests",
+        "is_active": True,
+        "sort_order": 10,
+    },
+    {
+        "id": 4,
+        "slug": "apparel",
+        "name": "apparel",
+        "description": "legacy apparel category for tests",
+        "is_active": True,
+        "sort_order": 11,
+    },
+    {
+        "id": 5,
+        "slug": "outdoor",
+        "name": "outdoor",
+        "description": "legacy outdoor category for tests",
+        "is_active": True,
+        "sort_order": 12,
+    },
+]
+
 REVIEWS_FIXTURE = [
     {
         "id": 1,
@@ -548,6 +591,7 @@ class ProductFeatureTests(SimpleTestCase):
         data_dir.mkdir(parents=True, exist_ok=True)
 
         self._write_json(data_dir / "products.json", PRODUCTS_FIXTURE)
+        self._write_json(data_dir / "categories.json", CATEGORIES_FIXTURE)
         self._write_json(data_dir / "reviews.json", REVIEWS_FIXTURE)
         self._write_json(data_dir / "recommendations.json", RECOMMENDATIONS_FIXTURE)
         self._write_json(data_dir / "competitor_prices.json", COMPETITOR_PRICES_FIXTURE)
@@ -868,6 +912,61 @@ class ProductFeatureTests(SimpleTestCase):
         self.assertEqual(product["specs"]["material"], "ceramic")
         self.assertEqual(product["stock"], 8)
         self.assertTrue(product["images"][0].endswith(".png"))
+
+    def test_public_product_categories_api_returns_category_master(self):
+        response = self.client.get("/api/v1/product-categories/")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["items"][0]["slug"], "tops")
+        self.assertEqual(payload["items"][0]["label"], "上衣")
+        self.assertEqual(payload["items"][1]["slug"], "pants")
+
+    def test_product_create_accepts_category_slug_and_stores_master_fields(self):
+        self._login(next_url="/me/products/create/")
+
+        response = self.client.post(
+            "/api/v1/me/products/",
+            data=json.dumps(
+                {
+                    "name": "Seller Tee",
+                    "price": "29.9",
+                    "brand": "Alice Studio",
+                    "category": "tops",
+                    "tags": "shirt",
+                    "status": "active",
+                    "specs": "material:cotton",
+                    "stock": "5",
+                }
+            ),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        product = local_store.get_product_by_slug("seller-tee")
+        self.assertEqual(product["category"], "上衣")
+        self.assertEqual(product["category_slug"], "tops")
+
+    def test_admin_can_create_product_category(self):
+        self._login(username="storeteam", next_url="/staff/products/")
+
+        response = self.client.post(
+            "/api/v1/staff/product-categories/",
+            data=json.dumps(
+                {
+                    "name": "外套",
+                    "slug": "outerwear",
+                }
+            ),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        payload = response.json()
+        self.assertEqual(payload["slug"], "outerwear")
+        self.assertEqual(payload["label"], "外套")
+        categories = local_store.get_categories()
+        self.assertTrue(any(item["slug"] == "outerwear" and item["name"] == "外套" for item in categories))
 
     def test_my_products_lists_owned_products(self):
         self._write_products(build_public_and_draft_products())
@@ -2317,6 +2416,34 @@ class ProductFeatureTests(SimpleTestCase):
         self.assertEqual(response.json()["items"], [])
         self.assertEqual(self.client.session["cart"]["buyer"]["items"]["acme-mug"]["qty"], 1)
         self.assertEqual(self.client.session["cart"]["storeteam"]["items"], {})
+
+    def test_logged_in_cart_is_persisted_to_user_store(self):
+        self._login(username="buyer", next_url="/")
+        self._add_product_to_cart("acme-mug", qty=2)
+
+        stored_user = local_store.get_user_by_username("buyer")
+        self.assertEqual(stored_user["cart"]["items"]["acme-mug"]["qty"], 2)
+
+        self.client.post("/api/v1/auth/logout/")
+        self._login(username="buyer", next_url="/")
+        response = self.client.get("/api/v1/cart/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["item_count"], 2)
+        self.assertEqual(response.json()["items"][0]["slug"], "acme-mug")
+
+    def test_guest_cart_migrates_into_persisted_user_cart_on_login(self):
+        self._add_product_to_cart("acme-mug", qty=1)
+        self.assertEqual(self.client.session["cart"]["__guest__"]["items"]["acme-mug"]["qty"], 1)
+
+        self._login(username="buyer", next_url="/")
+        response = self.client.get("/api/v1/cart/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["item_count"], 1)
+        self.assertEqual(self.client.session["cart"]["__guest__"]["items"], {})
+        stored_user = local_store.get_user_by_username("buyer")
+        self.assertEqual(stored_user["cart"]["items"]["acme-mug"]["qty"], 1)
 
     def test_logout_clears_guest_visible_cart_favorite_and_compare_state(self):
         self._login(username="buyer", next_url="/")

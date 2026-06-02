@@ -1,577 +1,402 @@
-﻿# PROJECT_STRUCTURE
+# PROJECT_STRUCTURE
 
-本文件整理目前專案的實際分工，重點回答三件事：
+本文件整理目前專案的實際結構，目的是讓後續「JSON prototype 轉正式資料庫」有一致基準。
 
-1. 每個主要套件在哪裡使用
-2. 每個資料夾控制網站的哪一塊
-3. 前端頁面與後端 API 分別負責什麼
+## 1. 架構總覽
 
----
+目前專案是三層式原型：
 
-## 1. 專案整體架構
+- `frontend/`
+  - Next.js 15 + React 19 + TypeScript
+  - 負責所有主要頁面、互動 UI、前端 API proxy
+- `myapp/`
+  - Django 6 + Django REST Framework
+  - 負責 session、權限、API、商業邏輯、JSON 資料存取
+- `data/`
+  - JSON-backed persistence
+  - 目前真正的資料來源，不是資料庫
 
-目前專案採用：
+目前可視為：
 
-- `Next.js + React + TypeScript`
-  - 作為主要使用者前端
-  - 位置：`frontend/`
-- `Django + Django REST Framework`
-  - 作為後端 API、session auth、管理/API 文件入口
-  - 位置：`store/`、`myapp/`
-- `JSON 檔案`
-  - 作為目前的資料來源
-  - 位置：`data/`
+- 前端頁面層：`frontend/app/`
+- 前端共用元件與型別：`frontend/components/`、`frontend/lib/`
+- 後端 API 層：`myapp/api/`
+- 後端商業邏輯層：`myapp/services/`
+- 後端資料讀寫層：`myapp/repositories/local_store.py`
+- 真實資料：`data/*.json`
 
-換句話說：
+## 2. 使用套件與模組
 
-- **前端頁面顯示** 主要在 `frontend/`
-- **後端商業邏輯與 API** 主要在 `myapp/`
-- **設定與 Django 啟動入口** 在 `store/`
-- **資料讀寫** 目前透過 `data/*.json`，不是資料庫
+### Python 端
 
----
-
-## 2. 套件使用位置
-
-### Python / Django 端
-
-#### `Django`
-- 安裝來源：`requirements.txt`
-- 使用位置：
-  - `store/settings.py`
-  - `store/urls.py`
-  - `myapp/urls.py`
-  - `myapp/views.py`
-  - `myapp/ops_views.py`
-- 作用：
-  - 啟動後端網站
-  - 提供 URL routing
-  - 提供 middleware / settings / session / admin
-
-#### `djangorestframework`
-- 安裝來源：`requirements.txt`
-- 使用位置：
-  - `myapp/api/views.py`
-  - `myapp/api/serializers.py`
-  - `myapp/api/permissions.py`
-  - `myapp/api/urls.py`
-- 作用：
-  - 建立 JSON API
-  - 驗證 request payload
-  - 做登入、購物車、訂單、商品、管理端 API
-
-#### `drf-spectacular`
-- 安裝來源：`requirements.txt`
-- 使用位置：
-  - `myapp/api/urls.py`
-- 作用：
-  - 產生 OpenAPI schema
-  - 提供 Swagger UI / ReDoc
-
-#### `pycryptodome`
-- 安裝來源：`requirements.txt`
-- 使用位置：
-  - `myapp/services/newebpay_payment_real.py`
-- 作用：
-  - 藍新支付 sandbox/正式串接所需的 AES 加解密與簽章驗證
-
-### Node / Next.js 端
-
-#### `next`
-- 安裝來源：`frontend/package.json`
-- 使用位置：
-  - `frontend/app/`
-  - `frontend/next.config.mjs`
-- 作用：
-  - 前端路由系統
-  - App Router
-  - SSR / 靜態頁產生 / route handler
-
-#### `react`
-- 安裝來源：`frontend/package.json`
-- 使用位置：
-  - `frontend/app/**/*.tsx`
-  - `frontend/components/*.tsx`
-- 作用：
-  - 畫面元件
-  - state / event handler / client-side interaction
-
-#### `typescript`
-- 安裝來源：`frontend/package.json`
-- 使用位置：
-  - `frontend/app/**/*.ts(x)`
-  - `frontend/components/*.tsx`
-  - `frontend/lib/*.ts`
-  - `frontend/tsconfig.json`
-- 作用：
-  - 型別檢查
-  - API payload / 前端資料結構型別定義
-
-#### `openai`
-- 安裝來源：根目錄 `package.json`
-- 目前用途：
-  - 專案根目錄的獨立測試腳本用途
-  - 不屬於 `frontend/` 主前端執行流程
-
----
-
-## 3. 最上層資料夾用途
-
-| 路徑 | 類型 | 作用 |
+| 套件 | 版本 | 目前用途 |
 | --- | --- | --- |
-| `store/` | Django 專案設定 | Django settings、WSGI、根 URLConf |
-| `myapp/` | Django 主應用 | API、services、repository、後端邏輯 |
-| `frontend/` | Next.js 前端 | 主要網站頁面、前端元件、前端 API proxy |
-| `data/` | 本地資料層 | JSON 模擬資料來源 |
-| `templates/` | Django 模板 | 目前只保留 docs / 基底模板，不是主要前端 |
-| `static/` | 靜態資產來源 | Django 靜態檔來源資料夾 |
-| `staticfiles/` | collectstatic 產物 | Django 收集後的靜態檔輸出 |
-| `media/` | 媒體檔 | 上傳或測試媒體檔位置 |
-| `.vscode/` | 編輯器設定 | VS Code launch/settings |
-| `.venv/` | Python 虛擬環境 | 本機 Python 套件環境 |
-| `node_modules/` | 根目錄 Node 套件 | 根目錄腳本用途套件，不是 Next.js 主前端依賴 |
-| `frontend/node_modules/` | 前端依賴 | Next.js 前端真正使用的 npm 套件 |
-| `frontend/.next/` | 前端建置產物 | Next.js build/dev 自動產生，通常不手改 |
-| `var/` | 可變資料 | 開發期輸出或暫存用途 |
+| `Django` | `6.0.3` | 專案設定、middleware、session、URL routing |
+| `djangorestframework` | `3.17.1` | API endpoint、serializer、permission |
+| `drf-spectacular` | `0.29.0` | OpenAPI schema、Swagger UI、ReDoc |
+| `pycryptodome` | `>=3.20,<4` | 藍新支付加解密與簽章 |
 
----
+### Node / 前端
 
-## 4. `store/`：Django 專案設定層
+| 套件 | 版本 | 目前用途 |
+| --- | --- | --- |
+| `next` | `^15.0.0` | App Router、SSR、前端 route handler |
+| `react` / `react-dom` | `^19.0.0` | 頁面與元件互動 |
+| `typescript` | `^5.0.0` | 型別檢查 |
+| `@tiptap/*` | `^3.23.6` | 社群貼文編輯器 |
+| `dompurify` | `^3.4.7` | HTML 內容清理 |
+| `openai` | `^6.39.0` | 根目錄獨立腳本用途，不屬於主站執行流程 |
+
+## 3. 主要資料夾分工
+
+| 路徑 | 作用 |
+| --- | --- |
+| `store/` | Django settings、WSGI、根 URLConf |
+| `myapp/` | 後端主應用，含 API、service、repository、middleware、tests |
+| `frontend/` | Next.js 主站前端 |
+| `data/` | JSON 原型資料來源 |
+| `templates/` | Django 後端文件頁模板，不是主要前端 |
+| `static/` | 靜態檔與上傳檔來源 |
+| `staticfiles/` | `collectstatic` 產物 |
+| `media/` | 媒體檔輸出位置 |
+| `var/` | cache、log 等執行期輸出 |
+| `.vscode/` | 本機開發設定 |
+
+## 4. `store/`：後端設定層
 
 ### `store/settings.py`
-- 控制：
-  - Django 基本設定
-  - installed apps
-  - middleware
-  - allowed hosts / csrf trusted origins
-  - 前端網址環境變數
-- 和網站的關係：
-  - 決定後端能不能正常啟動
-  - 決定 Render / 本機環境如何連線
+
+負責：
+
+- Django app / middleware 載入
+- CSRF / cookie / host 設定
+- session engine
+- OpenAPI 設定
+- cache / logging / health check 基礎設定
+
+目前重要設定：
+
+- `SESSION_ENGINE = "django.contrib.sessions.backends.signed_cookies"`
+- `DATABASES` 仍是 Django 預設 SQLite，但主要業務資料沒有走 ORM
 
 ### `store/urls.py`
-- 控制：
-  - 根 URL 分派
-- 目前分派給：
-  - `/api/v1/` → `myapp.api.urls`
-  - `/` → `myapp.urls`
-  - `/admin/` → Django admin
+
+負責：
+
+- `/api/v1/` 分派到 `myapp.api.urls`
+- `/admin/`
+- 舊 Django HTML / redirect routes
 
 ### `store/wsgi.py`
-- 控制：
-  - Gunicorn / Render 啟動 Django 時的 WSGI 入口
 
----
+負責 WSGI 啟動入口。
 
 ## 5. `myapp/`：後端主應用
 
-`myapp/` 是目前後端核心。
-
 ### `myapp/api/`
 
-這層是 **DRF API 層**。
+這層是 DRF API facade，負責 request / response，不直接碰 JSON 檔。
 
-#### `myapp/api/urls.py`
-- 控制：
-  - 所有 canonical API 路由
-- 例子：
-  - `/api/v1/auth/...`
-  - `/api/v1/products/...`
-  - `/api/v1/cart/...`
-  - `/api/v1/checkout/...`
-  - `/api/v1/me/...`
-  - `/api/v1/staff/...`
-  - `/api/v1/integrations/newebpay/...`
-
-#### `myapp/api/views.py`
-- 控制：
-  - API endpoint 的 request / response 行為
-- 作用：
-  - 接收前端請求
-  - 驗證權限
-  - 呼叫 service
-  - 回傳 JSON
-
-#### `myapp/api/serializers.py`
-- 控制：
-  - API 輸入/輸出格式驗證
-- 作用：
-  - 驗證登入、註冊、地址、發票、checkout、藍新 payload 等欄位
-
-#### `myapp/api/permissions.py`
-- 控制：
-  - 哪些 API 只能登入者、賣家、管理者使用
-
-#### `myapp/api/route_registry.py`
-- 控制：
-  - API 文件分類資料
-- 作用：
-  - 提供 docs 頁面顯示 API 群組與說明
-
-#### `myapp/api/html_write_registry.py`
-- 控制：
-  - 舊 HTML 寫入/遷移說明紀錄資料
+| 檔案 | 作用 |
+| --- | --- |
+| `urls.py` | canonical API 路由 |
+| `views.py` | endpoint 行為、權限、service orchestration |
+| `serializers.py` | request 驗證、response shape |
+| `permissions.py` | demo session 權限控制 |
+| `route_registry.py` | 前端 docs 頁用的 API 路由說明 |
+| `html_write_registry.py` | 舊 HTML write migration 文件資料 |
 
 ### `myapp/services/`
 
-這層是 **商業邏輯層**。  
-API 不直接碰 JSON 檔，而是先呼叫 services。
+這層是商業邏輯核心。
 
-主要服務檔案：
-
-- `auth_demo.py`
-  - 登入、註冊、角色、seller request
-- `cart.py`
-  - 購物車邏輯
-- `orders.py`
-  - 結帳、建立訂單、訂單查詢、訂單更新
-- `customer_center.py`
-  - 買家端 checkout / 地址 / 發票相關整合
-- `product_management.py`
-  - 賣家商品建立、編輯、封存、複製
-- `reviews.py`
-  - 商品評論
-- `questions.py`
-  - 商品問答
-- `community.py`
-  - 論壇文章 / 回覆 / 投票
-- `recommendations.py`
-  - 推薦商品資料
-- `personalization.py`
-  - 收藏 / 比較 / 個人化狀態
-- `profile.py`
-  - 會員資料
-- `admin_portal.py`
-  - 管理端 dashboard / users / orders / review
-- `price_compare.py`
-  - 外站比價 mock crawler / compare data
-- `newebpay_payment.py`
-  - 藍新支付 mock
-- `newebpay_payment_real.py`
-  - 藍新支付 sandbox / 正式串接骨架
-- `newebpay_logistics.py`
-  - 藍新物流 mock
-- `newebpay_logistics_real.py`
-  - 藍新物流 sandbox / 正式串接骨架
+| 模組 | 主要責任 |
+| --- | --- |
+| `auth_demo.py` | 註冊、登入、角色、賣家申請、帳號狀態 |
+| `cart.py` | session 購物車 |
+| `personalization.py` | 收藏、比較、最近瀏覽 |
+| `orders.py` | checkout、建單、買家/賣家訂單流程 |
+| `customer_center.py` | 地址、發票、會員中心整合 |
+| `profile.py` | 個人資料、dashboard |
+| `product_management.py` | 商品列表、商品建立/編輯、賣家與管理端商品管理 |
+| `reviews.py` | 商品評論 |
+| `questions.py` | 商品問答與回答 |
+| `community.py` | 社群貼文、回覆、投票、圖片上傳 |
+| `recommendations.py` | 推薦商品資料 |
+| `price_compare.py` | mock 比價資料 |
+| `admin_portal.py` | 管理端 dashboard、訂單、用戶、內容審核 |
+| `privacy.py` | 公開名稱匿名化 |
+| `newebpay_payment_real.py` | 藍新支付整合與 payment debug |
+| `newebpay_logistics_real.py` | checkout store map / 超商選店整合 |
 
 ### `myapp/repositories/`
 
-這層是 **資料讀寫層**。
+| 檔案 | 作用 |
+| --- | --- |
+| `local_store.py` | 唯一 JSON 讀寫入口，含快取、資料正規化 |
 
-#### `myapp/repositories/local_store.py`
-- 控制：
-  - `data/*.json` 的讀寫
-- 作用：
-  - products / users / orders / reviews / community / payment logs / logistics logs
+### 其他重要檔案
 
-### `myapp/views.py`
-- 控制：
-  - 非 DRF 的 Django views
-- 目前主要用途：
-  - Next.js 前端轉址
-  - docs 頁面
-  - CSV 匯出
+| 檔案 | 作用 |
+| --- | --- |
+| `views.py` | 非 DRF 的 Django views、redirect、docs、匯出 |
+| `urls.py` | Django 非 API 路由 |
+| `middleware.py` | request context、rate limit |
+| `context_processors.py` | Django template context |
+| `tests.py` | 後端測試 |
+| `models.py` | 目前幾乎未使用，尚未建立正式 ORM model |
 
-### `myapp/urls.py`
-- 控制：
-  - Django 這層的 HTML/legacy URL
-- 目前主要用途：
-  - 將舊 Django 頁面 URL 轉向 Next.js 對應頁面
-  - 提供 docs / health / CSV / legacy API alias
+## 6. `frontend/`：Next.js 主站
 
-### `myapp/ops_views.py`
-- 控制：
-  - `/health/live/`
-  - `/health/ready/`
-  - no-db infrastructure docs 頁
+### 6.1 App Router 頁面
 
-### `myapp/tests.py`
-- 控制：
-  - 後端測試
+#### 公開頁
 
-### `myapp/models.py`
-- 目前狀態：
-  - 非 ORM 主路徑
-- 說明：
-  - 專案目前仍以 JSON 為主，尚未正式導入資料庫模型
+| 路由 | 檔案 | 作用 |
+| --- | --- | --- |
+| `/` | `frontend/app/page.tsx` | 首頁、商品瀏覽入口 |
+| `/products` | `frontend/app/products/page.tsx` | 商品總覽 |
+| `/products/[slug]` | `frontend/app/products/[slug]/page.tsx` | 商品詳情、評論、問答、比價、加入購物車 |
+| `/products/compare` | `frontend/app/products/compare/page.tsx` | 商品比較 |
+| `/brands/[brand_slug]` | `frontend/app/brands/[brand_slug]/page.tsx` | 品牌頁 |
+| `/categories/[category_slug]` | `frontend/app/categories/[category_slug]/page.tsx` | 分類頁 |
+| `/community` | `frontend/app/community/page.tsx` | 社群列表與發文 |
+| `/community/[id]` | `frontend/app/community/[id]/page.tsx` | 社群詳情、回覆、投票 |
+| `/login` | `frontend/app/login/page.tsx` | 登入 |
+| `/register` | `frontend/app/register/page.tsx` | 註冊 |
+| `/docs/routes` | `frontend/app/docs/routes/page.tsx` | 路由與 API 說明頁 |
 
----
+#### 買家 / 會員頁
 
-## 6. `frontend/`：主要使用者前端
+| 路由 | 檔案 | 作用 |
+| --- | --- | --- |
+| `/cart` | `frontend/app/cart/page.tsx` | 購物車 |
+| `/checkout` | `frontend/app/checkout/page.tsx` | checkout 預覽與建單 |
+| `/orders` | `frontend/app/orders/page.tsx` | 買家訂單列表 |
+| `/orders/[id]` | `frontend/app/orders/[id]/page.tsx` | 買家訂單詳情、付款資訊、完成訂單 |
+| `/me` | `frontend/app/me/page.tsx` | 會員中心入口 |
+| `/me/dashboard` | `frontend/app/me/dashboard/page.tsx` | 個人 dashboard |
+| `/me/profile` | `frontend/app/me/profile/page.tsx` | 個人資料 |
+| `/me/addresses` | `frontend/app/me/addresses/page.tsx` | 地址管理 |
+| `/me/invoice` | `frontend/app/me/invoice/page.tsx` | 發票設定 |
 
-這是目前網站的主要畫面層。
+#### 賣家頁
 
-### `frontend/app/`
+| 路由 | 檔案 | 作用 |
+| --- | --- | --- |
+| `/me/products` | `frontend/app/me/products/page.tsx` | 賣家商品列表 |
+| `/me/products/new` | `frontend/app/me/products/new/page.tsx` | 建立商品 |
+| `/me/products/[slug]` | `frontend/app/me/products/[slug]/page.tsx` | 編輯商品 |
+| `/me/sales` | `frontend/app/me/sales/page.tsx` | 賣家訂單列表 |
+| `/me/sales/[id]` | `frontend/app/me/sales/[id]/page.tsx` | 賣家訂單詳情與出貨狀態 |
+| `/me/sales/report` | `frontend/app/me/sales/report/page.tsx` | 銷售報表 |
+| `/me/promotions` | `frontend/app/me/promotions/page.tsx` | banner 申請 |
+| `/me/shipping-rules` | `frontend/app/me/shipping-rules/page.tsx` | 賣家運費規則 |
 
-這是 Next.js App Router 頁面入口。
+#### staff / admin 頁
 
-#### 共用入口
+| 路由 | 檔案 | 作用 |
+| --- | --- | --- |
+| `/staff/dashboard` | `frontend/app/staff/dashboard/page.tsx` | 管理摘要 |
+| `/staff/orders` | `frontend/app/staff/orders/page.tsx` | 管理端訂單列表 |
+| `/staff/orders/[id]` | `frontend/app/staff/orders/[id]/page.tsx` | 管理端訂單詳情與 payment debug |
+| `/staff/products` | `frontend/app/staff/products/page.tsx` | 商品審核 / 上下架 / 刪除 |
+| `/staff/reviews` | `frontend/app/staff/reviews/page.tsx` | 賣家申請與商品審核摘要 |
+| `/staff/users` | `frontend/app/staff/users/page.tsx` | 會員管理 |
+| `/staff/banners` | `frontend/app/staff/banners/page.tsx` | banner 管理 |
+| `/staff/content/reviews` | `frontend/app/staff/content/reviews/page.tsx` | 評論內容管理 |
+| `/staff/content/questions` | `frontend/app/staff/content/questions/page.tsx` | 問答內容管理 |
+| `/staff/content/posts` | `frontend/app/staff/content/posts/page.tsx` | 社群貼文管理 |
 
-- `frontend/app/layout.tsx`
-  - 全站 layout
-  - 包含 header / 共用外框
-- `frontend/app/globals.css`
-  - 全站樣式
-- `frontend/app/page.tsx`
-  - 首頁
-- `frontend/app/api/backend/[...path]/route.ts`
-  - 前端 proxy route
-  - 作用：把前端 `/api/backend/...` 代理到 Django `/api/v1/...`
+### 6.2 前端共用層
 
-#### 商品 / 內容瀏覽
+| 路徑 | 作用 |
+| --- | --- |
+| `frontend/components/site-header.tsx` | 導覽列、登入狀態、購物車/收藏/比較計數、登出 |
+| `frontend/components/catalog-browser.tsx` | 商品篩選與清單瀏覽 |
+| `frontend/components/home-banner-carousel.tsx` | 首頁 banner 輪播 |
+| `frontend/lib/api.ts` | API helper、CSRF、proxy request |
+| `frontend/lib/types.ts` | 前端型別定義 |
+| `frontend/lib/session-drafts.ts` | 前端 `sessionStorage` 草稿狀態 |
+| `frontend/lib/community-editor.ts` | Tiptap editor 與圖片上傳 |
+| `frontend/app/api/backend/[...path]/route.ts` | `/api/backend/*` 代理到 Django `/api/v1/*` |
+| `frontend/app/backend-assets/[...path]/route.ts` | 靜態資產 proxy |
 
-- `frontend/app/products/page.tsx`
-  - 商品總覽頁
-- `frontend/app/products/[slug]/page.tsx`
-  - 商品詳情頁
-  - 控制商品資料、評論、問答、加入購物車、比價區塊
-- `frontend/app/products/compare/page.tsx`
-  - 商品比較頁
-- `frontend/app/brands/[brand_slug]/page.tsx`
-  - 品牌商品頁
-- `frontend/app/categories/[category_slug]/page.tsx`
-  - 分類商品頁
-- `frontend/app/community/page.tsx`
-  - 社群文章列表
-- `frontend/app/community/[id]/page.tsx`
-  - 社群文章詳情
+## 7. `data/`：目前真實資料來源
 
-#### 認證 / 會員
+目前存在的 JSON 檔案：
 
-- `frontend/app/login/page.tsx`
-  - 登入頁
-- `frontend/app/register/page.tsx`
-  - 註冊頁
-- `frontend/app/me/page.tsx`
-  - 會員中心入口轉向頁
-- `frontend/app/me/dashboard/page.tsx`
-  - 會員首頁 / dashboard
-- `frontend/app/me/profile/page.tsx`
-  - 會員資料頁
-- `frontend/app/me/addresses/page.tsx`
-  - 地址管理頁
-- `frontend/app/me/invoice/page.tsx`
-  - 發票設定頁
+| 檔案 | 作用 |
+| --- | --- |
+| `users.json` | 會員、地址、發票、shipping rules |
+| `products.json` | 商品、圖片、variant、審核狀態 |
+| `orders.json` | 訂單、訂單明細、配送/付款摘要 |
+| `reviews.json` | 商品評論 |
+| `questions.json` | 商品問答與回答 |
+| `posts.json` | 社群貼文與回覆 |
+| `banners.json` | 首頁 banner 與申請資料 |
+| `recommendations.json` | 推薦商品資料 |
+| `competitor_prices.json` | 比價 mock 資料 |
+| `newebpay_payment_logs.json` | 藍新支付 debug / callback / query 紀錄 |
 
-#### 購物 / 訂單
+注意：
 
-- `frontend/app/cart/page.tsx`
-  - 購物車頁
-- `frontend/app/checkout/page.tsx`
-  - checkout 頁
-  - 控制：
-    - 商品明細
-    - 地址選擇
-    - 配送方式
-    - 付款方式
-    - 發票摘要
-    - 備註
-- `frontend/app/orders/page.tsx`
-  - 買家訂單列表
-- `frontend/app/orders/[id]/page.tsx`
-  - 買家訂單詳情
-  - 包含藍新支付 sandbox 測試區塊
+- 目前沒有正式資料庫 migration
+- `myapp/models.py` 不是真實資料來源
+- 開始建 DB 時，應以 `data/*.json` 現況與 `service` 規則為主
 
-#### 賣家
+## 8. 目前 canonical API 分組
 
-- `frontend/app/me/products/page.tsx`
-  - 賣家商品列表
-- `frontend/app/me/products/new/page.tsx`
-  - 建立商品頁
-- `frontend/app/me/products/[slug]/page.tsx`
-  - 編輯商品頁
-- `frontend/app/me/sales/page.tsx`
-  - 賣家訂單列表
-- `frontend/app/me/sales/[id]/page.tsx`
-  - 賣家訂單詳情
-  - 包含藍新物流 sandbox 測試區塊
-- `frontend/app/me/sales/report/page.tsx`
-  - 賣家銷售報表
+`myapp/api/urls.py` 現在的 API 分組如下：
 
-#### 管理端
+- auth / app bootstrap
+- member center
+- buyer orders
+- seller orders
+- seller products
+- cart / checkout
+- NewebPay payment / store map integrations
+- staff / admin
+- product browse / review / question / compare / recommendation / price compare
+- community
 
-- `frontend/app/staff/dashboard/page.tsx`
-  - 管理端 dashboard
-- `frontend/app/staff/orders/page.tsx`
-  - 管理端訂單列表
-- `frontend/app/staff/orders/[id]/page.tsx`
-  - 管理端訂單詳情
-- `frontend/app/staff/reviews/page.tsx`
-  - 管理端賣家申請審核 / 商品強制下架頁
-- `frontend/app/staff/users/page.tsx`
-  - 管理端會員管理
+實際完整路由請看：
 
-#### 文件
-
+- `myapp/api/urls.py`
 - `frontend/app/docs/routes/page.tsx`
-  - 前端可讀的路由 / API 文件頁
 
-### `frontend/components/`
+## 9. request flow
 
-這層是可重用前端元件。
+### 商品詳情頁
 
-- `site-header.tsx`
-  - 全站導覽列
-  - 顯示登入狀態、購物車 badge、收藏/比較數量
-- `catalog-browser.tsx`
-  - 商品瀏覽與篩選區塊
-- `product-card.tsx`
-  - 商品卡片
+1. 使用者打開 `frontend/app/products/[slug]/page.tsx`
+2. 頁面透過 `frontend/lib/api.ts` 呼叫 `/api/backend/products/:slug/`
+3. Next.js proxy 轉給 Django `/api/v1/products/:slug/`
+4. `myapp/api/views.py` 進入對應 API view
+5. API view 呼叫 `myapp/services/*`
+6. service 透過 `myapp/repositories/local_store.py` 讀取 `data/*.json`
+7. JSON response 回到前端 render
 
-### `frontend/lib/`
+### checkout 建立訂單
 
-這層是前端工具與型別。
+1. 使用者在 `/checkout` 頁面確認地址、配送、付款、發票
+2. 前端呼叫 `/api/backend/checkout/confirm/`
+3. Django API 進入 `CheckoutConfirmApi`
+4. `orders.py` 建立訂單並清除當前使用者購物車
+5. 寫回 `data/orders.json`
+6. 前端跳轉到 `/orders/[id]`
 
-- `api.ts`
-  - 前端統一 API 呼叫 helper
-  - 處理 proxy path、CSRF、cookie、錯誤格式化
-- `types.ts`
-  - 前端使用的 TypeScript 型別
-  - 對應 Django DRF 回傳 payload
+## 10. session、暫存與個人化狀態
 
-### `frontend/docs/`
-- 前端或生成產物說明文件
+目前專案不是純 stateless API，以下狀態仍在 session 或瀏覽器暫存內：
 
-### `frontend/next.config.mjs`
-- 控制：
-  - Next.js build 設定
-  - `/index -> /` redirect
-  - output tracing root
+### Django signed-cookie session
 
-### `frontend/tsconfig.json`
-- 控制：
-  - TypeScript 編譯規則
+目前 key：
 
-### `frontend/README.md`
-- 控制：
-  - 前端啟動說明
+- `demo_user`
+- `cart`
+- `favorite_products`
+- `compare_products`
+- `recent_products`
 
----
+目前行為：
 
-## 7. `data/`：目前的資料來源
+- cart / favorite / compare / recent 都以 username bucket 隔離
+- 未登入使用 `__guest__`
+- 登入時會把 guest bucket 合併進目前帳號 bucket
+- 登出時會清掉 guest bucket，並移除 `demo_user`
 
-目前沒有正式資料庫，主要資料存在 `data/*.json`。
+重要注意：
 
-常見資料：
+- 目前 logout 不會抹除已登入帳號 bucket 的歷史狀態
+- 這是為了同一瀏覽器重新登入時恢復 cart / favorite / compare / recent
+- 如果未來改成正式 DB 或 Redis session，要重新決定這是不是期望行為
 
-- `products.json`
-  - 商品資料
-- `users.json`
-  - 會員資料
-- `orders.json`
-  - 訂單資料
-- `reviews.json`
-  - 評論資料
-- `questions.json`
-  - 問答資料
-- `community_posts.json`
-  - 社群文章
-- `competitor_prices.json`
-  - 比價 mock 資料
-- `newebpay_payment_logs.json`
-  - 藍新支付測試紀錄
-- `newebpay_logistics_logs.json`
-  - 藍新物流測試紀錄
+### 瀏覽器 `sessionStorage`
 
-這代表：
+前端還有草稿型暫存：
 
-- 本機流程驗證很方便
-- 但 Render / 正式環境下不適合當長期交易資料儲存
+- `frontend/lib/session-drafts.ts`
+- 由 `site-header.tsx` 在登出時清除
 
----
+這類資料不在 Django session，也不會寫進 JSON。
 
-## 8. `templates/`：目前保留的 Django 模板
+## 11. 隱私與匿名規則
 
-目前 `templates/` 不再負責主要前端頁面。
+### 目前已做對的部分
 
-保留用途：
+- `reviews.py` 公開輸出時會匿名化作者名稱
+- `questions.py` 公開輸出時會匿名化提問者與回答者名稱
+- `community.py` 公開輸出時會匿名化作者與回覆者名稱
+- 匿名規則集中在 `myapp/services/privacy.py`
 
-- `templates/base.html`
-  - Django docs / 後端頁面的基底模板
-- `templates/docs/api_route_record.html`
-  - API 路由文件頁
-- `templates/docs/html_write_migration.html`
-  - HTML write migration 說明頁
-- `templates/docs/no_db_infrastructure.html`
-  - 無資料庫架構說明頁
+### 目前實際儲存方式
+
+資料層仍保留：
+
+- `author`
+- `author_username`
+- `author_user_id`
 
 也就是：
 
-- **主要使用者前端不在這裡**
-- 使用者前端目前在 `frontend/app/`
+- 公開 API 用匿名名稱
+- staff / admin 仍能看到原始作者資料
+- 開始做 DB 時應保留 `author_user_id` 作為內部關聯，不要用匿名字串當主資料
 
----
+## 12. 功能盤點與資料庫化前注意事項
 
-## 9. 哪些資料夾通常不要手改
+### 已有完整主流程的區塊
 
-以下路徑大多屬於產物或環境，不應直接當主開發位置：
+- 註冊 / 登入 / 登出
+- 商品瀏覽 / 商品詳情
+- 評論 / 問答 / 社群
+- 購物車 / checkout / 建立訂單
+- 賣家商品管理
+- 賣家訂單與出貨狀態
+- staff 商品、用戶、內容、banner 管理
 
-- `.venv/`
-- `node_modules/`
-- `frontend/node_modules/`
-- `frontend/.next/`
-- `staticfiles/`
-- `__pycache__/`
-- `tsconfig.tsbuildinfo`
+### 仍屬 prototype 或需要明確遷移策略的區塊
 
----
+- 所有持久化仍是 JSON，不適合正式交易量
+- session 採 signed cookies，資料量放大後會遇到 cookie size 問題
+- NewebPay 已能導流與記錄 debug，但 callback / query 仍在整合中
+- Django ORM model 尚未落地
 
-## 10. 請求流向
+### 建 DB 前一定要先定義的規則
 
-### 例：前端商品頁
+- 購物車是否要改成資料庫持久化
+- 收藏 / 比較 / 最近瀏覽是否要改成資料庫持久化
+- logout 是否應清掉所有個人化資料，或只清登入狀態
+- 評論 / 問答 / 社群對外是否一律匿名
+- staff / admin 是否保留真實作者欄位
+- 訂單與商品是否保留 snapshot 欄位，避免日後資料回推失真
 
-1. 使用者打開 `frontend/app/products/[slug]/page.tsx`
-2. 頁面呼叫 `frontend/lib/api.ts`
-3. 請求送到 `frontend/app/api/backend/[...path]/route.ts`
-4. proxy 轉發到 Django `/api/v1/products/<slug>/`
-5. Django `myapp/api/views.py` 收到請求
-6. API view 呼叫 `myapp/services/...`
-7. service 透過 `myapp/repositories/local_store.py` 讀 `data/*.json`
-8. 資料回傳到前端頁面 render
+## 13. 建 DB 時建議優先閱讀的檔案
 
-### 例：checkout 建立訂單
+- `myapp/repositories/local_store.py`
+- `myapp/services/auth_demo.py`
+- `myapp/services/cart.py`
+- `myapp/services/personalization.py`
+- `myapp/services/orders.py`
+- `myapp/services/product_management.py`
+- `myapp/services/reviews.py`
+- `myapp/services/questions.py`
+- `myapp/services/community.py`
+- `myapp/services/admin_portal.py`
+- `myapp/api/urls.py`
+- `frontend/lib/types.ts`
 
-1. 使用者在 `frontend/app/checkout/page.tsx` 確認資料
-2. 前端送出到 `/api/backend/checkout/confirm/`
-3. Django `/api/v1/checkout/confirm/` 收到請求
-4. `CheckoutConfirmApi` 呼叫 `orders.py` / `customer_center.py`
-5. 訂單資料寫入 `data/orders.json`
-6. 前端跳轉到訂單頁 `frontend/app/orders/[id]/page.tsx`
+## 14. 現階段結論
 
----
+目前這個專案不是「只有前端頁面待接資料庫」，而是：
 
-## 11. 目前最重要的開發位置
+- 已有可跑的商城、買家、賣家、staff 流程
+- 但資料層仍是 prototype
+- 下一步正式建立資料庫時，要一起決定：
+  - session 與個人化資料是否落 DB
+  - 匿名規則的資料模型
+  - 訂單 / 付款 / 出貨 snapshot 與 event log 結構
 
-如果你後續要繼續看網站功能，優先看這幾個位置：
-
-- **前端頁面**
-  - `frontend/app/`
-- **前端共用元件**
-  - `frontend/components/`
-- **前端 API helper / 型別**
-  - `frontend/lib/`
-- **後端 API**
-  - `myapp/api/views.py`
-  - `myapp/api/serializers.py`
-  - `myapp/api/urls.py`
-- **後端商業邏輯**
-  - `myapp/services/`
-- **資料來源**
-  - `data/*.json`
-
----
-
-## 12. 現階段架構結論
-
-目前專案已經是：
-
-- `Next.js` 作為主要網站前端
-- `Django + DRF` 作為主要後端 API
-- `JSON data files` 作為目前資料來源
-
-所以你之後看網站時，可以用這個簡單判斷：
-
-- **看畫面/UI** → `frontend/`
-- **看 API / session / checkout / 藍新** → `myapp/api` + `myapp/services`
-- **看設定 / Render / host / CSRF** → `store/settings.py`
-- **看目前實際資料** → `data/`
+資料表草稿請接著看 `DATABASE_SCHEMA_DRAFT.md`。

@@ -88,6 +88,40 @@ def _default_shipping_rules() -> Dict[str, Any]:
     }
 
 
+def _default_cart() -> Dict[str, Any]:
+    """Return the normalized cart payload shape."""
+    return {
+        "items": {},
+        "coupon": None,
+    }
+
+
+def _default_categories() -> List[Dict[str, Any]]:
+    """Return the built-in product category master seed."""
+    return [
+        {
+            "id": 1,
+            "slug": "tops",
+            "name": "上衣",
+            "description": "",
+            "is_active": True,
+            "sort_order": 1,
+            "created_at": "2026-06-02T00:00:00+08:00",
+            "updated_at": "2026-06-02T00:00:00+08:00",
+        },
+        {
+            "id": 2,
+            "slug": "pants",
+            "name": "褲子",
+            "description": "",
+            "is_active": True,
+            "sort_order": 2,
+            "created_at": "2026-06-02T00:00:00+08:00",
+            "updated_at": "2026-06-02T00:00:00+08:00",
+        },
+    ]
+
+
 def _normalize_user_record(user: Dict[str, Any]) -> Dict[str, Any]:
     """Normalize one stored user record into the expected runtime shape."""
     normalized = dict(user)
@@ -119,6 +153,15 @@ def _normalize_user_record(user: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(shipping_rules, dict):
         merged_shipping_rules.update(shipping_rules)
     normalized["shipping_rules"] = merged_shipping_rules
+
+    cart = normalized.get("cart")
+    merged_cart = _default_cart()
+    if isinstance(cart, dict):
+        items = cart.get("items")
+        if isinstance(items, dict):
+            merged_cart["items"] = items
+        merged_cart["coupon"] = cart.get("coupon")
+    normalized["cart"] = merged_cart
     return normalized
 
 
@@ -143,6 +186,26 @@ def get_product_by_id(product_id: int) -> Optional[Dict[str, Any]]:
 def save_products(products: List[Dict[str, Any]]) -> None:
     _write_json("products.json", products)
     _invalidate("products")
+
+
+def get_categories() -> List[Dict[str, Any]]:
+    try:
+        return _cached("categories", lambda: _load_json("categories.json"))
+    except FileNotFoundError:
+        return _default_categories()
+
+
+def get_category_by_slug(slug: str) -> Optional[Dict[str, Any]]:
+    clean_slug = slug.strip().lower()
+    for category in get_categories():
+        if str(category.get("slug") or "").strip().lower() == clean_slug:
+            return category
+    return None
+
+
+def save_categories(categories: List[Dict[str, Any]]) -> None:
+    _write_json("categories.json", categories)
+    _invalidate("categories")
 
 
 def get_reviews() -> List[Dict[str, Any]]:

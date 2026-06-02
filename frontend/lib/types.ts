@@ -104,6 +104,8 @@ export type Product = {
   brand: string
   /** 分類名稱。 */
   category: string
+  category_slug?: string
+  category_label?: string
   /** 標籤清單。 */
   tags?: string[]
   /** 所有圖片路徑。 */
@@ -154,6 +156,15 @@ export type Product = {
   owner_display_name?: string
 }
 
+export type ProductCategoryOption = {
+  id?: number
+  slug: string
+  label: string
+  description?: string
+  is_active?: boolean
+  sort_order?: number
+}
+
 export type ProductVariant = {
   id: string
   name: string
@@ -183,7 +194,7 @@ export type ProductListPayload = {
   }
   /** 篩選 facet 選項。 */
   facets?: {
-    categories?: string[]
+    categories?: ProductCategoryOption[]
     brands?: string[]
     colors?: string[]
     sizes?: string[]

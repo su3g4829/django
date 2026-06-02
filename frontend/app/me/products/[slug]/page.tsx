@@ -18,7 +18,7 @@ import {
   sumSizeRowStock,
 } from '@/lib/product-variants'
 import { clearSessionDraft, getSessionDraft, setSessionDraft } from '@/lib/session-drafts'
-import type { Product } from '@/lib/types'
+import type { Product, ProductCategoryOption } from '@/lib/types'
 
 type EditableProduct = Product & {
   specs_text?: string
@@ -91,7 +91,7 @@ function buildFormFromProduct(product: EditableProduct): ProductEditForm {
     baseColor: parsed.baseColor,
     stock: String(product.stock ?? 0),
     brand: product.brand ?? '',
-    category: product.category ?? '',
+    category: product.category_slug ?? '',
     tags: Array.isArray(product.tags) ? product.tags.join(', ') : '',
     specs: stripManagedSizeSpecs(product.specs_text ?? ''),
     defaultSizeRows: parsed.defaultSizeRows,
@@ -193,6 +193,7 @@ export default function SellerProductEditPage() {
   const [mounted, setMounted] = useState(false)
   const [product, setProduct] = useState<EditableProduct | null>(null)
   const [form, setForm] = useState<ProductEditForm>(EMPTY_FORM)
+  const [categories, setCategories] = useState<ProductCategoryOption[]>([])
   const [files, setFiles] = useState<FileList | null>(null)
   const [existingImages, setExistingImages] = useState<string[]>([])
   const [removedImages, setRemovedImages] = useState<string[]>([])
@@ -243,6 +244,30 @@ export default function SellerProductEditPage() {
 
     void loadProduct()
   }, [draftKey, mounted, slug])
+
+  useEffect(() => {
+    if (!mounted) {
+      return
+    }
+
+    async function loadCategories() {
+      try {
+        const payload = await apiFetch<{ items: ProductCategoryOption[] }>('/product-categories/')
+        setCategories(payload.items)
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to load product categories.')
+      }
+    }
+
+    void loadCategories()
+  }, [mounted])
+
+  useEffect(() => {
+    if (!categories.length || form.category) {
+      return
+    }
+    setForm((current) => ({ ...current, category: categories[0]?.slug ?? '' }))
+  }, [categories, form.category])
 
   const normalizedDefaultSizeRows = useMemo(() => sanitizeSizeRows(form.defaultSizeRows), [form.defaultSizeRows])
   const normalizedColorGroups = useMemo(() => sanitizeColorVariantGroups(form.colorGroups), [form.colorGroups])
@@ -508,7 +533,14 @@ export default function SellerProductEditPage() {
 
         <label className="field">
           <span>分類</span>
-          <input value={form.category} onChange={(event) => setForm((current) => ({ ...current, category: event.target.value }))} />
+          <select value={form.category} onChange={(event) => setForm((current) => ({ ...current, category: event.target.value }))}>
+            <option value="">請選擇分類</option>
+            {categories.map((category) => (
+              <option key={category.slug} value={category.slug}>
+                {category.label}
+              </option>
+            ))}
+          </select>
         </label>
         <label className="field">
           <span>標籤</span>

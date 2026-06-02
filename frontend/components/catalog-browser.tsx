@@ -17,7 +17,7 @@ import { useEffect, useMemo, useState } from 'react'
 
 import { ProductCard } from '@/components/product-card'
 import { apiFetch, toQueryString } from '@/lib/api'
-import type { ProductListPayload } from '@/lib/types'
+import type { ProductCategoryOption, ProductListPayload } from '@/lib/types'
 
 /**
  * 傳入目錄元件的外部參數。
@@ -132,9 +132,9 @@ export function CatalogBrowser({ title, intro, initialFilters, syncUrl = false }
               onChange={(event) => setQuery((prev) => ({ ...prev, category: event.target.value, page: 1 }))}
             >
               <option value="">全部分類</option>
-              {data?.facets?.categories?.map((item) => (
-                <option key={item} value={item}>
-                  {item}
+              {(data?.facets?.categories ?? []).map((item: ProductCategoryOption) => (
+                <option key={item.slug} value={item.slug}>
+                  {item.label}
                 </option>
               ))}
             </select>

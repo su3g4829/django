@@ -47,8 +47,8 @@ def _same_category_products(product: Dict[str, Any], limit: int) -> List[Dict[st
     回傳:
         依函式用途回傳對應資料。
     """
-    category = product.get("category")
-    if not category:
+    category_slug = product_management._product_category_slug(product)
+    if not category_slug:
         return []
     matches = []
     for candidate in local_store.get_products():
@@ -56,7 +56,7 @@ def _same_category_products(product: Dict[str, Any], limit: int) -> List[Dict[st
             continue
         if not product_management.is_public_product(candidate):
             continue
-        if candidate.get("category") == category:
+        if product_management._product_category_slug(candidate) == category_slug:
             matches.append(candidate)
         if len(matches) >= limit:
             break

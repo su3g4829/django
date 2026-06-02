@@ -1,513 +1,179 @@
-﻿# FRONTEND_API_SERVICE_MAP
+# FRONTEND_API_SERVICE_MAP
 
 本文件用來對照：
 
 1. 前端頁面在哪裡
-2. 該頁面控制網站哪一塊
-3. 會呼叫哪些 Django DRF API
-4. 後端主要落到哪些 service
-5. 最後讀寫哪類 JSON 資料
+2. 該頁面控制哪一段功能
+3. 呼叫哪些 API
+4. 後端落到哪些 service
+5. 目前資料最後存到哪裡
 
----
-
-## 1. 全站共用層
+## 1. 共用層
 
 ### `frontend/app/layout.tsx`
-- 控制：
-  - 全站共用 layout
-  - header / 導覽 / 全站樣式外框
-- 主要搭配元件：
-  - `frontend/components/site-header.tsx`
+
+- 負責全站 layout
+- 載入 header 與全站樣式
 
 ### `frontend/components/site-header.tsx`
-- 控制：
-  - 頁首導覽
-  - 目前登入者
-  - 購物車數量
-  - 比較清單數量
-  - 登出
-- API：
-  - `GET /api/v1/app/bootstrap/`
-  - `POST /api/v1/auth/logout/`
-- 後端 service：
-  - `auth_demo.py`
-  - `cart.py`
-  - `personalization.py`
-- 資料來源：
-  - `data/users.json`
-  - `data/orders.json` / 購物車相關 JSON
+
+- 顯示登入者、購物車數量、收藏數量、比較數量
+- 提供登出
+
+API：
+
+- `GET /api/v1/app/bootstrap/`
+- `POST /api/v1/auth/logout/`
+
+後端：
+
+- `myapp/services/auth_demo.py`
+- `myapp/services/cart.py`
+- `myapp/services/personalization.py`
+
+資料來源：
+
+- session
+- `data/users.json`
 
 ### `frontend/app/api/backend/[...path]/route.ts`
-- 控制：
-  - Next.js 前端代理層
-  - 將 `/api/backend/...` 轉發到 Django `/api/v1/...`
-- 不直接控制商業功能
-- 主要負責：
-  - cookie 轉送
-  - CSRF token
-  - error normalization
 
----
+- Next.js API proxy
+- 將 `/api/backend/*` 轉到 Django `/api/v1/*`
 
-## 2. 商品瀏覽與內容頁
+### `frontend/app/backend-assets/[...path]/route.ts`
 
-### `frontend/app/page.tsx`
-- 控制：
-  - 首頁
-  - 精選商品總覽入口
-- 主要元件：
-  - `frontend/components/catalog-browser.tsx`
-- API：
-  - `GET /api/v1/products/`
-- 後端 service：
-  - `recommendations.py`
-  - 商品查詢相關 service / repository
-- 資料來源：
-  - `data/products.json`
+- 靜態資產 proxy
+- 主要給前端安全讀取後端資產路徑
 
-### `frontend/app/products/page.tsx`
-- 控制：
-  - 商品總覽
-- API：
-  - `GET /api/v1/products/`
-- 後端 service：
-  - 商品列表查詢 service
-- 資料來源：
-  - `data/products.json`
+## 2. 公開商品與內容頁
 
-### `frontend/app/brands/[brand_slug]/page.tsx`
-- 控制：
-  - 品牌商品頁
-- API：
-  - `GET /api/v1/products/?brand=...`
-- 後端 service：
-  - 商品列表查詢 service
-- 資料來源：
-  - `data/products.json`
-
-### `frontend/app/categories/[category_slug]/page.tsx`
-- 控制：
-  - 分類商品頁
-- API：
-  - `GET /api/v1/products/?category=...`
-- 後端 service：
-  - 商品列表查詢 service
-- 資料來源：
-  - `data/products.json`
-
-### `frontend/app/products/[slug]/page.tsx`
-- 控制：
-  - 商品詳情
-  - 加入購物車
-  - 收藏
-  - 商品比較
-  - 評論
-  - 問答
-  - 外站比價
-- API：
-  - `GET /api/v1/products/:slug/`
-  - `POST /api/v1/cart/items/`
-  - `POST /api/v1/products/:slug/favorite/`
-  - `POST /api/v1/products/:slug/compare/`
-  - `GET/POST /api/v1/products/:slug/reviews/`
-  - `GET/POST /api/v1/products/:slug/questions/`
-  - `POST /api/v1/products/:slug/questions/:questionId/answers/`
-  - `GET /api/v1/products/:slug/recommendations/`
-  - `GET /api/v1/products/:slug/price-compare/`
-  - `POST /api/v1/products/:slug/price-compare/refresh/`
-- 後端 service：
-  - `cart.py`
-  - `reviews.py`
-  - `questions.py`
-  - `recommendations.py`
-  - `personalization.py`
-  - `price_compare.py`
-- 資料來源：
-  - `data/products.json`
-  - `data/reviews.json`
-  - `data/questions.json`
-  - `data/competitor_prices.json`
-
-### `frontend/app/products/compare/page.tsx`
-- 控制：
-  - 商品比較頁
-- API：
-  - `GET /api/v1/products/compare/`
-  - `POST /api/v1/products/:slug/compare/`
-- 後端 service：
-  - `personalization.py`
-- 資料來源：
-  - 比較清單相關 JSON / session 資料
-
-### `frontend/app/community/page.tsx`
-- 控制：
-  - 社群文章列表
-  - 發文
-- API：
-  - `GET /api/v1/community/posts/`
-  - `POST /api/v1/community/posts/`
-- 後端 service：
-  - `community.py`
-- 資料來源：
-  - `data/community_posts.json`
-
-### `frontend/app/community/[id]/page.tsx`
-- 控制：
-  - 單篇社群文章
-  - 回覆
-  - 投票
-- API：
-  - `GET /api/v1/community/posts/:id/`
-  - `POST /api/v1/community/posts/:id/replies/`
-  - `POST /api/v1/community/posts/:id/vote/`
-- 後端 service：
-  - `community.py`
-- 資料來源：
-  - `data/community_posts.json`
-
----
+| 頁面 | 作用 | API | 後端 service | 目前資料來源 |
+| --- | --- | --- | --- | --- |
+| `frontend/app/page.tsx` | 首頁、商品瀏覽入口 | `GET /products/`, `GET /banners/` | `product_management.py`, `recommendations.py`, `admin_portal.py` | `products.json`, `banners.json` |
+| `frontend/app/products/page.tsx` | 商品總覽 | `GET /products/` | `product_management.py` | `products.json` |
+| `frontend/app/brands/[brand_slug]/page.tsx` | 品牌商品頁 | `GET /products/?brand=...` | `product_management.py` | `products.json` |
+| `frontend/app/categories/[category_slug]/page.tsx` | 分類商品頁 | `GET /products/?category=...` | `product_management.py` | `products.json` |
+| `frontend/app/products/[slug]/page.tsx` | 商品詳情、收藏、比較、評論、問答、比價、加入購物車 | `GET /products/:slug/`, `POST /cart/items/`, `POST /products/:slug/favorite/`, `POST /products/:slug/compare/`, `GET/POST /products/:slug/reviews/`, `GET/POST /products/:slug/questions/`, `POST /products/:slug/questions/:questionId/answers/`, `GET /products/:slug/recommendations/`, `GET /products/:slug/price-compare/`, `POST /products/:slug/price-compare/refresh/` | `product_management.py`, `cart.py`, `personalization.py`, `reviews.py`, `questions.py`, `recommendations.py`, `price_compare.py` | `products.json`, `reviews.json`, `questions.json`, `recommendations.json`, `competitor_prices.json`, session |
+| `frontend/app/products/compare/page.tsx` | 商品比較 | `GET /products/compare/`, `POST /products/:slug/compare/` | `personalization.py`, `product_management.py` | session, `products.json` |
+| `frontend/app/community/page.tsx` | 社群列表與發文 | `GET /community/posts/`, `POST /community/posts/` | `community.py` | `posts.json` |
+| `frontend/app/community/[id]/page.tsx` | 貼文詳情、回覆、投票、編輯、刪除 | `GET /community/posts/:id/`, `POST /community/posts/:id/replies/`, `POST /community/posts/:id/vote/`, `PATCH /community/posts/:id/`, `DELETE /community/posts/:id/` | `community.py` | `posts.json` |
+| `frontend/app/docs/routes/page.tsx` | 前端可讀路由 / API 文件頁 | 無直接業務 API | `myapp/api/route_registry.py` 資料供應 | repo 文件資料 |
 
 ## 3. 認證與會員中心
 
-### `frontend/app/login/page.tsx`
-- 控制：
-  - 登入頁
-- API：
-  - `GET /api/v1/auth/csrf/`
-  - `POST /api/v1/auth/login/`
-- 後端 service：
-  - `auth_demo.py`
-- 資料來源：
-  - `data/users.json`
-
-### `frontend/app/register/page.tsx`
-- 控制：
-  - 註冊頁
-- API：
-  - `GET /api/v1/auth/csrf/`
-  - `POST /api/v1/auth/register/`
-- 後端 service：
-  - `auth_demo.py`
-- 資料來源：
-  - `data/users.json`
-
-### `frontend/app/me/dashboard/page.tsx`
-- 控制：
-  - 會員 dashboard
-  - 訂單 / 收藏 / 比較 / 基本摘要
-- API：
-  - `GET /api/v1/me/dashboard/`
-- 後端 service：
-  - `customer_center.py`
-  - `personalization.py`
-  - `orders.py`
-- 資料來源：
-  - `data/users.json`
-  - `data/orders.json`
-
-### `frontend/app/me/profile/page.tsx`
-- 控制：
-  - 個人資料編輯
-- API：
-  - `GET /api/v1/me/profile/`
-  - `POST /api/v1/me/profile/`
-- 後端 service：
-  - `profile.py`
-- 資料來源：
-  - `data/users.json`
-
-### `frontend/app/me/addresses/page.tsx`
-- 控制：
-  - 地址管理
-- API：
-  - `GET /api/v1/me/addresses/`
-  - `POST /api/v1/me/addresses/`
-  - `POST /api/v1/me/addresses/:id/default/`
-  - `DELETE /api/v1/me/addresses/:id/`
-- 後端 service：
-  - `profile.py`
-  - `customer_center.py`
-- 資料來源：
-  - `data/users.json`
-
-### `frontend/app/me/invoice/page.tsx`
-- 控制：
-  - 發票設定
-- API：
-  - `GET /api/v1/me/invoice/`
-  - `POST /api/v1/me/invoice/`
-- 後端 service：
-  - `profile.py`
-  - `customer_center.py`
-- 資料來源：
-  - `data/users.json`
-
----
+| 頁面 | 作用 | API | 後端 service | 目前資料來源 |
+| --- | --- | --- | --- | --- |
+| `frontend/app/login/page.tsx` | 登入 | `GET /auth/csrf/`, `POST /auth/login/` | `auth_demo.py` | `users.json`, session |
+| `frontend/app/register/page.tsx` | 註冊 | `GET /auth/csrf/`, `POST /auth/register/` | `auth_demo.py` | `users.json` |
+| `frontend/app/me/page.tsx` | 會員中心入口 | `GET /me/` | `auth_demo.py` | session |
+| `frontend/app/me/dashboard/page.tsx` | 個人 dashboard | `GET /me/dashboard/` | `profile.py`, `orders.py`, `personalization.py` | `users.json`, `orders.json`, `products.json`, session |
+| `frontend/app/me/profile/page.tsx` | 個人資料、賣家申請 | `GET /me/profile/`, `POST /me/profile/`, `POST /me/seller-request/` | `profile.py`, `auth_demo.py` | `users.json` |
+| `frontend/app/me/addresses/page.tsx` | 地址管理 | `GET /me/addresses/`, `POST /me/addresses/`, `POST /me/addresses/:id/default/`, `DELETE /me/addresses/:id/` | `customer_center.py`, `profile.py` | `users.json` |
+| `frontend/app/me/invoice/page.tsx` | 發票設定 | `GET /me/invoice/`, `POST /me/invoice/` | `customer_center.py`, `profile.py` | `users.json` |
+| `frontend/app/me/shipping-rules/page.tsx` | 賣家運費規則 | `GET /me/shipping-rules/`, `POST /me/shipping-rules/` | `auth_demo.py` | `users.json` |
+| `frontend/app/me/promotions/page.tsx` | banner 申請 | `GET /me/banner-applications/`, `POST /me/banner-applications/` | `admin_portal.py` | `banners.json` |
 
 ## 4. 購物車、checkout、買家訂單
 
-### `frontend/app/cart/page.tsx`
-- 控制：
-  - 購物車內容
-  - 改數量
-  - 刪除項目
-  - 套折扣碼
-- API：
-  - `GET /api/v1/cart/`
-  - `PATCH /api/v1/cart/items/:itemKey/`
-  - `DELETE /api/v1/cart/items/:itemKey/`
-  - `POST /api/v1/cart/`
-- 後端 service：
-  - `cart.py`
-- 資料來源：
-  - 購物車 JSON / session 資料
+| 頁面 | 作用 | API | 後端 service | 目前資料來源 |
+| --- | --- | --- | --- | --- |
+| `frontend/app/cart/page.tsx` | 購物車內容、數量調整、刪除、折扣碼 | `GET /cart/`, `PATCH /cart/items/:itemKey/`, `DELETE /cart/items/:itemKey/`, `POST /cart/` | `cart.py`, `orders.py` | session, `products.json` |
+| `frontend/app/checkout/page.tsx` | 結帳預覽、選地址、選配送、建單 | `GET /checkout/preview/`, `POST /checkout/confirm/`, `GET /me/addresses/`, `GET /me/invoice/` | `orders.py`, `customer_center.py`, `cart.py` | session, `users.json`, `orders.json` |
+| `frontend/app/orders/page.tsx` | 買家訂單列表 | `GET /me/orders/` | `orders.py` | `orders.json` |
+| `frontend/app/orders/[id]/page.tsx` | 買家訂單詳情、付款資訊、完成訂單、正式付款入口 | `GET /me/orders/:id/`, `GET /me/orders/:id/newebpay-payment/`, `POST /me/orders/:id/newebpay-payment/sandbox/`, `POST /me/orders/:id/complete/`, `POST /me/orders/:id/cancel-request/`, `POST /me/orders/:id/refund-request/` | `orders.py`, `newebpay_payment_real.py` | `orders.json`, `newebpay_payment_logs.json` |
 
-### `frontend/app/checkout/page.tsx`
-- 控制：
-  - 結帳確認頁
-  - 商品明細
-  - 地址選擇
-  - 配送方式
-  - 付款方式
-  - 發票摘要
-  - 買家備註
-  - 建立訂單
-- API：
-  - `GET /api/v1/checkout/preview/`
-  - `POST /api/v1/checkout/confirm/`
-  - 同時依流程讀：
-    - `GET /api/v1/me/addresses/`
-    - `GET /api/v1/me/invoice/`
-- 後端 service：
-  - `cart.py`
-  - `customer_center.py`
-  - `orders.py`
-- 資料來源：
-  - 購物車資料
-  - `data/users.json`
-  - `data/orders.json`
+補充：
 
-### `frontend/app/orders/page.tsx`
-- 控制：
-  - 買家訂單列表
-- API：
-  - `GET /api/v1/me/orders/`
-- 後端 service：
-  - `orders.py`
-- 資料來源：
-  - `data/orders.json`
+- 買家訂單頁現在不再保留一般使用者可操作的 debug 表單
+- 正式付款入口仍會建立藍新 sandbox payload
 
-### `frontend/app/orders/[id]/page.tsx`
-- 控制：
-  - 買家訂單詳情
-  - 取消 / 退款申請
-  - 藍新支付 sandbox 測試
-  - 顯示支付測試紀錄
-- API：
-  - `GET /api/v1/me/orders/:id/`
-  - `POST /api/v1/me/orders/:id/cancel-request/`
-  - `POST /api/v1/me/orders/:id/refund-request/`
-  - `GET /api/v1/me/orders/:id/newebpay-payment/`
-  - `GET /api/v1/me/orders/:id/newebpay-payment/sandbox/`
-  - `POST /api/v1/me/orders/:id/newebpay-payment/sandbox/`
-- 後端 service：
-  - `orders.py`
-  - `newebpay_payment.py`
-  - `newebpay_payment_real.py`
-- 資料來源：
-  - `data/orders.json`
-  - `data/newebpay_payment_logs.json`
+## 5. 賣家頁
 
----
+| 頁面 | 作用 | API | 後端 service | 目前資料來源 |
+| --- | --- | --- | --- | --- |
+| `frontend/app/me/products/page.tsx` | 賣家商品列表、封存、複製、刪除 | `GET /me/products/`, `POST /me/products/:slug/archive/`, `POST /me/products/:slug/duplicate/`, `DELETE /me/products/:slug/` | `product_management.py` | `products.json` |
+| `frontend/app/me/products/new/page.tsx` | 新增商品 | `POST /me/products/` | `product_management.py` | `products.json` |
+| `frontend/app/me/products/[slug]/page.tsx` | 編輯商品 | `GET /me/products/:slug/`, `PUT /me/products/:slug/` | `product_management.py` | `products.json` |
+| `frontend/app/me/sales/page.tsx` | 賣家訂單列表 | `GET /me/sales/` | `orders.py` | `orders.json` |
+| `frontend/app/me/sales/[id]/page.tsx` | 賣家訂單詳情、出貨狀態更新 | `GET /me/sales/:id/`, `POST /me/sales/:id/update/` | `orders.py` | `orders.json` |
+| `frontend/app/me/sales/report/page.tsx` | 銷售報表 | `GET /me/sales/report/` | `orders.py`, `admin_portal.py` | `orders.json` |
 
-## 5. 賣家頁面
+補充：
 
-### `frontend/app/me/products/page.tsx`
-- 控制：
-  - 賣家商品列表
-  - 封存 / 複製 / 刪除商品
-- API：
-  - `GET /api/v1/me/products/`
-  - `POST /api/v1/me/products/:slug/archive/`
-  - `POST /api/v1/me/products/:slug/duplicate/`
-  - `DELETE /api/v1/me/products/:slug/`
-- 後端 service：
-  - `product_management.py`
-- 資料來源：
-  - `data/products.json`
+- 賣家訂單頁現在顯示的是訂單快照與出貨狀態，不再保留舊 seller logistics sandbox 面板
 
-### `frontend/app/me/products/new/page.tsx`
-- 控制：
-  - 新增商品
-- API：
-  - `POST /api/v1/me/products/`
-- 後端 service：
-  - `product_management.py`
-- 資料來源：
-  - `data/products.json`
+## 6. staff / admin 頁
 
-### `frontend/app/me/products/[slug]/page.tsx`
-- 控制：
-  - 編輯商品
-- API：
-  - `GET /api/v1/me/products/:slug/`
-  - `PUT /api/v1/me/products/:slug/`
-- 後端 service：
-  - `product_management.py`
-- 資料來源：
-  - `data/products.json`
+| 頁面 | 作用 | API | 後端 service | 目前資料來源 |
+| --- | --- | --- | --- | --- |
+| `frontend/app/staff/dashboard/page.tsx` | 管理摘要 | `GET /staff/dashboard/` | `admin_portal.py` | `users.json`, `products.json`, `orders.json`, `reviews.json`, `questions.json`, `posts.json` |
+| `frontend/app/staff/orders/page.tsx` | 管理端訂單列表 | `GET /staff/orders/` | `admin_portal.py`, `orders.py` | `orders.json` |
+| `frontend/app/staff/orders/[id]/page.tsx` | 管理端訂單詳情、售後審核、payment debug | `GET /staff/orders/:id/`, `GET /staff/orders/:id/payment-debug/`, `POST /staff/orders/:id/service-review/` | `admin_portal.py`, `orders.py`, `newebpay_payment_real.py` | `orders.json`, `newebpay_payment_logs.json` |
+| `frontend/app/staff/products/page.tsx` | 商品審核、上架、封存、刪除 | `GET /staff/products/`, `POST /staff/products/:slug/publish/`, `POST /staff/products/:slug/archive/`, `DELETE /staff/products/:slug/` | `admin_portal.py`, `product_management.py` | `products.json` |
+| `frontend/app/staff/reviews/page.tsx` | 賣家申請與商品審核摘要 | `GET /staff/reviews/`, `POST /staff/seller-requests/:username/review/`, `POST /staff/products/:slug/archive/` | `admin_portal.py`, `auth_demo.py`, `product_management.py` | `users.json`, `products.json` |
+| `frontend/app/staff/users/page.tsx` | 會員管理 | `GET /staff/users/`, `POST /staff/users/:username/status/` | `admin_portal.py` | `users.json` |
+| `frontend/app/staff/banners/page.tsx` | banner 建立、編輯、審核、排序、刪除 | `GET /staff/banners/`, `POST /staff/banners/`, `PATCH /staff/banners/:id/`, `POST /staff/banners/:id/review/`, `POST /staff/banners/reorder/`, `DELETE /staff/banners/:id/` | `admin_portal.py` | `banners.json` |
+| `frontend/app/staff/content/reviews/page.tsx` | 評論內容管理 | `GET /staff/content/reviews/`, `DELETE /staff/content/reviews/:id/` | `admin_portal.py`, `reviews.py` | `reviews.json` |
+| `frontend/app/staff/content/questions/page.tsx` | 問答內容管理 | `GET /staff/content/questions/`, `DELETE /staff/content/questions/:id/` | `admin_portal.py`, `questions.py` | `questions.json` |
+| `frontend/app/staff/content/posts/page.tsx` | 社群貼文管理 | `GET /staff/content/posts/`, `DELETE /staff/content/posts/:id/` | `admin_portal.py`, `community.py` | `posts.json` |
 
-### `frontend/app/me/sales/page.tsx`
-- 控制：
-  - 賣家訂單列表
-- API：
-  - `GET /api/v1/me/sales/`
-- 後端 service：
-  - `orders.py`
-- 資料來源：
-  - `data/orders.json`
+## 7. 前端功能對應的資料實體
 
-### `frontend/app/me/sales/[id]/page.tsx`
-- 控制：
-  - 賣家訂單詳情
-  - 出貨資訊
-  - 藍新物流 sandbox 測試
-  - 顯示物流測試紀錄
-- API：
-  - `GET /api/v1/me/sales/:id/`
-  - `POST /api/v1/me/sales/:id/update/`
-  - `GET /api/v1/me/sales/:id/newebpay-logistics/`
-  - `GET /api/v1/me/sales/:id/newebpay-logistics/sandbox/`
-  - `POST /api/v1/me/sales/:id/newebpay-logistics/sandbox/`
-- 後端 service：
-  - `orders.py`
-  - `newebpay_logistics.py`
-  - `newebpay_logistics_real.py`
-- 資料來源：
-  - `data/orders.json`
-  - `data/newebpay_logistics_logs.json`
+以後換成資料庫時，前端大致會對應到這些實體：
 
-### `frontend/app/me/sales/report/page.tsx`
-- 控制：
-  - 賣家銷售報表
-- API：
-  - `GET /api/v1/me/sales/report/`
-- 後端 service：
-  - `orders.py`
-  - `admin_portal.py`
-- 資料來源：
-  - `data/orders.json`
+| 前端功能 | 目前來源 | 未來核心資料表 |
+| --- | --- | --- |
+| 登入 / 註冊 / 會員資料 | `users.json`, session | `users`, `user_addresses`, `user_invoice_profiles`, `seller_requests`, `user_shipping_rules` |
+| 商品瀏覽 / 商品詳情 | `products.json` | `products`, `product_images`, `product_variants`, `brands`, `categories`, `product_tags` |
+| 購物車 | session | `carts`, `cart_items` 或 server-side session |
+| 收藏 / 比較 / 最近瀏覽 | session | `user_favorites`, `compare_items`, `recent_views` 或維持 session |
+| 訂單 | `orders.json` | `orders`, `order_items`, `order_service_requests`, `shipment_events` |
+| 支付 | `newebpay_payment_logs.json` | `payment_transactions`, `payment_callback_logs` |
+| 評論 | `reviews.json` | `product_reviews` |
+| 問答 | `questions.json` | `product_questions`, `product_question_answers` |
+| 社群 | `posts.json` | `community_posts`, `community_replies`, `community_votes` |
+| banner | `banners.json` | `banners`, `banner_applications` |
+| 比價 | `competitor_prices.json` | `competitor_sites`, `competitor_products` |
 
----
+## 8. session 與隱私補充
 
-## 6. 管理端頁面
+### session 目前控制的不是只有登入
 
-### `frontend/app/staff/dashboard/page.tsx`
-- 控制：
-  - 管理端摘要面板
-- API：
-  - `GET /api/v1/staff/dashboard/`
-- 後端 service：
-  - `admin_portal.py`
-- 資料來源：
-  - `data/orders.json`
-  - `data/users.json`
-  - 商品/評論/論壇資料
+目前實際還包含：
 
-### `frontend/app/staff/orders/page.tsx`
-- 控制：
-  - 管理者訂單列表
-- API：
-  - `GET /api/v1/staff/orders/`
-- 後端 service：
-  - `admin_portal.py`
-  - `orders.py`
-- 資料來源：
-  - `data/orders.json`
+- cart
+- favorite
+- compare
+- recent view
 
-### `frontend/app/staff/orders/[id]/page.tsx`
-- 控制：
-  - 管理者訂單詳情
-  - 售後申請審核
-- API：
-  - `GET /api/v1/staff/orders/:id/`
-  - `POST /api/v1/staff/orders/:id/service-review/`
-- 後端 service：
-  - `admin_portal.py`
-  - `orders.py`
-- 資料來源：
-  - `data/orders.json`
+因此資料庫化時，不能只做 `users` / `orders` / `products`，否則會員體驗會斷層。
 
-### `frontend/app/staff/reviews/page.tsx`
-- 控制：
-  - 商品上架管理 / 強制下架
-  - 賣家申請審核
-- API：
-  - `GET /api/v1/staff/reviews/`
-  - `POST /api/v1/staff/products/:slug/archive/`
-  - `POST /api/v1/staff/seller-requests/:username/review/`
-- 後端 service：
-  - `admin_portal.py`
-  - `auth_demo.py`
-  - `product_management.py`
-- 資料來源：
-  - `data/products.json`
-  - `data/users.json`
+### 評論 / 問答 / 社群目前的匿名規則
 
-### `frontend/app/staff/users/page.tsx`
-- 控制：
-  - 會員列表
-  - 會員狀態調整
-- API：
-  - `GET /api/v1/staff/users/`
-  - `POST /api/v1/staff/users/:username/status/`
-- 後端 service：
-  - `admin_portal.py`
-- 資料來源：
-  - `data/users.json`
+目前做法是：
 
----
+- 寫入時保留真實 `author`, `author_username`, `author_user_id`
+- 對外 API 顯示時再經過 `privacy.py` 匿名化
+- staff / admin 仍保留看真實作者的能力
 
-## 7. 文件與對照頁
+這代表資料庫化時應保留：
 
-### `frontend/app/docs/routes/page.tsx`
-- 控制：
-  - 前端可讀 API / 路由文件頁
-- 用途：
-  - 對照前端頁面與 DRF API
+- 內部關聯用 `author_user_id`
+- 對外匿名規則在 service / serializer 層處理
 
----
+不要把「匿名後顯示名稱」直接當唯一儲存值。
 
-## 8. 本機測站建議順序
+## 9. 目前要特別注意的遺漏點
 
-建議你後續在 VS Code / 本機瀏覽器這樣測：
+- `cart`, `favorite_products`, `compare_products`, `recent_products` 都還在 signed-cookie session
+- logout 目前只清 guest bucket 與 `demo_user`，不是清空所有使用者 bucket
+- 買家訂單與賣家訂單頁看的應是同一張訂單資料，只是 serializer 視角不同
+- payment debug 目前已集中到 staff 訂單頁
+- NewebPay callback / query 還不能視為正式完成，資料表設計時仍要保留 event log
 
-1. 註冊會員
-2. 登入
-3. 建地址
-4. 建發票資訊
-5. 建商品
-6. 瀏覽商品列表 / 商品頁
-7. 加入購物車
-8. 驗證 header cart badge 是否同步
-9. 走 checkout
-10. 建立訂單
-11. 看買家訂單頁
-12. 看賣家訂單頁
-13. 最後再回 Render 測藍新支付 / 物流 sandbox
+## 10. 相關文件
 
----
-
-## 9. 目前仍屬 Scaffold / 測試中的區塊
-
-以下功能已可測，但仍不是完整正式商用版：
-
-- 藍新支付：
-  - 已有 sandbox payload / callback / return 流程
-  - 仍偏測試架構
-- 藍新物流：
-  - 已有 seller-side sandbox scaffold
-  - checkout 的超商選店仍是手動欄位 scaffold
-- 資料層：
-  - 仍是 `data/*.json`
-  - 非正式資料庫
+- 專案整體結構：`PROJECT_STRUCTURE.md`
+- 資料庫草稿：`DATABASE_SCHEMA_DRAFT.md`
+- 前後端邊界：`FRONTEND_BACKEND_SPLIT.md`

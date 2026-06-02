@@ -1,10 +1,17 @@
-"""DRF 權限類別。
+"""DRF 權限檢查與 demo session 取用工具。
 
-這個專案目前不是 Django 內建 `auth` + 資料庫會員系統，
-而是用 demo session 保存目前登入會員。
+這個模組屬於 `myapp.api` 層，建立在 Django REST Framework 的
+`rest_framework.permissions` 之上。
 
-因此這裡的 permission 類別，主要是把「目前 session 裡有沒有會員」
-以及「會員角色是否符合需求」封裝成 DRF 可重用的權限判斷。
+主要責任有兩個：
+1. 從 request / session 取出目前 demo 登入會員。
+2. 提供 APIView 可直接掛載的 permission class，統一限制：
+   - 需登入
+   - 需賣家或管理者
+   - 需管理者
+
+這一層本身不處理帳號資料邏輯，實際的 session 判斷仍委派給
+`myapp.services.auth_demo`。
 """
 from __future__ import annotations
 
@@ -14,93 +21,69 @@ from ..services import auth_demo
 
 
 def get_demo_user(request):
-    """
-    從 request 的 session 取出目前登入會員。
+    """從 DRF request 對應的 session 取回目前登入會員。
 
-    Args:
-        request: DRF request 物件，可透過 `request.session` 讀取 demo 會員快照。
+    來源模組：
+    - `myapp.services.auth_demo.get_current_user`
 
-    Returns:
-        dict | None: 若已登入則回傳會員資料，否則回傳 `None`。
+    功能：
+    - 讓 API view / permission 不必直接理解 session 內部結構
+    - 統一回傳目前登入會員的 snapshot dict；未登入則回傳 `None`
     """
     return auth_demo.get_current_user(request.session)
 
 
 class IsDemoAuthenticated(BasePermission):
-    """
-    要求使用者必須先登入 demo session。
+    """DRF 權限類別：限制必須已有 demo session。
 
-    這個權限適合用在一般會員功能，例如：
-    - 評論
-    - 問答
-    - 訂單查詢
-    - 會員中心
+    來源模組：
+    - `rest_framework.permissions.BasePermission`
+
+    功能：
+    - 保護需要登入後才能操作的 API
+    - 例如會員中心、地址簿、發票、訂單、收藏、購物車結帳
     """
 
     message = "Please log in first."
 
     def has_permission(self, request, view):
-        """
-        判斷目前 request 是否已有登入會員。
-
-        Args:
-            request: DRF request。
-            view: 目前執行中的 DRF view。
-
-        Returns:
-            bool: 已登入回傳 `True`，否則回傳 `False`。
-        """
+        """檢查 request 是否已有可辨識的 demo 使用者。"""
         return bool(get_demo_user(request))
 
 
 class IsSellerOrAdminDemoUser(BasePermission):
-    """
-    要求使用者角色必須是賣家或管理員。
+    """DRF 權限類別：限制必須為賣家或管理者。
 
-    這個權限適合用在：
-    - 賣家商品管理
-    - 賣家訂單中心
-    - 少量允許管理員代看賣家頁面的情境
+    來源模組：
+    - `rest_framework.permissions.BasePermission`
+    - `myapp.services.auth_demo.is_seller`
+
+    功能：
+    - 保護賣家端 API
+    - 同時允許管理者以較高權限檢視或操作賣家資料
     """
 
     message = "Seller access is required."
 
     def has_permission(self, request, view):
-        """
-        判斷目前登入會員是否具有賣家或管理員身分。
-
-        Args:
-            request: DRF request。
-            view: 目前執行中的 DRF view。
-
-        Returns:
-            bool: 角色符合時回傳 `True`。
-        """
+        """檢查目前登入會員是否具有賣家以上權限。"""
         return auth_demo.is_seller(get_demo_user(request))
 
 
 class IsAdminDemoUser(BasePermission):
-    """
-    要求使用者角色必須是平台管理員。
+    """DRF 權限類別：限制必須為管理者。
 
-    這個權限適合用在：
-    - 後台儀表板
-    - 會員管理
-    - 商品審核
-    - 售後審核
+    來源模組：
+    - `rest_framework.permissions.BasePermission`
+    - `myapp.services.auth_demo.is_admin`
+
+    功能：
+    - 保護 staff / admin 路由
+    - 例如平台訂單、內容審核、使用者管理、Banner 管理
     """
 
     message = "Admin access is required."
 
     def has_permission(self, request, view):
-        """
-        判斷目前登入會員是否為管理員。
-
-        Args:
-            request: DRF request。
-            view: 目前執行中的 DRF view。
-
-        Returns:
-            bool: 為管理員回傳 `True`，否則回傳 `False`。
-        """
+        """檢查目前登入會員是否具有管理者權限。"""
         return auth_demo.is_admin(get_demo_user(request))

@@ -49,6 +49,13 @@ from .permissions import get_demo_user
 PAGE_SIZE = 3
 
 
+# ---------------------------------------------------------------------------
+# Helper objects / helper functions
+# 這一段屬於 API view 共用工具：
+# - 把 request payload 整理成 service 可吃的格式
+# - 把 service / repository 回傳的 dict 再整理成 API response
+# - 避免每個 APIView 重複寫相同的驗證與序列化邏輯
+# ---------------------------------------------------------------------------
 class PayloadAdapter(dict):
     """提供 `getlist()` 的簡易資料容器。
 
@@ -107,6 +114,23 @@ def _serialize_product(product: Dict[str, Any], request=None) -> Dict[str, Any]:
 def _serialize_products(products: Iterable[Dict[str, Any]], request=None) -> list[Dict[str, Any]]:
     """批次整理商品資料。"""
     return [_serialize_product(item, request) for item in products]
+
+
+def _serialize_product_category(category: Dict[str, Any]) -> Dict[str, Any]:
+    """將商品分類主表整理成 API 輸出格式。"""
+    return {
+        "id": int(category.get("id", 0) or 0),
+        "slug": str(category.get("slug") or ""),
+        "label": str(category.get("name") or ""),
+        "description": str(category.get("description") or ""),
+        "is_active": bool(category.get("is_active", True)),
+        "sort_order": int(category.get("sort_order", 0) or 0),
+    }
+
+
+def _serialize_product_categories(categories: Iterable[Dict[str, Any]]) -> list[Dict[str, Any]]:
+    """批次整理商品分類資料。"""
+    return [_serialize_product_category(category) for category in categories]
 
 
 def _can_manage_community_post(user: Dict[str, Any] | None, post: Dict[str, Any]) -> bool:
@@ -193,7 +217,18 @@ def _build_product_list_payload(request, params: Dict[str, Any]) -> Dict[str, An
 
 
 def _build_cart_response(session, detail: str = "", *, shipping_method: str = "") -> Dict[str, Any]:
-    """把 session 購物車整理成 API 回應格式。"""
+    """把購物車狀態整理成 API 回應格式。
+
+    主要用途：
+    - 給購物車頁即時顯示 items / totals
+    - 給 checkout 預覽階段重用
+
+    內容包含：
+    - 商品清單
+    - 折扣碼
+    - 依運送方式計算後的 totals
+    - 分賣家運費摘要
+    """
     cart = cart_service.get_cart(session)
     items = []
     for raw_item in cart.get("items", {}).values():
@@ -237,7 +272,15 @@ def _build_cart_response(session, detail: str = "", *, shipping_method: str = ""
 
 
 def _build_checkout_preview_payload(request) -> Dict[str, Any]:
-    """建立結帳預覽回應。"""
+    """建立 checkout 頁需要的完整預覽 payload。
+
+    這個 helper 會把多個 service 的資料彙整成單一回應：
+    - 購物車內容
+    - 地址簿與預設地址
+    - 發票資料
+    - 運送 / 付款 / 超商品牌選項
+    - 是否可直接送出訂單
+    """
     user = get_demo_user(request)
     payload = _build_cart_response(request.session)
     selected_shipping_method = order_service.normalize_checkout_shipping_method(
@@ -280,7 +323,15 @@ def _build_checkout_preview_payload(request) -> Dict[str, Any]:
 
 
 def _build_dashboard_payload(user: Dict[str, str], session) -> Dict[str, Any]:
-    """建立會員中心儀表板回應。"""
+    """建立會員中心儀表板回應。
+
+    來源 service：
+    - `profile_service.build_profile_dashboard`
+
+    目的：
+    - 把會員中心首頁常用資料先組成固定格式
+    - 避免前端需要額外發多支 API 才能畫出 dashboard
+    """
     dashboard = profile_service.build_profile_dashboard(user, session)
     return {
         "user": user,
@@ -296,7 +347,11 @@ def _build_dashboard_payload(user: Dict[str, str], session) -> Dict[str, Any]:
 
 
 def _build_app_bootstrap_payload(request) -> Dict[str, Any]:
-    """回傳前端啟動畫面常用的全域狀態。"""
+    """回傳前端啟動畫面常用的全域狀態。
+
+    這支 helper 專門給 app bootstrap / layout header 使用，
+    只放「全站共同狀態」，避免把完整會員或訂單資料帶進來。
+    """
     user = get_demo_user(request)
     return {
         "user": user,
@@ -306,6 +361,9 @@ def _build_app_bootstrap_payload(request) -> Dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# Banner / 首頁素材管理
+# ---------------------------------------------------------------------------
 class BannerListApi(APIView):
     """提供首頁公開 banner 列表的 API。"""
 
@@ -416,7 +474,18 @@ class AdminBannerDetailApi(APIView):
 
 
 class AdminBannerReviewApi(APIView):
-    """提供管理者審核 banner 申請的 API。"""
+    """提供管理者審核 banner 申請的 API。
+
+    前端使用頁面：
+    - staff Banner 管理 / 審核頁
+
+    資料來源：
+    - `banner_service.review_banner_application`
+
+    功能：
+    - 審核賣家或內部提交的 banner 申請
+    - 決定是否核准上架，或寫入退回原因
+    """
 
     permission_classes = [IsAdminDemoUser]
 
@@ -439,7 +508,18 @@ class AdminBannerReviewApi(APIView):
 
 
 class AdminBannerReorderApi(APIView):
-    """提供管理者調整 banner 排序的 API。"""
+    """提供管理者調整 banner 排序的 API。
+
+    前端使用頁面：
+    - staff Banner 管理頁的拖曳排序操作
+
+    資料來源：
+    - `banner_service.reorder_banners`
+
+    功能：
+    - 依照前端送來的 banner id 清單重寫排序值
+    - 讓首頁與其他版位顯示順序與管理端一致
+    """
 
     permission_classes = [IsAdminDemoUser]
 
@@ -450,12 +530,29 @@ class AdminBannerReorderApi(APIView):
 
 
 def _parse_order_id_from_merchant_order_no(merchant_order_no: str) -> int | None:
-    """從藍新 MerchantOrderNo 取回原始訂單 ID。"""
+    """從藍新商店訂單編號還原站內訂單 ID。
+
+    來源：
+    - `newebpay_payment_real_service.parse_order_id_from_merchant_order_no`
+
+    用途：
+    - callback / return 收到 `MerchantOrderNo` 後，找回原本的站內訂單
+    - 讓前端瀏覽器導回 `/orders/{id}` 時能落到正確頁面
+    """
     return newebpay_payment_real_service.parse_order_id_from_merchant_order_no(merchant_order_no)
 
 
 def _payload_from_request(request) -> PayloadAdapter:
-    """把 JSON / form-data 整理成可給 service 使用的 payload。"""
+    """把 DRF request 內容整理成 product service 可直接使用的 payload。
+
+    來源模組：
+    - `rest_framework.request.Request`
+    - `django.http.QueryDict`
+
+    用途：
+    - 商品建立 / 編輯流程目前同時支援 JSON 與 multipart/form-data
+    - 這裡統一轉成 `PayloadAdapter`，讓 service 端可以用相同介面讀取多值欄位
+    """
     payload = PayloadAdapter()
     data = request.data
     if isinstance(data, QueryDict):
@@ -469,7 +566,15 @@ def _payload_from_request(request) -> PayloadAdapter:
 
 
 def _flatten_request_mapping(data: Any) -> Dict[str, Any]:
-    """Flatten QueryDict-style request payloads into scalar values."""
+    """把 QueryDict 風格的 request payload 攤平成一般 dict。
+
+    來源模組：
+    - `django.http.QueryDict`
+
+    用途：
+    - 藍新 `ReturnURL` / `ClientBackURL` 這類回傳可能混用 GET 與 POST
+    - 先把單值欄位還原成純字串，避免後續 callback handler 拿到 list 而驗證失敗
+    """
     flattened: Dict[str, Any] = {}
     if isinstance(data, QueryDict):
         for key in data.keys():
@@ -512,8 +617,22 @@ def _admin_or_owned_product_or_404(user: Dict[str, str], slug: str) -> Dict[str,
     return product
 
 
+# ---------------------------------------------------------------------------
+# 公開商品瀏覽 / 商品內容 / 比價 / 推薦
+# ---------------------------------------------------------------------------
 class ProductListApi(APIView):
-    """提供商品列表與條件篩選的 API。"""
+    """提供商品列表與條件篩選的 API。
+
+    前端使用頁面：
+    - 商品總覽頁
+    - 分類頁
+    - 搜尋結果頁
+
+    主要流程：
+    - 讀取 query string 篩選條件
+    - 呼叫 `product_management` 做商品篩選、排序、分頁
+    - 回傳商品清單、facets 與目前套用的 filters
+    """
 
     permission_classes = [AllowAny]
 
@@ -523,8 +642,36 @@ class ProductListApi(APIView):
         return Response(_build_product_list_payload(request, params))
 
 
+class ProductCategoriesApi(APIView):
+    """提供前台可用的商品分類主表。
+
+    前端使用頁面：
+    - 商品總覽篩選條件
+    - 分類導覽
+    - 賣家新增 / 編輯商品時的分類下拉選單
+
+    資料來源：
+    - `product_management.list_active_product_categories`
+    """
+
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        """回傳啟用中的商品分類清單。"""
+        return Response({"items": _serialize_product_categories(product_management.list_active_product_categories())})
+
+
 class ProductDetailApi(APIView):
-    """提供單一商品詳情的 API。"""
+    """提供單一商品詳情的 API。
+
+    前端使用頁面：
+    - 商品詳情頁
+
+    主要流程：
+    - 驗證商品是否公開可見
+    - 呼叫 `product_management.prepare_product_for_display`
+    - 回傳商品、變體、圖片、價格與個人化狀態
+    """
 
     permission_classes = [AllowAny]
 
@@ -537,7 +684,18 @@ class ProductDetailApi(APIView):
 
 
 class ProductReviewsApi(APIView):
-    """提供商品評論查詢與建立的 API。"""
+    """提供商品評論查詢與建立的 API。
+
+    前端使用頁面：
+    - 商品詳情頁的評論區塊
+
+    讀取：
+    - 取得指定商品的公開評論清單
+
+    寫入：
+    - 需登入
+    - 建立新評論後交給 `review_service`
+    """
 
     permission_classes = [AllowAny]
 
@@ -576,7 +734,18 @@ class ProductReviewsApi(APIView):
 
 
 class ProductQuestionsApi(APIView):
-    """提供商品問答查詢與提問的 API。"""
+    """提供商品問答查詢與提問的 API。
+
+    前端使用頁面：
+    - 商品詳情頁的問答區塊
+
+    讀取：
+    - 取得指定商品的問題與回答
+
+    寫入：
+    - 需登入
+    - 建立新問題後交給 `question_service`
+    """
 
     permission_classes = [AllowAny]
 
@@ -613,7 +782,15 @@ class ProductQuestionsApi(APIView):
 
 
 class ProductAnswersApi(APIView):
-    """提供商品問答回答建立的 API。"""
+    """提供商品問答回答建立的 API。
+
+    前端使用頁面：
+    - 商品詳情頁問答區塊的回答表單
+
+    功能：
+    - 對既有問題新增回答
+    - 維持問題與回答的關聯結構
+    """
 
     permission_classes = [IsDemoAuthenticated]
 
@@ -645,7 +822,15 @@ class ProductAnswersApi(APIView):
 
 
 class ProductRecommendationsApi(APIView):
-    """提供商品推薦清單的 API。"""
+    """提供商品推薦清單的 API。
+
+    前端使用頁面：
+    - 商品詳情頁的「相似商品 / 一起購買」區塊
+
+    資料來源：
+    - `recommendation_service`
+    - 底層目前以 JSON 設定與 fallback 規則為主
+    """
 
     permission_classes = [AllowAny]
 
@@ -713,8 +898,22 @@ class ProductPriceCompareRefreshApi(APIView):
         )
 
 
+# ---------------------------------------------------------------------------
+# 社群 / 論壇
+# ---------------------------------------------------------------------------
 class CommunityPostsApi(APIView):
-    """提供社群文章列表與發文的 API。"""
+    """提供社群文章列表與發文的 API。
+
+    前端使用頁面：
+    - 社群論壇列表頁
+
+    讀取：
+    - 依 topic 篩選文章
+
+    寫入：
+    - 需登入
+    - 建立文章後交給 `community_service`
+    """
 
     permission_classes = [AllowAny]
 
@@ -841,7 +1040,19 @@ class CommunityRepliesApi(APIView):
 
 
 class CommunityVoteApi(APIView):
-    """提供社群文章投票的 API。"""
+    """提供社群文章投票的 API。
+
+    前端使用頁面：
+    - 社群文章列表
+    - 社群文章詳情頁
+
+    資料來源：
+    - `community_service.upvote_post`
+
+    功能：
+    - 累加文章票數
+    - 回傳最新票數，讓前端即時刷新
+    """
 
     permission_classes = [IsDemoAuthenticated]
 
@@ -854,8 +1065,19 @@ class CommunityVoteApi(APIView):
         return Response({"id": post["id"], "votes": post["votes"]})
 
 
+# ---------------------------------------------------------------------------
+# Auth / App bootstrap / 個人化
+# ---------------------------------------------------------------------------
 class MeApi(APIView):
-    """提供目前登入會員資料的 API。"""
+    """提供目前登入會員資料的 API。
+
+    前端使用頁面：
+    - 全站 header
+    - 首次啟動時判斷登入狀態
+
+    功能：
+    - 回傳目前 demo session 對應的會員 snapshot
+    """
 
     permission_classes = [AllowAny]
 
@@ -866,7 +1088,18 @@ class MeApi(APIView):
 
 @method_decorator(ensure_csrf_cookie, name="dispatch")
 class AuthCsrfApi(APIView):
-    """提供前端初始化所需的 CSRF cookie。"""
+    """提供前端初始化所需的 CSRF cookie。
+
+    前端使用頁面：
+    - Next.js app 啟動時
+    - 需要先取 CSRF token 才能發 POST / PUT / DELETE 的頁面
+
+    來源模組：
+    - Django CSRF middleware / `get_token`
+
+    功能：
+    - 提前發出 cookie 與 token，避免前端第一次寫入請求被 CSRF 擋下
+    """
 
     permission_classes = [AllowAny]
 
@@ -876,7 +1109,17 @@ class AuthCsrfApi(APIView):
 
 
 class AppBootstrapApi(APIView):
-    """提供前端 header / session 初始化資料。"""
+    """提供前端 header / session 初始化資料。
+
+    前端使用頁面：
+    - Next.js app 啟動時的全域 hydration
+
+    內容包含：
+    - 目前登入會員
+    - 購物車數量
+    - 收藏數量
+    - 比較清單數量
+    """
 
     permission_classes = [AllowAny]
 
@@ -886,7 +1129,19 @@ class AppBootstrapApi(APIView):
 
 
 class MeDashboardApi(APIView):
-    """提供會員中心儀表板資料的 API。"""
+    """提供會員中心儀表板資料的 API。
+
+    前端使用頁面：
+    - 會員中心首頁
+
+    資料來源：
+    - `profile_service.build_profile_dashboard`
+
+    內容包含：
+    - 訂單摘要
+    - 收藏 / 最近瀏覽
+    - 自己的評論、問答、文章
+    """
 
     permission_classes = [IsDemoAuthenticated]
 
@@ -897,7 +1152,17 @@ class MeDashboardApi(APIView):
 
 
 class FavoriteToggleApi(APIView):
-    """提供商品收藏切換的 API。"""
+    """提供商品收藏切換的 API。
+
+    前端使用頁面：
+    - 商品卡片
+    - 商品詳情頁
+
+    資料來源：
+    - `personalization_service`
+
+    目前收藏資料仍以 session / 使用者持久化 bucket 為主。
+    """
 
     permission_classes = [AllowAny]
 
@@ -917,7 +1182,16 @@ class FavoriteToggleApi(APIView):
 
 
 class CompareToggleApi(APIView):
-    """提供商品比較切換的 API。"""
+    """提供商品比較切換的 API。
+
+    前端使用頁面：
+    - 商品卡片
+    - 商品詳情頁
+
+    功能：
+    - 切換商品是否在比較清單中
+    - 若清單有上限，會回傳被移除的舊 slug
+    """
 
     permission_classes = [AllowAny]
 
@@ -938,7 +1212,15 @@ class CompareToggleApi(APIView):
 
 
 class CompareListApi(APIView):
-    """提供 Next.js 商品比較頁的比較清單。"""
+    """提供商品比較頁的比較清單。
+
+    前端使用頁面：
+    - 商品比較頁
+
+    功能：
+    - 依 session / 使用者 bucket 中的 compare slugs
+    - 查回實際可展示的商品資料
+    """
 
     permission_classes = [AllowAny]
 
@@ -951,7 +1233,16 @@ class CompareListApi(APIView):
 
 
 class MeAddressesApi(APIView):
-    """提供會員地址簿查詢與建立的 API。"""
+    """提供會員地址簿查詢與建立的 API。
+
+    前端使用頁面：
+    - 會員地址管理頁
+    - checkout 地址選擇區塊
+
+    功能：
+    - 列出會員地址
+    - 建立新地址
+    """
 
     permission_classes = [IsDemoAuthenticated]
 
@@ -972,7 +1263,16 @@ class MeAddressesApi(APIView):
 
 
 class MeAddressDefaultApi(APIView):
-    """提供預設地址設定的 API。"""
+    """提供預設地址設定的 API。
+
+    前端使用頁面：
+    - 地址管理頁
+    - checkout 預設地址切換
+
+    功能：
+    - 把某一筆地址標記成預設地址
+    - 讓 checkout 預設帶入該收件資訊
+    """
 
     permission_classes = [IsDemoAuthenticated]
 
@@ -987,7 +1287,15 @@ class MeAddressDefaultApi(APIView):
 
 
 class MeAddressDeleteApi(APIView):
-    """提供地址刪除的 API。"""
+    """提供地址刪除的 API。
+
+    前端使用頁面：
+    - 地址管理頁
+
+    功能：
+    - 刪除會員地址簿中的一筆地址
+    - 若刪除的是預設地址，實際處理由 `customer_center` 決定後續狀態
+    """
 
     permission_classes = [IsDemoAuthenticated]
 
@@ -1002,7 +1310,12 @@ class MeAddressDeleteApi(APIView):
 
 
 class MeInvoiceApi(APIView):
-    """提供發票資料查詢與更新的 API。"""
+    """提供發票資料查詢與更新的 API。
+
+    前端使用頁面：
+    - 發票設定頁
+    - checkout 發票資訊摘要
+    """
 
     permission_classes = [IsDemoAuthenticated]
 
@@ -1023,7 +1336,15 @@ class MeInvoiceApi(APIView):
 
 
 class BuyerOrdersApi(APIView):
-    """提供買家訂單列表的 API。"""
+    """提供買家訂單列表的 API。
+
+    前端使用頁面：
+    - 我的訂單列表
+
+    功能：
+    - 列出目前會員的訂單摘要
+    - 讓前端從列表頁進入明細頁
+    """
 
     permission_classes = [IsDemoAuthenticated]
 
@@ -1034,7 +1355,15 @@ class BuyerOrdersApi(APIView):
 
 
 class BuyerOrderDetailApi(APIView):
-    """提供買家訂單明細的 API。"""
+    """提供買家訂單明細的 API。
+
+    前端使用頁面：
+    - 買家訂單詳情頁
+
+    功能：
+    - 取得完整訂單明細
+    - 進入明細前先嘗試同步藍新付款狀態
+    """
 
     permission_classes = [IsDemoAuthenticated]
 
@@ -1049,7 +1378,15 @@ class BuyerOrderDetailApi(APIView):
 
 
 class BuyerCancelRequestApi(APIView):
-    """提供買家取消訂單申請的 API。"""
+    """提供買家取消訂單申請的 API。
+
+    前端使用頁面：
+    - 買家訂單詳情頁的取消申請操作
+
+    功能：
+    - 建立一筆售後服務請求
+    - 交由後台或賣家後續審核
+    """
 
     permission_classes = [IsDemoAuthenticated]
 
@@ -1070,7 +1407,14 @@ class BuyerCancelRequestApi(APIView):
 
 
 class BuyerRefundRequestApi(APIView):
-    """提供買家退款申請的 API。"""
+    """提供買家退款申請的 API。
+
+    前端使用頁面：
+    - 買家訂單詳情頁的退款申請操作
+
+    功能：
+    - 建立一筆退款類型的售後服務請求
+    """
 
     permission_classes = [IsDemoAuthenticated]
 
@@ -1091,12 +1435,19 @@ class BuyerRefundRequestApi(APIView):
 
 
 class BuyerOrderCompleteApi(APIView):
-    """Allow buyers to confirm receipt and complete an order."""
+    """提供買家完成訂單的 API。
+
+    前端使用頁面：
+    - 買家訂單詳情頁
+
+    功能：
+    - 在賣家已標記出貨後，讓買家確認收貨並完成整筆訂單
+    """
 
     permission_classes = [IsDemoAuthenticated]
 
     def post(self, request, order_id: int):
-        """Mark all shipped seller lines as completed."""
+        """在買家確認收貨後，將可完成的賣家出貨分組標記為完成。"""
         user = get_demo_user(request)
         try:
             order = order_service.confirm_order_completion(order_id, user["username"])
@@ -1106,12 +1457,20 @@ class BuyerOrderCompleteApi(APIView):
 
 
 class BuyerNewebpayPaymentApi(APIView):
-    """Provide the latest real NewebPay sandbox payment record for the buyer order."""
+    """提供買家訂單最近一次藍新付款紀錄。
+
+    前端使用頁面：
+    - 買家訂單詳情頁的付款資訊區塊
+
+    功能：
+    - 讀取最近一次藍新 payment record
+    - 顯示付款狀態、付款方式、MerchantOrderNo、TradeNo 等資訊
+    """
 
     permission_classes = [IsDemoAuthenticated]
 
     def get(self, request, order_id: int):
-        """Read the latest NewebPay sandbox payment record."""
+        """讀取目前訂單最近一次藍新 payment record。"""
         user = get_demo_user(request)
         try:
             record = newebpay_payment_real_service.get_payment_record(order_id, user["username"])
@@ -1122,8 +1481,17 @@ class BuyerNewebpayPaymentApi(APIView):
         return Response(record)
 
 
+# ---------------------------------------------------------------------------
+# NewebPay payment callbacks / return
+# 這一段只負責接收與轉交藍新資料，不應自行捏造付款方式或交易序號。
+# ---------------------------------------------------------------------------
 class NewebpayPaymentCallbackApi(APIView):
-    """藍新支付 mock callback 測試入口。"""
+    """藍新支付 mock callback 測試入口。
+
+    用途：
+    - 這支不是正式藍新 MPG callback
+    - 主要供本地 / 測試流程手動模擬支付結果
+    """
 
     permission_classes = [AllowAny]
     authentication_classes: list = []
@@ -1145,7 +1513,15 @@ class NewebpayPaymentCallbackApi(APIView):
 
 
 class SellerOrdersApi(APIView):
-    """提供賣家訂單列表的 API。"""
+    """提供賣家訂單列表的 API。
+
+    前端使用頁面：
+    - 賣家訂單列表頁
+
+    功能：
+    - 依日期條件列出賣家可履約的訂單
+    - 讓賣家從列表進入出貨明細
+    """
 
     permission_classes = [IsSellerOrAdminDemoUser]
 
@@ -1161,10 +1537,20 @@ class SellerOrdersApi(APIView):
         return Response({"items": items})
 
 
+# ---------------------------------------------------------------------------
+# 藍新 sandbox 支付主流程
+# ---------------------------------------------------------------------------
 class BuyerNewebpaySandboxPaymentPrepareApi(APIView):
     """準備藍新正式 sandbox 支付 form payload。
 
     這支 API 不直接向藍新送單，而是回傳前端需要 POST 到藍新 gateway 的欄位資料。
+
+    前端使用頁面：
+    - 買家訂單詳情頁的「前往付款」
+
+    功能：
+    - 依訂單資料組出 TradeInfo / TradeSha
+    - 保留送單前的 prepared payload，供 staff debug 檢查
     """
 
     permission_classes = [IsDemoAuthenticated]
@@ -1198,7 +1584,16 @@ class BuyerNewebpaySandboxPaymentPrepareApi(APIView):
 
 
 class NewebpaySandboxPaymentCallbackApi(APIView):
-    """接收藍新正式 sandbox payment callback。"""
+    """接收藍新正式 sandbox payment callback。
+
+    來源：
+    - 藍新 `NotifyURL`
+
+    功能：
+    - 驗證 `TradeSha`
+    - 解密 `TradeInfo`
+    - 把藍新實際回傳資料落到 payment record / callback log
+    """
 
     permission_classes = [AllowAny]
     authentication_classes: list = []
@@ -1225,7 +1620,16 @@ class NewebpaySandboxPaymentCallbackApi(APIView):
 
 
 class NewebpaySandboxPaymentReturnApi(APIView):
-    """處理藍新前台支付完成後回到瀏覽器的導轉。"""
+    """處理藍新前台支付完成後回到瀏覽器的導轉。
+
+    來源：
+    - 藍新 `ReturnURL`
+
+    功能：
+    - 接收瀏覽器帶回來的支付結果
+    - 嘗試與 callback 相同地驗證 / 解密
+    - 最後重新導向回前端訂單頁
+    """
 
     permission_classes = [AllowAny]
     authentication_classes: list = []
@@ -1286,8 +1690,19 @@ class NewebpaySandboxPaymentReturnApi(APIView):
         return self._handle(_flatten_request_mapping(request.data))
 
 
+# ---------------------------------------------------------------------------
+# 訂單 / 賣家履約 / 管理端訂單
+# ---------------------------------------------------------------------------
 class SellerOrderDetailApi(APIView):
-    """提供賣家訂單明細的 API。"""
+    """提供賣家訂單明細的 API。
+
+    前端使用頁面：
+    - 賣家訂單詳情頁
+
+    功能：
+    - 顯示收件資訊、出貨分組、付款摘要
+    - 進入前先同步藍新付款狀態，讓賣家與買家看到同一份付款資料
+    """
 
     permission_classes = [IsSellerOrAdminDemoUser]
 
@@ -1302,7 +1717,15 @@ class SellerOrderDetailApi(APIView):
 
 
 class SellerOrderUpdateApi(APIView):
-    """提供賣家訂單狀態更新的 API。"""
+    """提供賣家訂單狀態更新的 API。
+
+    前端使用頁面：
+    - 賣家訂單詳情頁
+
+    功能：
+    - 更新賣家履約狀態
+    - 保存物流單號與出貨備註
+    """
 
     permission_classes = [IsSellerOrAdminDemoUser]
 
@@ -1324,7 +1747,14 @@ class SellerOrderUpdateApi(APIView):
 
 
 class SellerSalesReportApi(APIView):
-    """提供賣家銷售報表的 API。"""
+    """提供賣家銷售報表的 API。
+
+    前端使用頁面：
+    - 賣家銷售報表頁
+
+    功能：
+    - 依日期條件彙整訂單數、銷量、營收、熱賣商品
+    """
 
     permission_classes = [IsSellerOrAdminDemoUser]
 
@@ -1341,7 +1771,14 @@ class SellerSalesReportApi(APIView):
 
 
 class AdminDashboardApi(APIView):
-    """提供後台儀表板資料的 API。"""
+    """提供後台儀表板資料的 API。
+
+    前端使用頁面：
+    - staff / admin dashboard
+
+    功能：
+    - 彙整使用者、商品、訂單、內容審核的整體統計
+    """
 
     permission_classes = [IsAdminDemoUser]
 
@@ -1351,7 +1788,15 @@ class AdminDashboardApi(APIView):
 
 
 class AdminOrdersApi(APIView):
-    """提供後台訂單列表的 API。"""
+    """提供後台訂單列表的 API。
+
+    前端使用頁面：
+    - staff 訂單管理頁
+
+    功能：
+    - 以平台視角查詢所有訂單
+    - 支援日期、狀態、售後狀態、關鍵字等條件
+    """
 
     permission_classes = [IsAdminDemoUser]
 
@@ -1369,7 +1814,15 @@ class AdminOrdersApi(APIView):
 
 
 class AdminOrderDetailApi(APIView):
-    """提供後台訂單明細的 API。"""
+    """提供後台訂單明細的 API。
+
+    前端使用頁面：
+    - staff 訂單詳情頁
+
+    功能：
+    - 提供平台角度的完整訂單明細
+    - 與買家 / 賣家視角不同，不受擁有者限制
+    """
 
     permission_classes = [IsAdminDemoUser]
 
@@ -1382,7 +1835,16 @@ class AdminOrderDetailApi(APIView):
 
 
 class AdminOrderPaymentDebugApi(APIView):
-    """Provide staff-only NewebPay sandbox request/callback debug data for one order."""
+    """提供管理者查看藍新付款 debug 資訊的 API。
+
+    前端使用頁面：
+    - staff / admin 訂單詳情頁的 payment debug 面板
+
+    功能：
+    - 顯示 prepared payload
+    - 顯示 callback / return event
+    - 顯示 query fallback 的錯誤或回應
+    """
 
     permission_classes = [IsAdminDemoUser]
 
@@ -1395,7 +1857,15 @@ class AdminOrderPaymentDebugApi(APIView):
 
 
 class AdminOrderServiceReviewApi(APIView):
-    """提供後台售後審核的 API。"""
+    """提供後台售後審核的 API。
+
+    前端使用頁面：
+    - staff 訂單詳情頁
+
+    功能：
+    - 審核取消 / 退款申請
+    - 將審核結果回寫到訂單售後欄位
+    """
 
     permission_classes = [IsAdminDemoUser]
 
@@ -1414,7 +1884,15 @@ class AdminOrderServiceReviewApi(APIView):
 
 
 class AdminUsersApi(APIView):
-    """提供後台會員列表的 API。"""
+    """提供後台會員列表的 API。
+
+    前端使用頁面：
+    - staff 會員管理頁
+
+    功能：
+    - 搜尋會員
+    - 依角色與帳號狀態做平台管理
+    """
 
     permission_classes = [IsAdminDemoUser]
 
@@ -1430,7 +1908,15 @@ class AdminUsersApi(APIView):
 
 
 class AdminProductsApi(APIView):
-    """Provide the admin product management list."""
+    """提供管理者商品列表的 API。
+
+    前端使用頁面：
+    - staff 商品管理頁
+
+    功能：
+    - 列出全站商品
+    - 依狀態 / 關鍵字做平台層級管理
+    """
 
     permission_classes = [IsAdminDemoUser]
 
@@ -1446,8 +1932,51 @@ class AdminProductsApi(APIView):
         return Response({"items": items})
 
 
+class AdminProductCategoriesApi(APIView):
+    """提供管理者檢視與建立商品分類主表。
+
+    前端使用頁面：
+    - staff 商品分類管理
+
+    功能：
+    - 查看所有分類，包含停用項目
+    - 建立新的正式分類主表項目
+    """
+
+    permission_classes = [IsAdminDemoUser]
+
+    def get(self, request):
+        """回傳所有商品分類，包含停用項目。"""
+        return Response({"items": _serialize_product_categories(product_management.list_product_categories(include_inactive=True))})
+
+    def post(self, request):
+        """建立新的商品分類。"""
+        payload = _validated(sz.ProductCategoryCreateSerializer, request.data)
+        try:
+            category = product_management.create_product_category(
+                name=str(payload.get("name", "")),
+                slug=str(payload.get("slug", "")),
+                description=str(payload.get("description", "")),
+                is_active=bool(payload.get("is_active", True)),
+            )
+        except ValueError as exc:
+            return _error(str(exc))
+        return Response(_serialize_product_category(category), status=status.HTTP_201_CREATED)
+
+
 class AdminProductPublishApi(APIView):
-    """Force publish a product from the admin console."""
+    """提供管理者強制上架商品的 API。
+
+    前端使用頁面：
+    - staff 商品管理頁
+
+    資料來源：
+    - `product_management.admin_publish_product`
+
+    功能：
+    - 平台管理者可直接將指定商品改為上架狀態
+    - 可附帶管理端備註，供後續追蹤
+    """
 
     permission_classes = [IsAdminDemoUser]
 
@@ -1461,7 +1990,17 @@ class AdminProductPublishApi(APIView):
 
 
 class AdminProductDeleteApi(APIView):
-    """Delete a product from the admin console."""
+    """提供管理者刪除商品的 API。
+
+    前端使用頁面：
+    - staff 商品管理頁
+
+    資料來源：
+    - `product_management.admin_delete_product`
+
+    功能：
+    - 平台管理者可直接移除不合規或測試商品
+    """
 
     permission_classes = [IsAdminDemoUser]
 
@@ -1474,7 +2013,18 @@ class AdminProductDeleteApi(APIView):
 
 
 class AdminReviewsApi(APIView):
-    """Provide review management list for admins."""
+    """提供管理者商品評論管理列表。
+
+    前端使用頁面：
+    - staff 評論管理頁
+
+    資料來源：
+    - `admin_portal.list_admin_reviews`
+
+    功能：
+    - 以平台視角搜尋與篩選評論
+    - 供後續刪除或人工巡檢
+    """
 
     permission_classes = [IsAdminDemoUser]
 
@@ -1488,7 +2038,14 @@ class AdminReviewsApi(APIView):
 
 
 class AdminReviewDetailApi(APIView):
-    """Allow admins to delete a review."""
+    """提供管理者刪除單一評論的 API。
+
+    前端使用頁面：
+    - staff 評論管理頁
+
+    功能：
+    - 刪除違規、測試或需下架的評論內容
+    """
 
     permission_classes = [IsAdminDemoUser]
 
@@ -1501,7 +2058,18 @@ class AdminReviewDetailApi(APIView):
 
 
 class AdminQuestionsApi(APIView):
-    """Provide question management list for admins."""
+    """提供管理者商品問答管理列表。
+
+    前端使用頁面：
+    - staff 問答管理頁
+
+    資料來源：
+    - `admin_portal.list_admin_questions`
+
+    功能：
+    - 搜尋與篩選商品問題
+    - 協助平台巡檢未回答或不適當內容
+    """
 
     permission_classes = [IsAdminDemoUser]
 
@@ -1515,7 +2083,14 @@ class AdminQuestionsApi(APIView):
 
 
 class AdminQuestionDetailApi(APIView):
-    """Allow admins to delete a question."""
+    """提供管理者刪除單一商品問題的 API。
+
+    前端使用頁面：
+    - staff 問答管理頁
+
+    功能：
+    - 刪除不適當、重複或測試資料
+    """
 
     permission_classes = [IsAdminDemoUser]
 
@@ -1528,7 +2103,18 @@ class AdminQuestionDetailApi(APIView):
 
 
 class AdminPostsApi(APIView):
-    """Provide post management list for admins."""
+    """提供管理者社群文章管理列表。
+
+    前端使用頁面：
+    - staff 社群內容管理頁
+
+    資料來源：
+    - `admin_portal.list_admin_posts`
+
+    功能：
+    - 以主題、關鍵字搜尋論壇文章
+    - 協助平台巡檢與內容治理
+    """
 
     permission_classes = [IsAdminDemoUser]
 
@@ -1542,7 +2128,14 @@ class AdminPostsApi(APIView):
 
 
 class AdminPostDetailApi(APIView):
-    """Allow admins to delete a forum post."""
+    """提供管理者刪除單篇論壇文章的 API。
+
+    前端使用頁面：
+    - staff 社群內容管理頁
+
+    功能：
+    - 刪除違規或測試貼文
+    """
 
     permission_classes = [IsAdminDemoUser]
 
@@ -1555,7 +2148,17 @@ class AdminPostDetailApi(APIView):
 
 
 class AdminUserStatusApi(APIView):
-    """提供後台會員狀態更新的 API。"""
+    """提供後台會員狀態更新的 API。
+
+    前端使用頁面：
+    - staff 會員管理頁
+
+    資料來源：
+    - `auth_demo.update_account_status`
+
+    功能：
+    - 變更會員帳號狀態，例如正常、停權、待審等
+    """
 
     permission_classes = [IsAdminDemoUser]
 
@@ -1570,7 +2173,18 @@ class AdminUserStatusApi(APIView):
 
 
 class RegisterApi(APIView):
-    """提供會員註冊的 API。"""
+    """提供會員註冊的 API。
+
+    前端使用頁面：
+    - 註冊頁
+
+    資料來源：
+    - `auth_demo.register_user`
+
+    功能：
+    - 建立新會員
+    - 註冊成功後直接寫入 session，讓前端視同已登入
+    """
 
     permission_classes = [AllowAny]
 
@@ -1596,7 +2210,19 @@ class RegisterApi(APIView):
 
 
 class LoginApi(APIView):
-    """提供會員登入的 API。"""
+    """提供會員登入的 API。
+
+    前端使用頁面：
+    - 登入頁
+
+    資料來源：
+    - `auth_demo.authenticate`
+    - `auth_demo.login`
+
+    功能：
+    - 驗證帳密
+    - 將會員 snapshot 寫入目前 session
+    """
 
     permission_classes = [AllowAny]
 
@@ -1624,7 +2250,18 @@ class LoginApi(APIView):
 
 
 class LogoutApi(APIView):
-    """提供會員登出的 API。"""
+    """提供會員登出的 API。
+
+    前端使用頁面：
+    - header 登出按鈕
+
+    資料來源：
+    - `auth_demo.logout`
+
+    功能：
+    - 清掉目前登入 session
+    - 讓前端恢復訪客狀態
+    """
 
     permission_classes = [AllowAny]
 
@@ -1635,7 +2272,19 @@ class LogoutApi(APIView):
 
 
 class MeProfileApi(APIView):
-    """提供會員資料查詢與更新的 API。"""
+    """提供會員資料查詢與更新的 API。
+
+    前端使用頁面：
+    - 會員資料頁
+
+    資料來源：
+    - `auth_demo.update_profile`
+
+    功能：
+    - 讀取目前會員基本資料
+    - 更新顯示名稱、Email、密碼
+    - 更新後重新寫入 session snapshot
+    """
 
     permission_classes = [IsDemoAuthenticated]
 
@@ -1665,17 +2314,30 @@ class MeProfileApi(APIView):
 
 
 class MeShippingRulesApi(APIView):
-    """Provide seller-level shipping rule read/update APIs."""
+    """提供賣家運費規則查詢與更新的 API。
+
+    前端使用頁面：
+    - 賣家運費設定頁
+    - checkout 運費試算依賴的賣家設定來源
+
+    資料來源：
+    - `auth_demo.get_seller_shipping_rules`
+    - `auth_demo.update_seller_shipping_rules`
+
+    功能：
+    - 讀取目前賣家的宅配 / 超商啟用狀態與費用
+    - 更新免運門檻與配送費設定
+    """
 
     permission_classes = [IsSellerOrAdminDemoUser]
 
     def get(self, request):
-        """Return current seller shipping rules."""
+        """讀取目前賣家的運費規則。"""
         user = get_demo_user(request)
         return Response(auth_demo.get_seller_shipping_rules(user["username"]))
 
     def put(self, request):
-        """Update seller shipping rules."""
+        """更新目前賣家的運費規則。"""
         user = get_demo_user(request)
         payload = _validated(sz.SellerShippingRulesSerializer, request.data)
         try:
@@ -1693,7 +2355,15 @@ class MeShippingRulesApi(APIView):
 
 
 class SellerRequestApi(APIView):
-    """提供賣家申請送出的 API。"""
+    """提供賣家申請送出的 API。
+
+    前端使用頁面：
+    - 會員資料 / 會員中心內的賣家申請入口
+
+    功能：
+    - 將目前會員標記為已送出賣家申請
+    - 更新 session 內的使用者 snapshot
+    """
 
     permission_classes = [IsDemoAuthenticated]
 
@@ -1708,8 +2378,20 @@ class SellerRequestApi(APIView):
         return Response({"detail": "Seller access request submitted.", "user": updated})
 
 
+# ---------------------------------------------------------------------------
+# 購物車 / 結帳 / 超商選店
+# ---------------------------------------------------------------------------
 class CartApi(APIView):
-    """提供購物車查詢與折扣碼更新的 API。"""
+    """提供購物車查詢與折扣碼更新的 API。
+
+    前端使用頁面：
+    - 購物車頁
+
+    功能：
+    - 讀取 cart snapshot
+    - 套用 / 清除折扣碼
+    - 依運送方式重算 totals
+    """
 
     permission_classes = [AllowAny]
 
@@ -1737,7 +2419,16 @@ class CartApi(APIView):
 
 
 class CartAddApi(APIView):
-    """提供加入購物車的 API。"""
+    """提供加入購物車的 API。
+
+    前端使用頁面：
+    - 商品詳情頁
+    - 其他有「加入購物車」按鈕的商品卡片
+
+    功能：
+    - 驗證商品與變體是否存在
+    - 寫入 session cart 或登入會員的持久化 cart
+    """
 
     permission_classes = [AllowAny]
 
@@ -1782,7 +2473,19 @@ class CartAddApi(APIView):
 
 
 class CartItemApi(APIView):
-    """提供購物車單項更新與刪除的 API。"""
+    """提供購物車單項更新與刪除的 API。
+
+    前端使用頁面：
+    - 購物車頁的數量調整與移除按鈕
+
+    資料來源：
+    - `cart_service.update_qty`
+    - `cart_service.remove_item`
+
+    功能：
+    - 調整單一品項數量
+    - 刪除單一購物車項目並重算 totals
+    """
 
     permission_classes = [AllowAny]
 
@@ -1805,7 +2508,15 @@ class CartItemApi(APIView):
 
 
 class CheckoutPreviewApi(APIView):
-    """提供結帳預覽的 API。"""
+    """提供結帳預覽的 API。
+
+    前端使用頁面：
+    - checkout 頁
+
+    功能：
+    - 回傳地址、發票、運費、付款方式、便利商店品牌
+    - 組合結帳頁渲染所需的完整 snapshot
+    """
 
     permission_classes = [AllowAny]
 
@@ -1815,7 +2526,16 @@ class CheckoutPreviewApi(APIView):
 
 
 class CheckoutConfirmApi(APIView):
-    """提供確認下單的 API。"""
+    """提供確認下單的 API。
+
+    前端使用頁面：
+    - checkout 頁送出訂單
+
+    功能：
+    - 依購物車建立訂單
+    - 保存收件地址與訂單 snapshot
+    - 下單後回傳訂單明細並清空 cart
+    """
 
     permission_classes = [IsDemoAuthenticated]
 
@@ -1843,12 +2563,20 @@ class CheckoutConfirmApi(APIView):
 
 
 class BuyerCheckoutStoreMapPrepareApi(APIView):
-    """Prepare NewebPay store-map form data for checkout."""
+    """準備藍新超商選店 store-map 表單資料。
+
+    前端使用頁面：
+    - checkout 超商取貨流程
+
+    功能：
+    - 回傳前端 auto-submit 到藍新的 store-map payload
+    - 寫入 debug 記錄，方便 staff 排查選店流程
+    """
 
     permission_classes = [IsDemoAuthenticated]
 
     def post(self, request):
-        """Return the auto-submit form payload for NewebPay convenience-store selection."""
+        """回傳可 auto-submit 到藍新 store-map 的表單 payload。"""
         user = get_demo_user(request)
         payload = _validated(sz.CheckoutStoreMapPrepareSerializer, request.data)
         try:
@@ -1869,7 +2597,14 @@ class BuyerCheckoutStoreMapPrepareApi(APIView):
 
 
 class AdminCheckoutStoreMapDebugApi(APIView):
-    """Expose a staff-only debug summary for NewebPay store-map payload generation."""
+    """提供 staff 檢視 store-map payload 的 debug API。
+
+    前端使用頁面：
+    - staff NewebPay store-map debug 面板
+
+    功能：
+    - 顯示明文參數、加密後 form fields、runtime 設定與檢查結果
+    """
 
     permission_classes = [IsAdminDemoUser]
 
@@ -1892,7 +2627,7 @@ class AdminCheckoutStoreMapDebugApi(APIView):
         },
     )
     def post(self, request):
-        """Return the exact store-map plain params and generated form fields."""
+        """回傳 store-map 明文參數、加密欄位與 runtime 檢查結果。"""
         user = get_demo_user(request)
         payload = _validated(sz.CheckoutStoreMapPrepareSerializer, request.data)
         try:
@@ -1912,12 +2647,20 @@ class AdminCheckoutStoreMapDebugApi(APIView):
 
 
 class BuyerCheckoutStoreSelectionApi(APIView):
-    """Fetch a previously selected convenience-store for checkout."""
+    """讀取目前買家已選擇的超商門市資料。
+
+    前端使用頁面：
+    - checkout 選店返回後
+
+    功能：
+    - 依 token 讀取先前 callback 寫入的門市資料
+    - 讓 checkout 可以回填門市代碼、名稱、地址
+    """
 
     permission_classes = [IsDemoAuthenticated]
 
     def get(self, request):
-        """Return the selected store details for the current user."""
+        """回傳目前會員最近一次選定的超商門市資料。"""
         user = get_demo_user(request)
         selection_token = str(request.query_params.get("token", "")).strip()
         if not selection_token:
@@ -1929,13 +2672,21 @@ class BuyerCheckoutStoreSelectionApi(APIView):
 
 
 class NewebpayStoreMapCallbackApi(APIView):
-    """Receive the NewebPay convenience-store map callback."""
+    """接收藍新超商地圖 callback。
+
+    來源：
+    - 藍新物流 / store-map callback
+
+    功能：
+    - 保存門市選擇結果
+    - 供 checkout 返回後查詢與回填
+    """
 
     permission_classes = [AllowAny]
     authentication_classes: list = []
 
     def post(self, request):
-        """Persist the selected store so checkout can read it after browser return."""
+        """保存藍新超商地圖選店結果，供 checkout 返回後查詢。"""
         payload = _validated(sz.NewebpayStoreMapCallbackSerializer, request.data)
         try:
             record = newebpay_logistics_real_service.handle_store_map_callback(payload)
@@ -1947,7 +2698,12 @@ class NewebpayStoreMapCallbackApi(APIView):
 
 
 class NewebpayStoreMapReturnRelayView(APIView):
-    """Relay NewebPay store-map browser return through a short backend URL."""
+    """中繼藍新超商選店完成後的瀏覽器返回。
+
+    功能：
+    - 把藍新返回的短 backend URL 再轉向到前端 checkout 完成頁
+    - 避免前端直接暴露複雜的 callback relay 細節
+    """
 
     permission_classes = [AllowAny]
     authentication_classes: list = []
@@ -1957,8 +2713,20 @@ class NewebpayStoreMapReturnRelayView(APIView):
         return HttpResponseRedirect(newebpay_logistics_real_service.get_store_map_client_return_url(selection_token))
 
 
+# ---------------------------------------------------------------------------
+# 賣家商品管理 / 平台內容審核
+# ---------------------------------------------------------------------------
 class SellerProductsApi(APIView):
-    """提供賣家商品列表與建立的 API。"""
+    """提供賣家商品列表與建立的 API。
+
+    前端使用頁面：
+    - 賣家商品列表
+    - 賣家新增商品頁
+
+    功能：
+    - 列出賣家自己的商品
+    - 建立新商品，交由 `product_management` 處理圖片與變體
+    """
 
     permission_classes = [IsSellerOrAdminDemoUser]
 
@@ -1985,7 +2753,16 @@ class SellerProductsApi(APIView):
 
 
 class SellerProductDetailApi(APIView):
-    """提供賣家商品明細、更新與刪除的 API。"""
+    """提供賣家商品明細、更新與刪除的 API。
+
+    前端使用頁面：
+    - 賣家商品編輯頁
+
+    功能：
+    - 讀取單一商品
+    - 更新商品主資料、圖片、變體
+    - 刪除或管理者代編輯
+    """
 
     permission_classes = [IsSellerOrAdminDemoUser]
 
@@ -2026,7 +2803,20 @@ class SellerProductDetailApi(APIView):
 
 
 class SellerProductArchiveApi(APIView):
-    """提供賣家商品封存的 API。"""
+    """提供賣家商品下架 / 封存的 API。
+
+    前端使用頁面：
+    - 賣家商品列表
+    - 賣家商品編輯頁
+
+    資料來源：
+    - `product_management.archive_product`
+    - 管理者可改走 `product_management.admin_archive_product`
+
+    功能：
+    - 將商品改為封存 / 下架狀態
+    - 讓前台商品總覽不再顯示該商品
+    """
 
     permission_classes = [IsSellerOrAdminDemoUser]
 
@@ -2044,7 +2834,18 @@ class SellerProductArchiveApi(APIView):
 
 
 class SellerProductDuplicateApi(APIView):
-    """提供賣家商品複製的 API。"""
+    """提供賣家商品複製成草稿的 API。
+
+    前端使用頁面：
+    - 賣家商品列表
+
+    資料來源：
+    - `product_management.duplicate_product_as_draft`
+
+    功能：
+    - 以既有商品為範本快速建立草稿
+    - 方便複製相近商品後再局部修改
+    """
 
     permission_classes = [IsSellerOrAdminDemoUser]
 
@@ -2059,7 +2860,19 @@ class SellerProductDuplicateApi(APIView):
 
 
 class StaffReviewDashboardApi(APIView):
-    """提供後台賣家申請與商品管理的 API。"""
+    """提供後台賣家申請與商品審核首頁資料。
+
+    前端使用頁面：
+    - staff 審核中心 / moderation dashboard
+
+    資料來源：
+    - `product_management.list_moderation_products`
+    - `auth_demo.list_seller_requests`
+
+    功能：
+    - 同時顯示待關注商品與賣家申請
+    - 作為管理端審核工作的首頁摘要
+    """
 
     permission_classes = [IsAdminDemoUser]
 
@@ -2074,7 +2887,18 @@ class StaffReviewDashboardApi(APIView):
 
 
 class SellerRequestReviewApi(APIView):
-    """提供賣家申請審核的 API。"""
+    """提供賣家申請審核的 API。
+
+    前端使用頁面：
+    - staff 審核中心
+
+    資料來源：
+    - `auth_demo.review_seller_request`
+
+    功能：
+    - 核准或拒絕會員成為賣家
+    - 將審核結果回寫到會員帳號角色 / 狀態
+    """
 
     permission_classes = [IsAdminDemoUser]
 
@@ -2103,6 +2927,11 @@ class AdminProductArchiveApi(APIView):
         return Response(product)
 
 
+# ---------------------------------------------------------------------------
+# Legacy alias views
+# 保留舊 route 對應，避免舊頁面或文件連結直接失效。
+# 實際邏輯仍委派給 canonical DRF API view。
+# ---------------------------------------------------------------------------
 class LegacyProductReviewsApi(ProductReviewsApi):
     """與舊路由相容的商品評論 API alias。"""
 

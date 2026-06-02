@@ -101,8 +101,16 @@ CONVENIENCE_STORE_BRAND_CHOICES = [
 CONVENIENCE_STORE_BRAND_LABELS = {item["value"]: item["label"] for item in CONVENIENCE_STORE_BRAND_CHOICES}
 
 
+# checkout 配送方式主設定：
+# - 給購物車與 checkout 頁共用
+# - 依 LOGISTICS_CHECKOUT_ENABLED 決定是否開放超商取貨
 def get_checkout_shipping_methods() -> List[Dict[str, str]]:
-    """Return shipping methods currently enabled for buyer checkout."""
+    """回傳目前 checkout 可選的配送方式。
+
+    用途：
+    - 提供 checkout 頁面渲染配送方式選單
+    - 依 `LOGISTICS_CHECKOUT_ENABLED` 控制是否開放超商取貨
+    """
     if not LOGISTICS_CHECKOUT_ENABLED:
         return [dict(SHIPPING_METHOD_CHOICES[0])]
     if not LOGISTICS_CHECKOUT_ENABLED:
@@ -110,19 +118,27 @@ def get_checkout_shipping_methods() -> List[Dict[str, str]]:
     return [dict(item) for item in SHIPPING_METHOD_CHOICES]
 
 
+# 配送方式驗證：
+# - 檢查前端送來的配送方式是否仍在目前允許名單中
 def is_checkout_shipping_method_enabled(shipping_method: str) -> bool:
+    """檢查指定配送方式目前是否允許在 checkout 使用。"""
     return shipping_method in {item["value"] for item in get_checkout_shipping_methods()}
 
 
+# 配送方式正規化：
+# - 若前端送來無效值，回退到宅配到府
 def normalize_checkout_shipping_method(shipping_method: str) -> str:
+    """把前端送來的配送方式正規化成目前可接受的值。"""
     candidate = (shipping_method or "").strip()
     if is_checkout_shipping_method_enabled(candidate):
         return candidate
     return SHIPPING_METHOD_HOME_DELIVERY
 
 
+# Decimal 工具：
+# - 統一處理運費 / 免運門檻等數值設定
 def _shipping_decimal(value: Any, default: str = "0.00") -> Decimal:
-    """Normalize shipping config numbers into Decimal."""
+    """把運費與免運門檻等設定值轉成 Decimal。"""
     try:
         return Decimal(str(value if value not in (None, "") else default)).quantize(Decimal("0.01"))
     except Exception:
@@ -166,8 +182,11 @@ def _line_decimal(value: Any) -> Decimal:
     return Decimal(str(value)).quantize(Decimal("0.01"))
 
 
+# 單商品運費計算：
+# - 先看商品是否覆寫 seller shipping rules
+# - 再依配送方式決定要取宅配還是超商運費
 def _shipping_fee_for_line(product: Dict[str, Any], seller_rules: Dict[str, Any], shipping_method: str) -> Decimal:
-    """Resolve the applicable shipping fee for one product line."""
+    """計算單一商品在指定配送方式下的實際運費。"""
     profile = product_management.prepare_product_for_display(product).get("shipping_profile", {})
     use_seller_rules = bool(profile.get("use_seller_rules", True))
 
@@ -184,11 +203,13 @@ def _shipping_fee_for_line(product: Dict[str, Any], seller_rules: Dict[str, Any]
     return Decimal("0.00")
 
 
+# 賣家分組配送能力計算：
+# - 同一賣家群組內，只保留所有商品共同支援的配送方式
 def _available_shipping_methods_for_group(
     lines: List[Dict[str, Any]],
     seller_rules: Dict[str, Any],
 ) -> List[Dict[str, str]]:
-    """Return shipping methods that every product in one seller group supports."""
+    """計算同一賣家分組內所有商品共同支援的配送方式。"""
     if not LOGISTICS_CHECKOUT_ENABLED:
         return [{"value": SHIPPING_METHOD_HOME_DELIVERY, "label": SHIPPING_METHOD_LABELS[SHIPPING_METHOD_HOME_DELIVERY]}]
     available: list[dict[str, str]] = []
@@ -210,12 +231,27 @@ def _available_shipping_methods_for_group(
     return available
 
 
+# 賣家分組運費主流程：
+# - 先依 seller 分組
+# - 再計算每組的 subtotal / shipping_fee / free_shipping_threshold
+# - 這是購物車、checkout、訂單頁共用的資料基礎
 def build_seller_shipping_groups(
     items: List[Dict[str, Any]],
     *,
     shipping_method: str,
 ) -> List[Dict[str, Any]]:
-    """Split cart/order items by seller and calculate shipping per seller."""
+    """依賣家拆分購物車 / 訂單商品，並計算每位賣家的運費分組。
+
+    前端使用頁面：
+    - 購物車頁的分賣家運費摘要
+    - checkout 頁的運費預估
+    - 買家訂單詳情頁 / 賣家訂單詳情頁的出貨分組
+
+    功能：
+    - 將商品依賣家分組
+    - 計算每組 subtotal、shipping_fee、free_shipping_threshold
+    - 產生每組可用配送方式清單
+    """
     grouped: Dict[str, Dict[str, Any]] = {}
     for raw_line in items:
         line = dict(raw_line)
@@ -282,12 +318,24 @@ def build_seller_shipping_groups(
     return groups
 
 
+# checkout totals 主流程：
+# - 依目前購物車、折扣、配送方式，回傳完整金額摘要
 def build_checkout_totals(
     session,
     *,
     shipping_method: str,
 ) -> Dict[str, Any]:
-    """Build marketplace checkout totals using per-seller shipping groups."""
+    """依目前購物車與配送方式計算 checkout totals。
+
+    前端使用頁面：
+    - 購物車頁
+    - checkout 頁
+
+    功能：
+    - 套用優惠券
+    - 依賣家分組計算運費
+    - 回傳 subtotal / shipping / discount / total 與 seller shipping groups
+    """
     shipping_method = normalize_checkout_shipping_method(shipping_method)
     cart = cart_service.get_cart(session)
     items = list(cart.get("items", {}).values())
@@ -625,6 +673,11 @@ def _enrich_order_common(order: Dict[str, Any]) -> Dict[str, Any]:
     return item
 
 
+# 建單主流程：
+# - 由 checkout confirm API 呼叫
+# - 驗證地址、配送、付款方式與購物車內容
+# - 計算 totals、預留庫存、建立訂單 snapshot
+# - 成功後清空購物車
 def create_order_from_cart(
     session,
     user: Dict[str, str],
@@ -734,6 +787,9 @@ def create_order_from_cart(
     return order
 
 
+# 買家訂單列表：
+# - 給會員中心 / 我的訂單列表使用
+# - 補上 shipment groups 與狀態摘要，方便前端直接渲染
 def list_orders_for_user(username: str) -> List[Dict[str, Any]]:
     """列出 訂單 相關資料，供頁面或 API 顯示。
 
@@ -753,16 +809,22 @@ def list_orders_for_user(username: str) -> List[Dict[str, Any]]:
     return results
 
 
+# checkout 設定輔助：
+# - 回傳前端配送方式選單
 def get_checkout_shipping_methods() -> List[Dict[str, str]]:
     """回傳 checkout 可選的物流方式。"""
     return [dict(item) for item in SHIPPING_METHOD_CHOICES]
 
 
+# checkout 設定輔助：
+# - 回傳前端付款方式選單
 def get_checkout_payment_methods() -> List[Dict[str, str]]:
     """回傳 checkout 可選的付款方式。"""
     return [dict(item) for item in PAYMENT_METHOD_CHOICES]
 
 
+# checkout 設定輔助：
+# - 回傳超商取貨可選品牌
 def get_convenience_store_brands() -> List[Dict[str, str]]:
     """回傳 checkout 可選的超商品牌。"""
     if not LOGISTICS_CHECKOUT_ENABLED:
@@ -770,6 +832,9 @@ def get_convenience_store_brands() -> List[Dict[str, str]]:
     return [dict(item) for item in CONVENIENCE_STORE_BRAND_CHOICES]
 
 
+# 買家訂單明細：
+# - 給買家訂單詳情頁使用
+# - 會補齊 seller line 與 shipment groups
 def get_order_detail_for_user(order_id: int, username: str) -> Optional[Dict[str, Any]]:
     """取得 訂單 流程中指定條件的資料。
 
@@ -789,6 +854,9 @@ def get_order_detail_for_user(order_id: int, username: str) -> Optional[Dict[str
     return item
 
 
+# 售後申請：
+# - 建立取消或退款請求
+# - 由買家訂單頁送出，後續交由賣家 / staff 審核
 def request_order_service(order_id: int, username: str, *, request_type: str, reason: str) -> Dict[str, Any]:
     """建立買家的取消或退款申請。
 
@@ -829,6 +897,9 @@ def request_order_service(order_id: int, username: str, *, request_type: str, re
     raise ValueError("Order not found.")
 
 
+# 訂單完成：
+# - 買家在賣家已出貨後確認收貨
+# - 會把可完成的 seller line 改成 completed
 def confirm_order_completion(order_id: int, username: str) -> Dict[str, Any]:
     """Allow the buyer to confirm receipt and complete the order."""
     orders = list(local_store.get_orders())
@@ -853,6 +924,10 @@ def confirm_order_completion(order_id: int, username: str) -> Dict[str, Any]:
     raise ValueError("Order not found.")
 
 
+# 藍新付款結果回寫：
+# - 只接受 callback / return / query 真正帶回的資料
+# - 更新付款方式、付款狀態、藍新交易序號
+# - 若有超商門市資料，也同步回寫到訂單
 def apply_newebpay_result(
     order_id: int,
     *,
@@ -927,6 +1002,9 @@ def _build_seller_order_view(order: Dict[str, Any], seller_username: str) -> Opt
     return item
 
 
+# 賣家訂單列表：
+# - 給賣家訂單頁使用
+# - 依日期條件列出賣家需要履約的訂單
 def list_orders_for_seller(username: str, *, date_from: str = "", date_to: str = "") -> List[Dict[str, Any]]:
     """列出 訂單 相關資料，供頁面或 API 顯示。
 
@@ -949,6 +1027,8 @@ def list_orders_for_seller(username: str, *, date_from: str = "", date_to: str =
     return items
 
 
+# 賣家訂單明細：
+# - 給賣家查看收件、付款摘要、商品分組與出貨資訊
 def get_order_detail_for_seller(order_id: int, username: str) -> Optional[Dict[str, Any]]:
     """取得 訂單 流程中指定條件的資料。
 
@@ -965,6 +1045,8 @@ def get_order_detail_for_seller(order_id: int, username: str) -> Optional[Dict[s
     return _build_seller_order_view(order, username)
 
 
+# 賣家履約更新：
+# - 保存賣家端出貨狀態、物流單號、出貨備註
 def update_seller_order(
     order_id: int,
     seller_username: str,
@@ -1018,6 +1100,9 @@ def update_seller_order(
     raise ValueError("Order not found.")
 
 
+# 銷售報表：
+# - 給賣家報表頁使用
+# - 統計訂單數、銷量、營收與熱賣商品
 def build_sales_report(username: str, *, date_from: str = "", date_to: str = "") -> Dict[str, Any]:
     """依賣家與日期區間彙整銷售報表資料。
 
@@ -1095,6 +1180,9 @@ def _build_admin_order_view(order: Dict[str, Any]) -> Dict[str, Any]:
     return item
 
 
+# 管理端訂單列表：
+# - 給 staff 訂單管理頁使用
+# - 可依日期、狀態、售後狀態與關鍵字篩選
 def list_orders_for_admin(
     *,
     date_from: str = "",
@@ -1134,6 +1222,9 @@ def list_orders_for_admin(
     return orders
 
 
+# 管理端訂單明細：
+# - 不受買家 / 賣家擁有權限制
+# - 用於 staff 查看完整訂單與售後資訊
 def get_order_detail_for_admin(order_id: int) -> Optional[Dict[str, Any]]:
     """取得 訂單 流程中指定條件的資料。
 
@@ -1149,6 +1240,9 @@ def get_order_detail_for_admin(order_id: int) -> Optional[Dict[str, Any]]:
     return _build_admin_order_view(order)
 
 
+# 售後審核：
+# - 由 staff 審核取消 / 退款請求
+# - 核准後可改變訂單狀態並在取消時回補庫存
 def review_service_request(order_id: int, *, approved: bool, note: str = "") -> Dict[str, Any]:
     """由管理員審核買家的售後申請。
 
@@ -1185,6 +1279,8 @@ def review_service_request(order_id: int, *, approved: bool, note: str = "") -> 
     raise ValueError("Order not found.")
 
 
+# 管理端摘要：
+# - 提供 dashboard 需要的訂單總數、取消、退款、待處理售後統計
 def build_admin_order_summary() -> Dict[str, Any]:
     """彙整平台管理端的訂單摘要統計。
 

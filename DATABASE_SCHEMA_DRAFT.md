@@ -1,852 +1,797 @@
-# 資料庫建置草案
+# DATABASE_SCHEMA_DRAFT
 
-這份文件整理的是：**如果現在要把專案從 JSON-backed prototype 轉成 Django ORM / 正式資料庫**，建議會建立哪些資料表、每張表大致有哪些欄位、彼此如何關聯。
+本文件是目前專案從 `data/*.json` 遷移到正式資料庫的草稿基準。
 
-目前依據的是現有程式中的資料結構：
+目標不是照 JSON 原封不動落表，而是：
 
-- `myapp/repositories/local_store.py`
-- `myapp/services/auth_demo.py`
-- `myapp/services/product_management.py`
-- `myapp/services/orders.py`
-- `myapp/services/reviews.py`
-- `myapp/services/questions.py`
-- `myapp/services/community.py`
+1. 保留目前已存在的業務流程
+2. 把 session / snapshot / 匿名規則一起納入設計
+3. 讓後續 Django ORM migration 有明確落地順序
 
----
+## 1. 設計原則
 
-## 設計原則
+### 1.1 以 `user_id` 當內部關聯主鍵
 
-- 先把**核心交易資料**正規化：會員、商品、商品變體、訂單、訂單明細。
-- 訂單中的地址、發票、賣家顯示名稱等，建議保留 **snapshot 欄位**，避免事後修改會員資料導致歷史訂單內容失真。
-- 目前 JSON 中很多欄位同時存：
-  - `user_id`
-  - `username`
-  - `display_name`
-  
-  ORM 化後建議：
-  - **關聯欄位保留 `ForeignKey`**
-  - **歷史快照欄位保留文字版 username / display_name**
+目前 JSON 很多地方同時存：
 
----
+- `author`
+- `author_username`
+- `author_user_id`
 
-## 第一波：核心資料表
+正式資料庫應以：
 
-這一波最適合先做，因為欄位相對穩定。
+- `users.id`
 
-### 1. `users`
-用途：會員主檔，取代目前 `users.json`
+作為唯一內部關聯，其他顯示名稱只作 snapshot 或快取用途。
 
-| 欄位 | 型別建議 | 說明 |
-|---|---|---|
+### 1.2 訂單、訂單明細、內容資料保留 snapshot
+
+下列資料在交易完成後不能只靠即時關聯回推：
+
+- 訂單上的買家名稱、email、地址、發票資料
+- 訂單明細上的商品名稱、variant 名稱、SKU、單價
+- 評論 / 問答 / 社群發文當下的顯示名稱
+
+原因：
+
+- 商品會改名
+- 使用者會改 display name
+- 賣家可能停權或刪檔
+
+所以資料表應同時保留：
+
+- `ForeignKey`
+- 必要 snapshot 欄位
+
+### 1.3 匿名是讀取規則，不是儲存規則
+
+目前公開頁面會把：
+
+- 評論作者
+- 問答作者
+- 社群作者
+
+做匿名化。
+
+正式資料庫建議：
+
+- 內部存 `author_user_id`
+- 視需要保留 `author_display_name_snapshot`
+- 對外匿名在 service / serializer 層處理
+
+### 1.4 session 資料要明確決策
+
+目前以下功能還在 signed-cookie session：
+
+- cart
+- favorites
+- compare
+- recent views
+
+開始建 DB 前要先決定：
+
+- 這些是否改成資料庫持久化
+- 或仍維持 session / Redis 型暫存
+
+本草稿提供兩種都可行的表結構，但不代表一定全部都要建。
+
+## 2. 目前 JSON 對應的未來實體
+
+| 現有 JSON / 狀態 | 未來實體 |
+| --- | --- |
+| `users.json` | `users`, `user_addresses`, `user_invoice_profiles`, `user_shipping_rules`, `seller_requests` |
+| `products.json` | `products`, `product_images`, `product_variants`, `brands`, `categories`, `product_tags` |
+| `orders.json` | `orders`, `order_items`, `order_service_requests`, `shipment_events` |
+| `reviews.json` | `product_reviews` |
+| `questions.json` | `product_questions`, `product_question_answers` |
+| `posts.json` | `community_posts`, `community_replies`, `community_votes` |
+| `banners.json` | `banners`, `banner_applications` |
+| `competitor_prices.json` | `competitor_sites`, `competitor_products` |
+| `newebpay_payment_logs.json` | `payment_transactions`, `payment_callback_logs` |
+| session cart | `carts`, `cart_items` 或 server-side session |
+| session favorites / compare / recent | `user_favorites`, `compare_items`, `recent_views` 或 server-side session |
+
+## 3. 核心帳號與會員資料
+
+### 3.1 `users`
+
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
 | `id` | `BigAutoField` | 主鍵 |
 | `username` | `CharField(unique=True)` | 登入帳號 |
-| `password_hash` | `CharField` | 密碼雜湊 |
+| `password_hash` | `CharField` | Django password hash |
 | `display_name` | `CharField` | 顯示名稱 |
-| `email` | `EmailField(blank=True)` | Email |
+| `email` | `EmailField(blank=True)` | email |
 | `role` | `CharField` | `member` / `seller` / `admin` |
 | `account_status` | `CharField` | `active` / `suspended` |
-| `seller_request_status` | `CharField(blank=True)` | `pending` / `approved` / `rejected` / 空值 |
+| `seller_request_status` | `CharField(blank=True)` | 目前流程相容欄位，可保留或改由 `seller_requests` 主導 |
 | `created_at` | `DateTimeField` | 建立時間 |
 | `updated_at` | `DateTimeField` | 更新時間 |
-| `last_login_at` | `DateTimeField(null=True)` | 最近登入時間 |
-| `seller_requested_at` | `DateTimeField(null=True)` | 申請賣家時間 |
-| `seller_reviewed_at` | `DateTimeField(null=True)` | 審核完成時間 |
-| `account_status_updated_at` | `DateTimeField(null=True)` | 帳號狀態更新時間 |
+| `last_login_at` | `DateTimeField(null=True)` | 最後登入時間 |
+| `seller_requested_at` | `DateTimeField(null=True)` | 目前 JSON 已有，正式化後可改由 `seller_requests.created_at` 取代 |
+| `seller_reviewed_at` | `DateTimeField(null=True)` | 同上 |
+| `account_status_updated_at` | `DateTimeField(null=True)` | 帳號狀態最後更新時間 |
 
----
+### 3.2 `user_addresses`
 
-### 2. `addresses`
-用途：會員地址簿
-
-| 欄位 | 型別建議 | 說明 |
-|---|---|---|
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
 | `id` | `BigAutoField` | 主鍵 |
 | `user` | `ForeignKey(users)` | 所屬會員 |
-| `label` | `CharField` | 地址標籤，例如「住家」、「公司」 |
+| `label` | `CharField` | 地址標籤 |
 | `recipient` | `CharField` | 收件人 |
-| `phone` | `CharField` | 聯絡電話 |
-| `postal_code` | `CharField` | 郵遞區號 |
+| `phone` | `CharField` | 電話 |
+| `postal_code` | `CharField(blank=True)` | 郵遞區號 |
 | `city` | `CharField` | 縣市 |
 | `district` | `CharField` | 區域 |
 | `address_line` | `CharField` | 詳細地址 |
-| `is_default` | `BooleanField` | 是否預設地址 |
+| `is_default` | `BooleanField(default=False)` | 是否預設 |
 | `created_at` | `DateTimeField` | 建立時間 |
 | `updated_at` | `DateTimeField` | 更新時間 |
 
----
+建議 constraint：
 
-### 3. `invoice_profiles`
-用途：會員發票資料
+- `UniqueConstraint(fields=["user"], condition=Q(is_default=True), name="unique_default_address_per_user")`
 
-| 欄位 | 型別建議 | 說明 |
-|---|---|---|
+### 3.3 `user_invoice_profiles`
+
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
 | `id` | `BigAutoField` | 主鍵 |
 | `user` | `OneToOneField(users)` | 所屬會員 |
 | `invoice_type` | `CharField` | `personal` / `company` |
-| `carrier_code` | `CharField(blank=True)` | 個人載具 |
+| `carrier_code` | `CharField(blank=True)` | 載具碼 |
 | `company_name` | `CharField(blank=True)` | 公司名稱 |
 | `tax_id` | `CharField(blank=True)` | 統編 |
 | `updated_at` | `DateTimeField` | 更新時間 |
 
----
+### 3.4 `user_shipping_rules`
 
-### 4. `products`
-用途：商品主檔
+目前每個會員 JSON 都帶 seller shipping rules。正式 DB 建議拆表。
 
-| 欄位 | 型別建議 | 說明 |
-|---|---|---|
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
 | `id` | `BigAutoField` | 主鍵 |
-| `owner` | `ForeignKey(users)` | 商品擁有者 / 賣家 |
-| `slug` | `SlugField(unique=True)` | URL 用 slug |
-| `name` | `CharField` | 商品名稱 |
-| `brand` | `CharField` | 品牌 |
-| `category` | `CharField` | 分類 |
-| `price` | `DecimalField` | 主要售價 |
-| `compare_at_price` | `DecimalField(null=True)` | 原價 / 比較價 |
-| `stock` | `IntegerField` | 基本庫存；若主用變體，可作總庫存或備援欄位 |
-| `status` | `CharField` | `draft` / `pending` / `active` / `rejected` / `archived` |
-| `review_note` | `TextField(blank=True)` | 商品審核備註 |
-| `created_at` | `DateTimeField` | 建立時間 |
-| `updated_at` | `DateTimeField` | 更新時間 |
-| `reviewed_at` | `DateTimeField(null=True)` | 審核時間 |
-| `owner_username_snapshot` | `CharField` | 賣家帳號快照 |
-| `owner_display_name_snapshot` | `CharField` | 賣家顯示名稱快照 |
-
-補充：
-
-- `tags` 建議不要直接做成純字串欄位，較佳做法有兩種：
-  - 先做 `JSONField`
-  - 或拆 `product_tags`
-- `specs` 建議先用 `JSONField`
-
----
-
-### 5. `product_images`
-用途：商品圖片
-
-| 欄位 | 型別建議 | 說明 |
-|---|---|---|
-| `id` | `BigAutoField` | 主鍵 |
-| `product` | `ForeignKey(products)` | 所屬商品 |
-| `image_path` | `CharField` | 圖片路徑 |
-| `sort_order` | `PositiveIntegerField` | 排序 |
-| `created_at` | `DateTimeField` | 建立時間 |
-
----
-
-### 6. `product_variants`
-用途：商品變體 / SKU
-
-| 欄位 | 型別建議 | 說明 |
-|---|---|---|
-| `id` | `BigAutoField` | 主鍵 |
-| `product` | `ForeignKey(products)` | 所屬商品 |
-| `name` | `CharField` | 變體名稱 |
-| `sku` | `CharField(blank=True)` | SKU |
-| `price` | `DecimalField` | 變體售價 |
-| `compare_at_price` | `DecimalField(null=True)` | 變體原價 / 劃線價 |
-| `stock` | `IntegerField` | 變體庫存 |
-| `color` | `CharField(blank=True)` | 顏色 |
-| `size` | `CharField(blank=True)` | 尺寸 |
-| `attributes_json` | `JSONField(default=dict)` | 其他屬性 |
-| `image_index` | `PositiveIntegerField(null=True)` | 對應第幾張商品圖 |
-| `created_at` | `DateTimeField` | 建立時間 |
+| `user` | `OneToOneField(users)` | 所屬賣家 |
+| `home_delivery_enabled` | `BooleanField(default=True)` | 是否開啟宅配 |
+| `home_delivery_fee` | `DecimalField(max_digits=10, decimal_places=2)` | 宅配運費 |
+| `convenience_store_enabled` | `BooleanField(default=True)` | 是否開啟超商取貨 |
+| `convenience_store_fee` | `DecimalField(max_digits=10, decimal_places=2)` | 超商運費 |
+| `free_shipping_threshold` | `DecimalField(max_digits=10, decimal_places=2)` | 免運門檻 |
 | `updated_at` | `DateTimeField` | 更新時間 |
 
----
+### 3.5 `seller_requests`
 
-### 7. `orders`
-用途：訂單主檔
+建議保留成獨立歷史表，不只存在 `users` 上。
 
-| 欄位 | 型別建議 | 說明 |
-|---|---|---|
-| `id` | `BigAutoField` | 主鍵 |
-| `buyer` | `ForeignKey(users)` | 下單會員 |
-| `status` | `CharField` | `confirmed` / `cancelled` / `refunded` |
-| `coupon` | `CharField(blank=True)` | 折扣碼 |
-| `buyer_note` | `TextField(blank=True)` | 買家備註 |
-| `subtotal_amount` | `DecimalField` | 小計 |
-| `shipping_amount` | `DecimalField` | 運費 |
-| `discount_amount` | `DecimalField` | 折扣 |
-| `total_amount` | `DecimalField` | 總計 |
-| `created_at` | `DateTimeField` | 訂單建立時間 |
-| `updated_at` | `DateTimeField` | 更新時間 |
-| `buyer_username_snapshot` | `CharField` | 買家帳號快照 |
-| `buyer_display_name_snapshot` | `CharField` | 買家顯示名稱快照 |
-| `buyer_email_snapshot` | `EmailField(blank=True)` | 買家 email 快照 |
-| `shipping_address_snapshot` | `JSONField` | 下單當下收件地址快照 |
-| `invoice_profile_snapshot` | `JSONField` | 下單當下發票資料快照 |
-
----
-
-### 8. `order_items`
-用途：訂單商品明細
-
-| 欄位 | 型別建議 | 說明 |
-|---|---|---|
-| `id` | `BigAutoField` | 主鍵 |
-| `order` | `ForeignKey(orders)` | 所屬訂單 |
-| `product` | `ForeignKey(products, null=True)` | 對應商品；允許商品已刪除後保留歷史 |
-| `variant` | `ForeignKey(product_variants, null=True)` | 對應變體；允許變體已刪除後保留歷史 |
-| `seller` | `ForeignKey(users, null=True)` | 賣家 |
-| `product_name_snapshot` | `CharField` | 商品名稱快照 |
-| `display_name_snapshot` | `CharField` | 顯示名稱快照 |
-| `slug_snapshot` | `CharField` | slug 快照 |
-| `variant_name_snapshot` | `CharField(blank=True)` | 變體名稱快照 |
-| `sku_snapshot` | `CharField(blank=True)` | SKU 快照 |
-| `unit_price` | `DecimalField` | 單價快照 |
-| `quantity` | `PositiveIntegerField` | 數量 |
-| `line_total` | `DecimalField` | 單列總額 |
-| `seller_username_snapshot` | `CharField` | 賣家帳號快照 |
-| `seller_display_name_snapshot` | `CharField` | 賣家顯示名稱快照 |
-| `seller_status` | `CharField` | `pending_shipment` / `shipped` / `completed` |
-| `shipping_note` | `TextField(blank=True)` | 出貨備註 |
-| `tracking_number` | `CharField(blank=True)` | 物流編號 |
-| `shipped_at` | `DateTimeField(null=True)` | 出貨時間 |
-| `completed_at` | `DateTimeField(null=True)` | 完成時間 |
-
----
-
-### 9. `order_service_requests`
-用途：訂單售後申請
-
-| 欄位 | 型別建議 | 說明 |
-|---|---|---|
-| `id` | `BigAutoField` | 主鍵 |
-| `order` | `OneToOneField(orders)` | 一張訂單目前一筆售後申請 |
-| `request_type` | `CharField` | `cancel` / `refund` |
-| `status` | `CharField` | `pending` / `approved` / `rejected` |
-| `reason` | `TextField` | 申請原因 |
-| `note` | `TextField(blank=True)` | 審核備註 |
-| `created_at` | `DateTimeField` | 申請時間 |
-| `reviewed_at` | `DateTimeField(null=True)` | 審核時間 |
-
----
-
-## 第二波：內容互動資料表
-
-這一波是評論、問答、論壇，建議在核心交易表穩定後再接。
-
-### 10. `reviews`
-用途：商品評論
-
-| 欄位 | 型別建議 | 說明 |
-|---|---|---|
-| `id` | `BigAutoField` | 主鍵 |
-| `product` | `ForeignKey(products)` | 所屬商品 |
-| `author` | `ForeignKey(users)` | 評論者 |
-| `rating` | `PositiveSmallIntegerField` | 星等 |
-| `title` | `CharField` | 評論標題 |
-| `body` | `TextField` | 評論內容 |
-| `created_at` | `DateTimeField` | 建立時間 |
-| `author_username_snapshot` | `CharField` | 作者帳號快照 |
-| `author_display_name_snapshot` | `CharField` | 作者名稱快照 |
-
----
-
-### 11. `product_questions`
-用途：商品問答主表
-
-| 欄位 | 型別建議 | 說明 |
-|---|---|---|
-| `id` | `BigAutoField` | 主鍵 |
-| `product` | `ForeignKey(products)` | 所屬商品 |
-| `author` | `ForeignKey(users)` | 發問者 |
-| `title` | `CharField` | 問題標題 |
-| `body` | `TextField` | 問題內容 |
-| `created_at` | `DateTimeField` | 建立時間 |
-| `author_username_snapshot` | `CharField` | 作者帳號快照 |
-| `author_display_name_snapshot` | `CharField` | 作者名稱快照 |
-
----
-
-### 12. `product_question_answers`
-用途：商品問答回覆
-
-| 欄位 | 型別建議 | 說明 |
-|---|---|---|
-| `id` | `BigAutoField` | 主鍵 |
-| `question` | `ForeignKey(product_questions)` | 所屬問題 |
-| `author` | `ForeignKey(users)` | 回答者 |
-| `body` | `TextField` | 回答內容 |
-| `created_at` | `DateTimeField` | 建立時間 |
-| `author_username_snapshot` | `CharField` | 作者帳號快照 |
-| `author_display_name_snapshot` | `CharField` | 作者名稱快照 |
-
----
-
-### 13. `community_posts`
-用途：社群文章
-
-| 欄位 | 型別建議 | 說明 |
-|---|---|---|
-| `id` | `BigAutoField` | 主鍵 |
-| `author` | `ForeignKey(users)` | 發文者 |
-| `topic` | `CharField` | 主題分類 |
-| `title` | `CharField` | 標題 |
-| `body` | `TextField` | 內文 |
-| `votes` | `IntegerField(default=0)` | 票數 / 按讚數 |
-| `tags_json` | `JSONField(default=list)` | 標籤 |
-| `created_at` | `DateTimeField` | 建立時間 |
-| `author_username_snapshot` | `CharField` | 作者帳號快照 |
-| `author_display_name_snapshot` | `CharField` | 作者名稱快照 |
-
----
-
-### 14. `community_replies`
-用途：社群文章回覆
-
-| 欄位 | 型別建議 | 說明 |
-|---|---|---|
-| `id` | `BigAutoField` | 主鍵 |
-| `post` | `ForeignKey(community_posts)` | 所屬文章 |
-| `author` | `ForeignKey(users)` | 回覆者 |
-| `body` | `TextField` | 回覆內容 |
-| `created_at` | `DateTimeField` | 建立時間 |
-| `author_username_snapshot` | `CharField` | 作者帳號快照 |
-| `author_display_name_snapshot` | `CharField` | 作者名稱快照 |
-
----
-
-## 第三波：可選資料表
-
-這些可以做，但不一定一開始就要拆。
-
-### 15. `carts`
-用途：會員購物車主表
-
-若未來不再只依賴 session，而要支援跨裝置同步購物車，建議建立此表。
-
-| 欄位 | 型別建議 | 說明 |
-|---|---|---|
-| `id` | `BigAutoField` | 主鍵 |
-| `user` | `OneToOneField(users)` | 所屬會員 |
-| `coupon` | `CharField(blank=True)` | 已套用折扣碼 |
-| `created_at` | `DateTimeField` | 建立時間 |
-| `updated_at` | `DateTimeField` | 更新時間 |
-
----
-
-### 16. `cart_items`
-用途：購物車商品明細
-
-| 欄位 | 型別建議 | 說明 |
-|---|---|---|
-| `id` | `BigAutoField` | 主鍵 |
-| `cart` | `ForeignKey(carts)` | 所屬購物車 |
-| `product` | `ForeignKey(products)` | 對應商品 |
-| `variant` | `ForeignKey(product_variants, null=True)` | 對應變體 |
-| `quantity` | `PositiveIntegerField` | 數量 |
-| `unit_price_snapshot` | `DecimalField` | 加入購物車當下價格快照 |
-| `product_name_snapshot` | `CharField` | 商品名稱快照 |
-| `variant_name_snapshot` | `CharField(blank=True)` | 變體名稱快照 |
-| `sku_snapshot` | `CharField(blank=True)` | SKU 快照 |
-| `created_at` | `DateTimeField` | 建立時間 |
-| `updated_at` | `DateTimeField` | 更新時間 |
-
----
-
-### 17. `user_favorites`
-用途：會員收藏商品
-
-| 欄位 | 型別建議 | 說明 |
-|---|---|---|
-| `id` | `BigAutoField` | 主鍵 |
-| `user` | `ForeignKey(users)` | 會員 |
-| `product` | `ForeignKey(products)` | 收藏商品 |
-| `created_at` | `DateTimeField` | 收藏時間 |
-
-建議加唯一限制：
-- `UniqueConstraint(fields=["user", "product"])`
-
----
-
-### 18. `recently_viewed_products`
-用途：會員最近瀏覽紀錄
-
-| 欄位 | 型別建議 | 說明 |
-|---|---|---|
-| `id` | `BigAutoField` | 主鍵 |
-| `user` | `ForeignKey(users)` | 會員 |
-| `product` | `ForeignKey(products)` | 瀏覽商品 |
-| `viewed_at` | `DateTimeField` | 瀏覽時間 |
-
-補充：
-- 若未登入也要記錄最近瀏覽，可維持 session-only，不一定入庫。
-
----
-
-### 19. `brands`
-用途：品牌主檔
-
-目前 `products.brand` 是字串。若要做品牌頁、品牌排序、品牌啟用狀態與 SEO，建議拆主表。
-
-| 欄位 | 型別建議 | 說明 |
-|---|---|---|
-| `id` | `BigAutoField` | 主鍵 |
-| `slug` | `SlugField(unique=True)` | 品牌網址代稱 |
-| `name` | `CharField(unique=True)` | 品牌名稱 |
-| `description` | `TextField(blank=True)` | 品牌說明 |
-| `logo_path` | `CharField(blank=True)` | 品牌 logo |
-| `is_active` | `BooleanField(default=True)` | 是否啟用 |
-| `sort_order` | `PositiveIntegerField(default=0)` | 排序 |
-| `created_at` | `DateTimeField` | 建立時間 |
-| `updated_at` | `DateTimeField` | 更新時間 |
-
----
-
-### 20. `categories`
-用途：商品分類主檔
-
-目前 `products.category` 是字串。若要做分類頁、階層分類、排序與 SEO，建議拆主表。
-
-| 欄位 | 型別建議 | 說明 |
-|---|---|---|
-| `id` | `BigAutoField` | 主鍵 |
-| `parent` | `ForeignKey("self", null=True, blank=True)` | 上層分類 |
-| `slug` | `SlugField(unique=True)` | 分類網址代稱 |
-| `name` | `CharField` | 分類名稱 |
-| `description` | `TextField(blank=True)` | 分類說明 |
-| `is_active` | `BooleanField(default=True)` | 是否啟用 |
-| `sort_order` | `PositiveIntegerField(default=0)` | 排序 |
-| `created_at` | `DateTimeField` | 建立時間 |
-| `updated_at` | `DateTimeField` | 更新時間 |
-
----
-
-### 21. `tags`
-用途：商品 / 社群標籤主檔
-
-| 欄位 | 型別建議 | 說明 |
-|---|---|---|
-| `id` | `BigAutoField` | 主鍵 |
-| `slug` | `SlugField(unique=True)` | 標籤網址代稱 |
-| `name` | `CharField(unique=True)` | 標籤名稱 |
-| `created_at` | `DateTimeField` | 建立時間 |
-
----
-
-### 22. `product_tag_relations`
-用途：商品與標籤關聯
-
-| 欄位 | 型別建議 | 說明 |
-|---|---|---|
-| `id` | `BigAutoField` | 主鍵 |
-| `product` | `ForeignKey(products)` | 商品 |
-| `tag` | `ForeignKey(tags)` | 標籤 |
-
-建議加唯一限制：
-- `UniqueConstraint(fields=["product", "tag"])`
-
----
-
-### 23. `community_post_votes`
-用途：論壇文章按讚 / 投票紀錄
-
-目前 `community_posts.votes` 只有聚合值。若要防止重複投票並保留紀錄，建議加此表。
-
-| 欄位 | 型別建議 | 說明 |
-|---|---|---|
-| `id` | `BigAutoField` | 主鍵 |
-| `post` | `ForeignKey(community_posts)` | 所屬文章 |
-| `user` | `ForeignKey(users)` | 投票會員 |
-| `value` | `SmallIntegerField` | 目前可先定義為 `1` |
-| `created_at` | `DateTimeField` | 建立時間 |
-
-建議加唯一限制：
-- `UniqueConstraint(fields=["post", "user"])`
-
----
-
-### 24. `shipment_events`
-用途：物流歷程事件
-
-若未來不是只顯示最終狀態，而要顯示「已出貨 / 已到站 / 已送達」等事件，建議拆此表。
-
-| 欄位 | 型別建議 | 說明 |
-|---|---|---|
-| `id` | `BigAutoField` | 主鍵 |
-| `order_item` | `ForeignKey(order_items)` | 對應訂單明細 |
-| `event_type` | `CharField` | 例如 `created` / `shipped` / `in_transit` / `delivered` |
-| `message` | `TextField(blank=True)` | 事件說明 |
-| `tracking_number` | `CharField(blank=True)` | 當下物流單號 |
-| `created_at` | `DateTimeField` | 事件時間 |
-| `created_by` | `ForeignKey(users, null=True)` | 建立事件的人員 |
-
----
-
-### 25. `admin_audit_logs`
-用途：後台管理操作紀錄
-
-目前已有管理者審核賣家、審核商品、審核售後、停權會員等功能，正式上線時應保留操作歷程。
-
-| 欄位 | 型別建議 | 說明 |
-|---|---|---|
-| `id` | `BigAutoField` | 主鍵 |
-| `actor` | `ForeignKey(users)` | 操作者 |
-| `action_type` | `CharField` | 例如 `approve_product` / `review_seller_request` / `suspend_user` |
-| `target_type` | `CharField` | 例如 `product` / `user` / `order_service_request` |
-| `target_id` | `CharField` | 目標主鍵，先保留字串彈性 |
-| `note` | `TextField(blank=True)` | 備註 |
-| `payload_json` | `JSONField(default=dict)` | 變更前後或額外上下文 |
-| `created_at` | `DateTimeField` | 操作時間 |
-
----
-
-### 26. `notifications`
-用途：通知中心
-
-若未來要支援站內通知，例如賣家審核結果、商品審核結果、訂單售後結果，可建立此表。
-
-| 欄位 | 型別建議 | 說明 |
-|---|---|---|
-| `id` | `BigAutoField` | 主鍵 |
-| `user` | `ForeignKey(users)` | 通知接收者 |
-| `title` | `CharField` | 通知標題 |
-| `message` | `TextField` | 通知內容 |
-| `notification_type` | `CharField` | 例如 `seller_request` / `order` / `review` |
-| `target_url` | `CharField(blank=True)` | 點擊後前往頁面 |
-| `is_read` | `BooleanField(default=False)` | 是否已讀 |
-| `created_at` | `DateTimeField` | 建立時間 |
-| `read_at` | `DateTimeField(null=True)` | 已讀時間 |
-
----
-
-### 27. `media_assets`
-用途：媒體資產主檔
-
-目前 `product_images` 直接存 path 即可。若未來要支援共用圖片庫、圖檔類型管理或多模組共用圖片，可再加此表。
-
-| 欄位 | 型別建議 | 說明 |
-|---|---|---|
-| `id` | `BigAutoField` | 主鍵 |
-| `uploaded_by` | `ForeignKey(users, null=True)` | 上傳者 |
-| `file_path` | `CharField` | 檔案路徑 |
-| `file_name` | `CharField` | 原始檔名 |
-| `mime_type` | `CharField(blank=True)` | 檔案 MIME 類型 |
-| `file_size` | `BigIntegerField(default=0)` | 檔案大小 |
-| `created_at` | `DateTimeField` | 建立時間 |
-
----
-
-### 28. `seller_requests`
-用途：賣家申請審核紀錄
-
-目前系統是把狀態直接寫在 `users`。  
-若要保留完整審核歷史，建議另外拆表。
-
-| 欄位 | 型別建議 | 說明 |
-|---|---|---|
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
 | `id` | `BigAutoField` | 主鍵 |
 | `user` | `ForeignKey(users)` | 申請者 |
 | `status` | `CharField` | `pending` / `approved` / `rejected` |
 | `note` | `TextField(blank=True)` | 審核備註 |
 | `created_at` | `DateTimeField` | 申請時間 |
 | `reviewed_at` | `DateTimeField(null=True)` | 審核時間 |
-| `reviewed_by` | `ForeignKey(users, null=True)` | 管理者 |
+| `reviewed_by` | `ForeignKey(users, null=True, related_name="+")` | 審核人 |
 
----
+## 4. 商品與目錄
 
-### 29. `competitor_sites`
-競品站點主檔，記錄比價資料來自哪一個外部平台。
+### 4.1 `brands`
 
-| 欄位 | 建議型別 | 說明 |
-|---|---|---|
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
 | `id` | `BigAutoField` | 主鍵 |
-| `code` | `SlugField(unique=True)` | 站點代碼，例如 `momo`、`pchome` |
+| `slug` | `SlugField(unique=True)` | 品牌 slug |
+| `name` | `CharField(unique=True)` | 品牌名稱 |
+| `description` | `TextField(blank=True)` | 品牌說明 |
+| `logo_path` | `CharField(blank=True)` | logo 路徑 |
+| `is_active` | `BooleanField(default=True)` | 是否啟用 |
+| `sort_order` | `PositiveIntegerField(default=0)` | 排序 |
+| `created_at` | `DateTimeField` | 建立時間 |
+| `updated_at` | `DateTimeField` | 更新時間 |
+
+### 4.2 `categories`
+
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
+| `id` | `BigAutoField` | 主鍵 |
+| `parent` | `ForeignKey("self", null=True, blank=True)` | 父分類 |
+| `slug` | `SlugField(unique=True)` | 分類 slug |
+| `name` | `CharField` | 分類名稱 |
+| `description` | `TextField(blank=True)` | 說明 |
+| `is_active` | `BooleanField(default=True)` | 是否啟用 |
+| `sort_order` | `PositiveIntegerField(default=0)` | 排序 |
+| `created_at` | `DateTimeField` | 建立時間 |
+| `updated_at` | `DateTimeField` | 更新時間 |
+
+### 4.3 `products`
+
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
+| `id` | `BigAutoField` | 主鍵 |
+| `owner` | `ForeignKey(users)` | 商品擁有者 / 賣家 |
+| `slug` | `SlugField(unique=True)` | 商品 slug |
+| `name` | `CharField` | 商品名稱 |
+| `brand` | `ForeignKey(brands, null=True, blank=True)` | 品牌 |
+| `category` | `ForeignKey(categories, null=True, blank=True)` | 分類 |
+| `price` | `DecimalField(max_digits=10, decimal_places=2)` | 主售價 |
+| `compare_at_price` | `DecimalField(max_digits=10, decimal_places=2, null=True)` | 原價 / 劃線價 |
+| `stock` | `IntegerField(null=True)` | 單一 SKU 商品可直接使用 |
+| `specs_json` | `JSONField(default=dict)` | 規格摘要 |
+| `status` | `CharField` | `draft` / `pending` / `active` / `rejected` / `archived` |
+| `review_note` | `TextField(blank=True)` | 審核備註 |
+| `reviewed_at` | `DateTimeField(null=True)` | 審核時間 |
+| `owner_username_snapshot` | `CharField` | 賣家 username snapshot |
+| `owner_display_name_snapshot` | `CharField` | 賣家 display_name snapshot |
+| `created_at` | `DateTimeField` | 建立時間 |
+| `updated_at` | `DateTimeField` | 更新時間 |
+
+### 4.4 `product_images`
+
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
+| `id` | `BigAutoField` | 主鍵 |
+| `product` | `ForeignKey(products)` | 所屬商品 |
+| `image_path` | `CharField` | 圖片路徑 |
+| `sort_order` | `PositiveIntegerField(default=0)` | 排序 |
+| `created_at` | `DateTimeField` | 建立時間 |
+
+### 4.5 `product_variants`
+
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
+| `id` | `BigAutoField` | 主鍵 |
+| `product` | `ForeignKey(products)` | 所屬商品 |
+| `external_variant_key` | `CharField(blank=True)` | 現有 JSON `id` 仍可保留作外部 key |
+| `name` | `CharField` | variant 名稱 |
+| `sku` | `CharField(blank=True)` | SKU |
+| `price` | `DecimalField(max_digits=10, decimal_places=2)` | variant 售價 |
+| `compare_at_price` | `DecimalField(max_digits=10, decimal_places=2, null=True)` | variant 原價 |
+| `stock` | `IntegerField` | variant 庫存 |
+| `attributes_json` | `JSONField(default=dict)` | size / color 等屬性 |
+| `image_index` | `PositiveIntegerField(null=True)` | 對應圖片 index |
+| `created_at` | `DateTimeField` | 建立時間 |
+| `updated_at` | `DateTimeField` | 更新時間 |
+
+### 4.6 `tags` / `product_tag_relations`
+
+`products.tags` 與 `posts.tags` 都可逐步正規化。
+
+`tags`
+
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
+| `id` | `BigAutoField` | 主鍵 |
+| `slug` | `SlugField(unique=True)` | tag slug |
+| `name` | `CharField(unique=True)` | tag 名稱 |
+| `created_at` | `DateTimeField` | 建立時間 |
+
+`product_tag_relations`
+
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
+| `id` | `BigAutoField` | 主鍵 |
+| `product` | `ForeignKey(products)` | 商品 |
+| `tag` | `ForeignKey(tags)` | tag |
+
+建議 constraint：
+
+- `UniqueConstraint(fields=["product", "tag"])`
+
+## 5. 購物車與個人化
+
+這一區必須先決策是否入 DB。
+
+### 選項 A：保留 session / Redis
+
+適合：
+
+- prototype
+- 不要求跨裝置同步
+
+不需要建立以下資料表。
+
+### 選項 B：改成資料庫持久化
+
+適合：
+
+- 跨裝置購物車同步
+- 收藏 / 最近瀏覽持久化
+- 降低 signed-cookie session 負擔
+
+### 5.1 `carts`
+
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
+| `id` | `BigAutoField` | 主鍵 |
+| `user` | `OneToOneField(users)` | 所屬會員 |
+| `coupon_code` | `CharField(blank=True)` | 折扣碼 |
+| `created_at` | `DateTimeField` | 建立時間 |
+| `updated_at` | `DateTimeField` | 更新時間 |
+
+### 5.2 `cart_items`
+
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
+| `id` | `BigAutoField` | 主鍵 |
+| `cart` | `ForeignKey(carts)` | 所屬購物車 |
+| `product` | `ForeignKey(products)` | 商品 |
+| `variant` | `ForeignKey(product_variants, null=True)` | variant |
+| `quantity` | `PositiveIntegerField` | 數量 |
+| `unit_price_snapshot` | `DecimalField(max_digits=10, decimal_places=2)` | 加入當下價格 |
+| `product_name_snapshot` | `CharField` | 商品名稱 snapshot |
+| `variant_name_snapshot` | `CharField(blank=True)` | variant 名稱 snapshot |
+| `sku_snapshot` | `CharField(blank=True)` | SKU snapshot |
+| `created_at` | `DateTimeField` | 建立時間 |
+| `updated_at` | `DateTimeField` | 更新時間 |
+
+### 5.3 `user_favorites`
+
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
+| `id` | `BigAutoField` | 主鍵 |
+| `user` | `ForeignKey(users)` | 所屬會員 |
+| `product` | `ForeignKey(products)` | 收藏商品 |
+| `created_at` | `DateTimeField` | 建立時間 |
+
+建議 constraint：
+
+- `UniqueConstraint(fields=["user", "product"])`
+
+### 5.4 `compare_items`
+
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
+| `id` | `BigAutoField` | 主鍵 |
+| `user` | `ForeignKey(users)` | 所屬會員 |
+| `product` | `ForeignKey(products)` | 比較商品 |
+| `sort_order` | `PositiveIntegerField(default=0)` | 排序 |
+| `created_at` | `DateTimeField` | 建立時間 |
+
+### 5.5 `recent_views`
+
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
+| `id` | `BigAutoField` | 主鍵 |
+| `user` | `ForeignKey(users)` | 所屬會員 |
+| `product` | `ForeignKey(products)` | 最近瀏覽商品 |
+| `viewed_at` | `DateTimeField` | 瀏覽時間 |
+
+## 6. 訂單、出貨、售後
+
+### 6.1 `orders`
+
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
+| `id` | `BigAutoField` | 主鍵 |
+| `buyer` | `ForeignKey(users)` | 買家 |
+| `status` | `CharField` | `confirmed` / `cancelled` / `refunded` |
+| `shipping_method` | `CharField` | `home_delivery` / `convenience_store` |
+| `payment_method` | `CharField` | 先存通用值，之後可由支付回傳更新 |
+| `payment_status` | `CharField` | `pending` / `paid` / `failed` / `refunded` |
+| `payment_trade_no` | `CharField(blank=True)` | 藍新交易序號 |
+| `payment_completed_at` | `DateTimeField(null=True)` | 付款完成時間 |
+| `pickup_store_brand` | `CharField(blank=True)` | 超商品牌 |
+| `pickup_store_code` | `CharField(blank=True)` | 超商店號 |
+| `pickup_store_name` | `CharField(blank=True)` | 超商門市 |
+| `pickup_store_address` | `CharField(blank=True)` | 超商門市地址 |
+| `buyer_note` | `TextField(blank=True)` | 買家備註 |
+| `coupon_code` | `CharField(blank=True)` | 折扣碼 |
+| `subtotal_amount` | `DecimalField(max_digits=10, decimal_places=2)` | 商品小計 |
+| `shipping_amount` | `DecimalField(max_digits=10, decimal_places=2)` | 運費 |
+| `discount_amount` | `DecimalField(max_digits=10, decimal_places=2)` | 折扣 |
+| `total_amount` | `DecimalField(max_digits=10, decimal_places=2)` | 總額 |
+| `buyer_username_snapshot` | `CharField` | 買家 username snapshot |
+| `buyer_display_name_snapshot` | `CharField` | 買家 display name snapshot |
+| `buyer_email_snapshot` | `EmailField(blank=True)` | 買家 email snapshot |
+| `shipping_address_snapshot` | `JSONField(default=dict)` | 地址 snapshot |
+| `invoice_profile_snapshot` | `JSONField(default=dict)` | 發票 snapshot |
+| `created_at` | `DateTimeField` | 建立時間 |
+| `updated_at` | `DateTimeField` | 更新時間 |
+
+### 6.2 `order_items`
+
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
+| `id` | `BigAutoField` | 主鍵 |
+| `order` | `ForeignKey(orders)` | 所屬訂單 |
+| `product` | `ForeignKey(products, null=True)` | 商品 |
+| `variant` | `ForeignKey(product_variants, null=True)` | variant |
+| `seller` | `ForeignKey(users, null=True)` | 賣家 |
+| `product_name_snapshot` | `CharField` | 商品名稱 snapshot |
+| `display_name_snapshot` | `CharField` | 顯示名稱 snapshot |
+| `slug_snapshot` | `CharField` | slug snapshot |
+| `variant_name_snapshot` | `CharField(blank=True)` | variant 名稱 snapshot |
+| `sku_snapshot` | `CharField(blank=True)` | SKU snapshot |
+| `unit_price` | `DecimalField(max_digits=10, decimal_places=2)` | 單價 snapshot |
+| `quantity` | `PositiveIntegerField` | 數量 |
+| `line_total` | `DecimalField(max_digits=10, decimal_places=2)` | 小計 |
+| `seller_username_snapshot` | `CharField` | 賣家 username snapshot |
+| `seller_display_name_snapshot` | `CharField` | 賣家 display name snapshot |
+| `seller_status` | `CharField` | `pending_shipment` / `shipped` / `completed` |
+| `shipping_note` | `TextField(blank=True)` | 出貨備註 |
+| `tracking_number` | `CharField(blank=True)` | 物流單號 |
+| `shipped_at` | `DateTimeField(null=True)` | 出貨時間 |
+| `completed_at` | `DateTimeField(null=True)` | 完成時間 |
+
+### 6.3 `order_service_requests`
+
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
+| `id` | `BigAutoField` | 主鍵 |
+| `order` | `ForeignKey(orders)` | 所屬訂單 |
+| `request_type` | `CharField` | `cancel` / `refund` |
+| `status` | `CharField` | `pending` / `approved` / `rejected` |
+| `reason` | `TextField` | 原因 |
+| `note` | `TextField(blank=True)` | 審核備註 |
+| `created_at` | `DateTimeField` | 申請時間 |
+| `reviewed_at` | `DateTimeField(null=True)` | 審核時間 |
+| `reviewed_by` | `ForeignKey(users, null=True, related_name="+")` | 審核人 |
+
+### 6.4 `shipment_events`
+
+如果要保留出貨歷史，不應只靠 `order_items` 單一狀態欄位。
+
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
+| `id` | `BigAutoField` | 主鍵 |
+| `order_item` | `ForeignKey(order_items)` | 所屬訂單明細 |
+| `event_type` | `CharField` | `created` / `shipped` / `in_transit` / `delivered` / `completed` |
+| `message` | `TextField(blank=True)` | 說明 |
+| `tracking_number` | `CharField(blank=True)` | 當時物流單號 |
+| `created_at` | `DateTimeField` | 事件時間 |
+| `created_by` | `ForeignKey(users, null=True, related_name="+")` | 建立人 |
+
+## 7. 支付與金流 callback
+
+這一區必建，因為即使正式 payment status 仍留在 `orders`，也需要保留支付事件原始資料。
+
+### 7.1 `payment_transactions`
+
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
+| `id` | `BigAutoField` | 主鍵 |
+| `order` | `ForeignKey(orders)` | 所屬訂單 |
+| `buyer` | `ForeignKey(users)` | 買家 |
+| `provider` | `CharField` | 例如 `newebpay` |
+| `mode` | `CharField` | `sandbox` / `production` |
+| `merchant_order_no` | `CharField(unique=True)` | 商店訂單編號 |
+| `trade_no` | `CharField(blank=True)` | 藍新交易序號 |
+| `payment_type` | `CharField(blank=True)` | `WEBATM` / `VACC` / `CVS` 等 |
+| `status` | `CharField` | `pending` / `paid` / `failed` / `refunded` |
+| `amount` | `DecimalField(max_digits=10, decimal_places=2)` | 交易金額 |
+| `currency` | `CharField(default="TWD")` | 幣別 |
+| `gateway_url` | `URLField(blank=True)` | gateway URL |
+| `notify_url` | `URLField(blank=True)` | callback URL |
+| `return_url` | `URLField(blank=True)` | return URL |
+| `client_back_url` | `URLField(blank=True)` | client back URL |
+| `prepared_payload_json` | `JSONField(default=dict)` | 送出前 payload |
+| `query_response_json` | `JSONField(default=dict)` | 最後一次 query 結果 |
+| `note` | `TextField(blank=True)` | 備註 |
+| `created_at` | `DateTimeField` | 建立時間 |
+| `updated_at` | `DateTimeField` | 更新時間 |
+| `paid_at` | `DateTimeField(null=True)` | 付款時間 |
+
+### 7.2 `payment_callback_logs`
+
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
+| `id` | `BigAutoField` | 主鍵 |
+| `payment_transaction` | `ForeignKey(payment_transactions)` | 所屬支付交易 |
+| `source` | `CharField` | `callback` / `return` / `query` |
+| `http_status` | `PositiveIntegerField(null=True)` | 若為 query 可記錄 HTTP status |
+| `result_status` | `CharField(blank=True)` | 藍新 payload 狀態 |
+| `result_message` | `TextField(blank=True)` | 訊息 |
+| `payload_json` | `JSONField(default=dict)` | 原始 payload |
+| `created_at` | `DateTimeField` | 建立時間 |
+
+用途：
+
+- 保留原始證據
+- 可區分資料是來自 callback、return、還是 query
+- 後續 debug 不必依賴單一摘要欄位
+
+## 8. 評論、問答、社群與匿名
+
+### 8.1 `product_reviews`
+
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
+| `id` | `BigAutoField` | 主鍵 |
+| `product` | `ForeignKey(products)` | 商品 |
+| `author` | `ForeignKey(users)` | 作者 |
+| `author_display_name_snapshot` | `CharField` | 作者顯示名稱 snapshot |
+| `rating` | `PositiveSmallIntegerField` | 星等 |
+| `title` | `CharField` | 標題 |
+| `body` | `TextField` | 內容 |
+| `created_at` | `DateTimeField` | 建立時間 |
+
+公開 API：
+
+- 使用 `author_display_name_snapshot` 經匿名函式處理後輸出
+
+### 8.2 `product_questions`
+
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
+| `id` | `BigAutoField` | 主鍵 |
+| `product` | `ForeignKey(products)` | 商品 |
+| `author` | `ForeignKey(users)` | 提問者 |
+| `author_display_name_snapshot` | `CharField` | 顯示名稱 snapshot |
+| `title` | `CharField` | 標題 |
+| `body` | `TextField` | 內容 |
+| `created_at` | `DateTimeField` | 建立時間 |
+
+### 8.3 `product_question_answers`
+
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
+| `id` | `BigAutoField` | 主鍵 |
+| `question` | `ForeignKey(product_questions)` | 所屬問題 |
+| `author` | `ForeignKey(users)` | 回答者 |
+| `author_display_name_snapshot` | `CharField` | 顯示名稱 snapshot |
+| `body` | `TextField` | 內容 |
+| `created_at` | `DateTimeField` | 建立時間 |
+
+### 8.4 `community_posts`
+
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
+| `id` | `BigAutoField` | 主鍵 |
+| `author` | `ForeignKey(users)` | 作者 |
+| `author_display_name_snapshot` | `CharField` | 顯示名稱 snapshot |
+| `topic` | `CharField` | topic |
+| `title` | `CharField` | 標題 |
+| `body_html` | `TextField` | 內容 HTML |
+| `votes_count` | `IntegerField(default=0)` | 快取票數 |
+| `created_at` | `DateTimeField` | 建立時間 |
+| `updated_at` | `DateTimeField(null=True)` | 更新時間 |
+
+### 8.5 `community_replies`
+
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
+| `id` | `BigAutoField` | 主鍵 |
+| `post` | `ForeignKey(community_posts)` | 所屬貼文 |
+| `author` | `ForeignKey(users)` | 作者 |
+| `author_display_name_snapshot` | `CharField` | 顯示名稱 snapshot |
+| `body` | `TextField` | 內容 |
+| `created_at` | `DateTimeField` | 建立時間 |
+
+### 8.6 `community_votes`
+
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
+| `id` | `BigAutoField` | 主鍵 |
+| `post` | `ForeignKey(community_posts)` | 所屬貼文 |
+| `user` | `ForeignKey(users)` | 投票者 |
+| `value` | `SmallIntegerField` | 目前專案用 upvote，可先固定 `1` |
+| `created_at` | `DateTimeField` | 建立時間 |
+
+建議 constraint：
+
+- `UniqueConstraint(fields=["post", "user"])`
+
+## 9. banner、媒體、管理與審核
+
+### 9.1 `banners`
+
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
+| `id` | `BigAutoField` | 主鍵 |
+| `title` | `CharField(blank=True)` | 標題 |
+| `copy_text` | `TextField(blank=True)` | 文案 |
+| `image_path` | `CharField` | 圖片 |
+| `link_url` | `URLField(blank=True)` | 連結 |
+| `position` | `CharField(blank=True)` | 版位 |
+| `sort_order` | `PositiveIntegerField(default=0)` | 排序 |
+| `status` | `CharField` | `pending` / `approved` / `rejected` / `active` / `inactive` |
+| `rejection_reason` | `TextField(blank=True)` | 拒絕原因 |
+| `applicant_user` | `ForeignKey(users, null=True, related_name="+")` | 申請者 |
+| `reviewed_by` | `ForeignKey(users, null=True, related_name="+")` | 審核人 |
+| `starts_at` | `DateTimeField(null=True)` | 顯示開始 |
+| `ends_at` | `DateTimeField(null=True)` | 顯示結束 |
+| `created_at` | `DateTimeField` | 建立時間 |
+| `updated_at` | `DateTimeField` | 更新時間 |
+
+### 9.2 `media_assets`
+
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
+| `id` | `BigAutoField` | 主鍵 |
+| `uploaded_by` | `ForeignKey(users, null=True)` | 上傳者 |
+| `file_path` | `CharField` | 路徑 |
+| `file_name` | `CharField` | 原始檔名 |
+| `mime_type` | `CharField(blank=True)` | MIME type |
+| `file_size` | `BigIntegerField(default=0)` | 檔案大小 |
+| `created_at` | `DateTimeField` | 建立時間 |
+
+### 9.3 `admin_audit_logs`
+
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
+| `id` | `BigAutoField` | 主鍵 |
+| `actor` | `ForeignKey(users)` | 操作者 |
+| `action_type` | `CharField` | 例如 `approve_product`, `suspend_user` |
+| `target_type` | `CharField` | 例如 `product`, `user`, `order` |
+| `target_id` | `CharField` | 目標識別值 |
+| `note` | `TextField(blank=True)` | 備註 |
+| `payload_json` | `JSONField(default=dict)` | 變更前後資料 |
+| `created_at` | `DateTimeField` | 建立時間 |
+
+## 10. 比價與推薦
+
+### 10.1 `competitor_sites`
+
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
+| `id` | `BigAutoField` | 主鍵 |
+| `code` | `SlugField(unique=True)` | 來源代碼 |
 | `name` | `CharField` | 站點名稱 |
-| `base_url` | `URLField` | 站點首頁或主網域 |
+| `base_url` | `URLField(blank=True)` | 基礎網址 |
 | `source_type` | `CharField` | `mock` / `api` / `crawler` |
 | `is_active` | `BooleanField(default=True)` | 是否啟用 |
 | `notes` | `TextField(blank=True)` | 備註 |
 | `created_at` | `DateTimeField` | 建立時間 |
 | `updated_at` | `DateTimeField` | 更新時間 |
 
----
+### 10.2 `competitor_products`
 
-### 30. `competitor_products`
-競品商品對照表，用來把本站商品與外站商品建立人工或半自動的配對關係。
-
-| 欄位 | 建議型別 | 說明 |
-|---|---|---|
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
 | `id` | `BigAutoField` | 主鍵 |
 | `site` | `ForeignKey(competitor_sites)` | 來源站點 |
-| `product` | `ForeignKey(products)` | 本站商品 |
-| `variant` | `ForeignKey(product_variants, null=True)` | 若比價細到變體，可對應本站變體 |
-| `external_product_key` | `CharField(blank=True)` | 外站商品 ID / SKU / 識別碼 |
-| `external_title` | `CharField` | 外站商品標題 |
-| `external_url` | `URLField` | 外站商品頁連結 |
+| `product` | `ForeignKey(products)` | 對應本站商品 |
+| `variant` | `ForeignKey(product_variants, null=True)` | 對應 variant |
+| `external_product_key` | `CharField(blank=True)` | 外部商品 key |
+| `external_title` | `CharField` | 外部標題 |
+| `external_url` | `URLField` | 外部網址 |
+| `latest_price` | `DecimalField(null=True)` | 最新抓到的價格 |
+| `latest_currency` | `CharField(default="TWD")` | 最新價格的幣別 |
+| `availability_status` | `CharField(blank=True)` | `in_stock` / `out_of_stock` / `unknown` |
 | `matching_status` | `CharField` | `matched` / `possible` / `unmatched` / `archived` |
-| `last_checked_at` | `DateTimeField(null=True)` | 最近一次抓價時間 |
+| `last_checked_at` | `DateTimeField(null=True)` | 最後檢查時間 |
+| `latest_payload_json` | `JSONField(default=dict)` | 最近一次抓取的原始資料 |
 | `created_at` | `DateTimeField` | 建立時間 |
 | `updated_at` | `DateTimeField` | 更新時間 |
 
----
+### 10.3 `product_recommendations`
 
-### 31. `price_snapshots`
-價格快照表，保存每次抓到的競品價格，用於比價顯示與後續價格歷史圖。
-
-| 欄位 | 建議型別 | 說明 |
-|---|---|---|
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
 | `id` | `BigAutoField` | 主鍵 |
-| `competitor_product` | `ForeignKey(competitor_products)` | 對應外站商品 |
-| `captured_price` | `DecimalField` | 抓到的價格 |
-| `currency` | `CharField(default='TWD')` | 幣別 |
-| `captured_at` | `DateTimeField` | 抓價時間 |
-| `availability_status` | `CharField(blank=True)` | `in_stock` / `out_of_stock` / `unknown` |
-| `payload_json` | `JSONField(default=dict)` | 保留原始抓取回應或額外欄位 |
-| `created_at` | `DateTimeField` | 建立時間 |
-
----
-
-### 32. `product_recommendations`
-用途：手動推薦關聯
-
-如果未來仍保留 `recommendations.json` 的概念，可改成表。
-
-| 欄位 | 型別建議 | 說明 |
-|---|---|---|
-| `id` | `BigAutoField` | 主鍵 |
-| `source_product` | `ForeignKey(products)` | 來源商品 |
-| `target_product` | `ForeignKey(products)` | 被推薦商品 |
+| `source_product` | `ForeignKey(products, related_name="+")` | 來源商品 |
+| `target_product` | `ForeignKey(products, related_name="+")` | 推薦商品 |
 | `relation_type` | `CharField` | `similar` / `also_bought` / `manual` |
-| `sort_order` | `PositiveIntegerField` | 排序 |
+| `sort_order` | `PositiveIntegerField(default=0)` | 排序 |
 
----
+## 11. 不建議遺漏的欄位與規則
 
-## 欄位型別的實務建議
+### 11.1 訂單 snapshot 不能省
 
-### 建議用 `JSONField` 的欄位
-- `products.specs`
-- `product_variants.attributes_json`
-- `orders.shipping_address_snapshot`
-- `orders.invoice_profile_snapshot`
-- `community_posts.tags_json`
-- `admin_audit_logs.payload_json`
-- `price_snapshots.payload_json`
+至少要留：
 
-### 建議保留 snapshot 的欄位
-- 訂單中的買家名稱 / email
-- 訂單明細中的商品名稱 / SKU / 單價
-- 訂單明細中的賣家名稱
-- 評論 / 問答 / 論壇中的作者名稱
+- `buyer_username_snapshot`
+- `buyer_display_name_snapshot`
+- `buyer_email_snapshot`
+- `shipping_address_snapshot`
+- `invoice_profile_snapshot`
+- `product_name_snapshot`
+- `variant_name_snapshot`
+- `sku_snapshot`
+- `unit_price`
+- `seller_display_name_snapshot`
 
-原因：
-- 使用者之後改名，不應影響歷史資料顯示
-- 商品之後改名或改價，不應影響既有訂單
+### 11.2 內容資料不能只存匿名後名稱
 
----
+不要只存：
 
-## 特價商品顯示規則
+- `A**`
+- `ab***c`
 
-### 商品主表層級
-- `products.price`
-  - 目前售價
-- `products.compare_at_price`
-  - 原價 / 劃線價
+應存：
 
-判斷方式：
-- 若 `compare_at_price` 有值，且 `compare_at_price > price`
-  - 代表此商品目前為特價商品
+- `author_user_id`
+- `author_display_name_snapshot`
 
-前端常見顯示：
-- 現價：`price`
-- 原價：`compare_at_price`（刪除線）
-- 折扣額：`compare_at_price - price`
-- 折扣百分比：依前端即時計算
+匿名輸出留在 service 層。
 
-### 商品變體層級
-- `product_variants.price`
-  - 該變體目前售價
-- `product_variants.compare_at_price`
-  - 該變體原價 / 劃線價
+### 11.3 支付 callback / query 必須留原始 log
 
-適用情境：
-- 不同尺寸價格不同
-- 不同顏色價格不同
-- 只有部分變體在特價
+正式整合最怕日後查不到：
 
-判斷方式：
-- 若 `variant.compare_at_price > variant.price`
-  - 該變體為特價
+- callback 有沒有進來
+- 回來時原始 payload 是什麼
+- 哪次資料是 return，哪次是 callback，哪次是 query
 
-### 前端建議顯示邏輯
+所以 `payment_callback_logs` 不應省略。
 
-#### 沒有選變體時
-- 優先顯示商品主表的：
-  - `products.price`
-  - `products.compare_at_price`
+### 11.4 session 遷移要明確
 
-#### 已選變體時
-- 改顯示選中變體的：
-  - `product_variants.price`
-  - `product_variants.compare_at_price`
+如果決定讓 cart / favorite / compare / recent view 落 DB，就要同步調整：
 
-這樣可避免：
-- 主商品顯示有特價，但實際被選中的變體沒有特價
-- 或反過來，主商品沒有特價，但某個變體其實有折扣
+- login 時 guest bucket merge
+- logout 是否清空個人化資料
+- 跨裝置同步規則
 
-### 後續可再擴充的欄位
+## 12. migration 建議順序
 
-若未來要做限時活動價，可再增加：
+### Wave 1：最小可交易核心
 
-- `sale_starts_at`
-- `sale_ends_at`
-
-可加在：
-- `products`
-- 或 `product_variants`
-
-第一版若只需要正常顯示「原價 / 特價」，目前的：
-- `price`
-- `compare_at_price`
-
-就已足夠。
-
----
-
-## 建議 migration 波段
-
-### Wave 1
 - `users`
-- `addresses`
-- `invoice_profiles`
+- `user_addresses`
+- `user_invoice_profiles`
+- `user_shipping_rules`
+- `brands`
+- `categories`
 - `products`
 - `product_images`
 - `product_variants`
 - `orders`
 - `order_items`
 - `order_service_requests`
+- `payment_transactions`
+- `payment_callback_logs`
+
+### Wave 2：體驗完整化
+
 - `carts`
 - `cart_items`
 - `user_favorites`
-- `recently_viewed_products`
+- `compare_items`
+- `recent_views`
+- `seller_requests`
+- `banners`
+- `media_assets`
+- `admin_audit_logs`
 
-### Wave 2
-- `brands`
-- `categories`
-- `tags`
-- `product_tag_relations`
-- `reviews`
+### Wave 3：內容與擴充
+
+- `product_reviews`
 - `product_questions`
 - `product_question_answers`
-
-### Wave 3
 - `community_posts`
 - `community_replies`
-- `community_post_votes`
+- `community_votes`
 - `competitor_sites`
 - `competitor_products`
-- `price_snapshots`
-- `shipment_events`
-- `admin_audit_logs`
-- `notifications`
-- `media_assets`
-- `seller_requests`
 - `product_recommendations`
+- `shipment_events`
 
----
+## 13. 目前功能盤點後的資料庫提醒
 
-## 最後結論
+### 13.1 目前已可支撐資料表設計的流程
 
-如果現在要正式開始做 ORM，**最合理的起手式不是一次把所有 JSON 都搬完**，而是：
+- 註冊 / 登入 / 賣家申請
+- 商品建立 / 編輯 / 審核
+- 購物車 / checkout / 建立訂單
+- 賣家出貨 / 買家完成訂單
+- 評論 / 問答 / 社群
+- staff 用戶 / 商品 / 內容 / banner 管理
 
-1. 先做核心交易表  
-   `users / products / product_variants / orders / order_items`
-2. 再補會員周邊  
-   `addresses / invoice_profiles / seller_requests`
-3. 最後再搬內容互動  
-   `reviews / questions / posts`
+### 13.2 目前仍要保留彈性的區塊
 
-這樣 migration 風險最低，也最符合你現在專案的成熟度。
+- NewebPay callback / query 整合尚未完全定案
+- 物流目前只保留 checkout store map / 超商選店相關資料
+- cart / favorites / compare / recent views 是否 DB 化尚未拍板
 
----
+## 14. 建表前的最後決策清單
 
-## 藍新支付 / 藍新物流測試架構補充表
+正式開始寫 ORM / migration 前，建議先確認：
 
-這一組資料表對應目前先做的 **藍新支付 mock** 與 **藍新物流 mock**。
-目的不是直接上正式金流，而是先把：
-- 訂單對應的支付交易資料
-- callback / webhook 紀錄
-- 物流托運單資料
-- 物流狀態回傳紀錄
+1. cart / favorites / compare / recent views 是否入 DB
+2. `seller_request_status` 是保留在 `users`，還是完全以 `seller_requests` 為準
+3. `brand` / `category` 是否從一開始就正規化成 FK
+4. 訂單 `payment_method` 是否保留通用值加細節值，或只保留 gateway 回傳值
+5. 評論 / 問答 / 社群對外是否一律匿名
+6. payment / callback log 是否採 JSONField 長期保留
 
-先用 ORM 規格定義清楚，之後可把目前 `JSON` mock log 平滑換成正式資料表。
+## 15. 結論
 
-### 33. `payment_transactions`
-保存每一次藍新支付交易建立結果。
+以目前專案狀態來看，開始正式建資料庫時，最重要的不是先把 `models.py` 填滿，而是先把以下三件事固定：
 
-| 欄位 | 建議型別 | 說明 |
-|---|---|---|
-| `id` | `BigAutoField` | 主鍵 |
-| `order` | `ForeignKey(orders)` | 對應訂單 |
-| `buyer` | `ForeignKey(users)` | 對應買家 |
-| `provider` | `CharField` | 預設記錄 `newebpay_payment` |
-| `mode` | `CharField` | `mock` / `sandbox` / `production` |
-| `merchant_order_no` | `CharField(unique=True)` | 商店端訂單交易編號 |
-| `trade_no` | `CharField(unique=True)` | 金流交易編號 |
-| `status` | `CharField` | `pending` / `paid` / `failed` / `refunded` |
-| `amount` | `DecimalField` | 交易金額 |
-| `currency` | `CharField(default='TWD')` | 幣別 |
-| `payment_url` | `URLField(blank=True)` | 導向付款頁或測試網址 |
-| `return_url` | `URLField(blank=True)` | 後端通知網址 |
-| `client_back_url` | `URLField(blank=True)` | 前端完成後導回網址 |
-| `note` | `TextField(blank=True)` | 測試備註 |
-| `created_at` | `DateTimeField` | 建立時間 |
-| `updated_at` | `DateTimeField` | 更新時間 |
-| `paid_at` | `DateTimeField(null=True)` | 付款成功時間 |
+- 核心交易資料的 snapshot 策略
+- session / 個人化資料是否持久化
+- 匿名規則在資料層與輸出層的分工
 
-### 34. `payment_callback_logs`
-保存藍新支付 callback / webhook 每次回傳內容。
-
-| 欄位 | 建議型別 | 說明 |
-|---|---|---|
-| `id` | `BigAutoField` | 主鍵 |
-| `payment_transaction` | `ForeignKey(payment_transactions)` | 對應支付交易 |
-| `provider` | `CharField` | 預設記錄 `newebpay_payment` |
-| `callback_status` | `CharField` | callback 回傳狀態 |
-| `result_message` | `TextField(blank=True)` | 回傳描述 |
-| `payload_json` | `JSONField(default=dict)` | 原始 callback payload |
-| `created_at` | `DateTimeField` | callback 接收時間 |
-
-### 35. `logistics_shipments`
-保存藍新物流托運單建立結果。
-
-| 欄位 | 建議型別 | 說明 |
-|---|---|---|
-| `id` | `BigAutoField` | 主鍵 |
-| `order` | `ForeignKey(orders)` | 對應訂單 |
-| `seller` | `ForeignKey(users)` | 建立托運單的賣家 |
-| `provider` | `CharField` | 預設記錄 `newebpay_logistics` |
-| `mode` | `CharField` | `mock` / `sandbox` / `production` |
-| `logistics_no` | `CharField(unique=True)` | 物流單號 |
-| `status` | `CharField` | `created` / `picked_up` / `delivered` / `failed` |
-| `store_type` | `CharField` | 例如 `UNIMARTC2C` |
-| `temperature` | `CharField(blank=True)` | 常溫 / 低溫等 |
-| `receiver_name` | `CharField(blank=True)` | 收件人 |
-| `receiver_phone` | `CharField(blank=True)` | 收件人電話 |
-| `shipment_note` | `TextField(blank=True)` | 出貨備註 |
-| `created_at` | `DateTimeField` | 建立時間 |
-| `updated_at` | `DateTimeField` | 更新時間 |
-
-### 36. `logistics_callback_logs`
-保存藍新物流 callback / webhook 每次回傳內容。
-
-| 欄位 | 建議型別 | 說明 |
-|---|---|---|
-| `id` | `BigAutoField` | 主鍵 |
-| `logistics_shipment` | `ForeignKey(logistics_shipments)` | 對應物流托運單 |
-| `provider` | `CharField` | 預設記錄 `newebpay_logistics` |
-| `callback_status` | `CharField` | callback 回傳狀態 |
-| `result_message` | `TextField(blank=True)` | 回傳描述 |
-| `payload_json` | `JSONField(default=dict)` | 原始 callback payload |
-| `created_at` | `DateTimeField` | callback 接收時間 |
-
-### 藍新支付 / 物流補充備註
-- `payment_callback_logs.payload_json` 建議使用 `JSONField`
-- `logistics_callback_logs.payload_json` 建議使用 `JSONField`
-- 若開始做正式金流 / 物流，建議把以下表放入下一波 migration：
-  - `payment_transactions`
-  - `payment_callback_logs`
-  - `logistics_shipments`
-  - `logistics_callback_logs`
+這三件事一旦定好，`users -> products -> orders -> payments` 這條主線就可以穩定開始 migration。

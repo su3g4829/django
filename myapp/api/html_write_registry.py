@@ -8,6 +8,11 @@
 """
 from __future__ import annotations
 
+# 這份 registry 不會參與 API 執行，只提供文件頁與整理頁使用。
+# 主要用途是追蹤：
+# - 舊的 HTML form POST route
+# - 對應的新 DRF API route
+# - 遷移是否完成、前端是否已改成 API-first
 HTML_WRITE_MIGRATIONS = [
     {
         "group": "Auth / Session",
