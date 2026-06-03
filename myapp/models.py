@@ -359,6 +359,10 @@ class SellerRequest(TimestampedModel):
     """
 
     user = models.ForeignKey("myapp.AppUser", on_delete=models.CASCADE, related_name="seller_requests")
+    # `is_current` 用來標示這筆是否為目前最新的申請狀態。
+    # 未來若同一個使用者多次申請、撤回、再申請，可以保留完整歷史，
+    # 同時讓 service 很快找到「目前生效中的那一筆」。
+    is_current = models.BooleanField(default=True)
     status = models.CharField(max_length=20, choices=SellerRequestStatus.choices, default=SellerRequestStatus.PENDING)
     note = models.TextField(blank=True)
     reviewed_at = models.DateTimeField(null=True, blank=True)
@@ -525,7 +529,9 @@ class ProductVariant(TimestampedModel):
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="variants")
     external_variant_id = models.CharField(max_length=255, blank=True)
     name = models.CharField(max_length=255)
-    sku = models.CharField(max_length=255, unique=True)
+    # 現行商品建立流程允許 SKU 空白，因此先不要做成必填且全域唯一。
+    # 後續若要強化，可改成在同商品下唯一，或由 service 層補齊規則。
+    sku = models.CharField(max_length=255, blank=True, db_index=True)
     price = models.DecimalField(max_digits=12, decimal_places=2)
     compare_at_price = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     stock = models.IntegerField(default=0)
@@ -591,6 +597,12 @@ class CartItem(TimestampedModel):
     cart = models.ForeignKey(Cart, on_delete=models.CASCADE, related_name="items")
     product = models.ForeignKey(Product, on_delete=models.SET_NULL, null=True, blank=True)
     product_variant = models.ForeignKey(ProductVariant, on_delete=models.SET_NULL, null=True, blank=True)
+    # item_key 對應目前 cart service 的 key 規則：
+    # - 無變體：`product-slug`
+    # - 有變體：`product-slug__variant-id`
+    # 之後若正式切 DB cart，以 `(cart, item_key)` 當唯一鍵會比 nullable
+    # variant 外鍵更穩，避免 MySQL 對 UNIQUE + NULL 的重複容忍問題。
+    item_key = models.CharField(max_length=255)
     quantity = models.PositiveIntegerField(default=1)
     unit_price_snapshot = models.DecimalField(max_digits=12, decimal_places=2)
     product_name_snapshot = models.CharField(max_length=255)
@@ -602,7 +614,7 @@ class CartItem(TimestampedModel):
         # 正常情況應該是更新數量，而不是新增重複列。
         db_table = "cart_items"
         constraints = [
-            models.UniqueConstraint(fields=["cart", "product", "product_variant"], name="uniq_cart_product_variant"),
+            models.UniqueConstraint(fields=["cart", "item_key"], name="uniq_cart_item_key"),
         ]
 
 
@@ -635,11 +647,20 @@ class CompareItem(TimestampedModel):
 
     user = models.ForeignKey("myapp.AppUser", on_delete=models.CASCADE, null=True, blank=True, related_name="compare_items")
     session_key = models.CharField(max_length=100, blank=True)
+    # `bucket_key` 是給資料庫唯一鍵用的穩定 owner key。
+    # 例如：
+    # - 已登入會員：`user:123`
+    # - 訪客模式：`session:abcxyz`
+    # 這樣可以避免 MySQL 在 `NULL` 欄位唯一約束上的不同行為。
+    bucket_key = models.CharField(max_length=140)
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="compare_entries")
 
     class Meta:
-        # 比較清單先保留彈性，不急著加唯一限制，方便後續調整 session/user 合併策略。
         db_table = "compare_items"
+        constraints = [
+            # 比較清單在資料庫層應該是 set-like，同一個 bucket 對同一商品只能有一筆。
+            models.UniqueConstraint(fields=["bucket_key", "product"], name="uniq_compare_bucket_product"),
+        ]
 
 
 class RecentView(TimestampedModel):
@@ -1143,6 +1164,9 @@ class CompetitorProduct(TimestampedModel):
     避免之後商品數量變多時，價格快照表膨脹過快。
     """
 
+    # 一筆外部商品對照必須知道它對應站內哪個商品，
+    # 不然之後會無法回答「這個競品價格屬於我們哪件商品」。
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="competitor_products")
     site = models.ForeignKey(CompetitorSite, on_delete=models.CASCADE, related_name="products")
     external_product_id = models.CharField(max_length=255, blank=True)
     name = models.CharField(max_length=255)
@@ -1157,6 +1181,12 @@ class CompetitorProduct(TimestampedModel):
     class Meta:
         db_table = "competitor_products"
         ordering = ["site_id", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["product", "site", "external_product_id"],
+                name="uniq_competitor_product_mapping",
+            ),
+        ]
 
 
 class ProductRecommendation(TimestampedModel):

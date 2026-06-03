@@ -104,7 +104,7 @@
 | `email` | `EmailField(blank=True)` | email |
 | `role` | `CharField` | `member` / `seller` / `admin` |
 | `account_status` | `CharField` | `active` / `suspended` |
-| `seller_request_status` | `CharField(blank=True)` | 目前流程相容欄位，可保留或改由 `seller_requests` 主導 |
+| `seller_request_status` | `CharField(blank=True)` | 保留在 `users` 做目前狀態快取；真正的申請歷程與審核記錄仍以 `seller_requests` 為主 |
 | `created_at` | `DateTimeField` | 建立時間 |
 | `updated_at` | `DateTimeField` | 更新時間 |
 | `last_login_at` | `DateTimeField(null=True)` | 最後登入時間 |
@@ -168,11 +168,15 @@
 | --- | --- | --- |
 | `id` | `BigAutoField` | 主鍵 |
 | `user` | `ForeignKey(users)` | 申請者 |
+| `is_current` | `BooleanField(default=True)` | 是否為這位會員目前生效中的最新申請紀錄 |
 | `status` | `CharField` | `pending` / `approved` / `rejected` |
 | `note` | `TextField(blank=True)` | 審核備註 |
 | `created_at` | `DateTimeField` | 申請時間 |
 | `reviewed_at` | `DateTimeField(null=True)` | 審核時間 |
 | `reviewed_by` | `ForeignKey(users, null=True, related_name="+")` | 審核人 |
+
+建議 constraint：
+- MySQL 若不支援條件式唯一約束，先由 service 確保同一個 user 只有一筆 `is_current=True`
 
 ## 4. 商品與目錄
 
@@ -242,9 +246,9 @@
 | --- | --- | --- |
 | `id` | `BigAutoField` | 主鍵 |
 | `product` | `ForeignKey(products)` | 所屬商品 |
-| `external_variant_key` | `CharField(blank=True)` | 現有 JSON `id` 仍可保留作外部 key |
+| `external_variant_id` | `CharField(blank=True)` | 現有 JSON `id` 仍可保留作外部 key |
 | `name` | `CharField` | variant 名稱 |
-| `sku` | `CharField(blank=True)` | SKU |
+| `sku` | `CharField(blank=True, db_index=True)` | SKU；先允許空白，避免舊資料或單純規格商品在匯入時被唯一限制卡住 |
 | `price` | `DecimalField(max_digits=10, decimal_places=2)` | variant 售價 |
 | `compare_at_price` | `DecimalField(max_digits=10, decimal_places=2, null=True)` | variant 原價 |
 | `stock` | `IntegerField` | variant 庫存 |
@@ -316,7 +320,8 @@
 | `id` | `BigAutoField` | 主鍵 |
 | `cart` | `ForeignKey(carts)` | 所屬購物車 |
 | `product` | `ForeignKey(products)` | 商品 |
-| `variant` | `ForeignKey(product_variants, null=True)` | variant |
+| `product_variant` | `ForeignKey(product_variants, null=True)` | variant |
+| `item_key` | `CharField` | 對應目前 cart service 的唯一鍵，例如 `slug` 或 `slug__variant-id` |
 | `quantity` | `PositiveIntegerField` | 數量 |
 | `unit_price_snapshot` | `DecimalField(max_digits=10, decimal_places=2)` | 加入當下價格 |
 | `product_name_snapshot` | `CharField` | 商品名稱 snapshot |
@@ -324,6 +329,9 @@
 | `sku_snapshot` | `CharField(blank=True)` | SKU snapshot |
 | `created_at` | `DateTimeField` | 建立時間 |
 | `updated_at` | `DateTimeField` | 更新時間 |
+
+建議 constraint：
+- `UniqueConstraint(fields=["cart", "item_key"])`
 
 ### 5.3 `user_favorites`
 
@@ -344,9 +352,13 @@
 | --- | --- | --- |
 | `id` | `BigAutoField` | 主鍵 |
 | `user` | `ForeignKey(users)` | 所屬會員 |
+| `session_key` | `CharField(blank=True)` | 訪客模式下對應的 session bucket |
+| `bucket_key` | `CharField` | 穩定的 owner key，例如 `user:123` 或 `session:abcxyz` |
 | `product` | `ForeignKey(products)` | 比較商品 |
-| `sort_order` | `PositiveIntegerField(default=0)` | 排序 |
 | `created_at` | `DateTimeField` | 建立時間 |
+
+建議 constraint：
+- `UniqueConstraint(fields=["bucket_key", "product"])`
 
 ### 5.5 `recent_views`
 
@@ -396,7 +408,7 @@
 | `id` | `BigAutoField` | 主鍵 |
 | `order` | `ForeignKey(orders)` | 所屬訂單 |
 | `product` | `ForeignKey(products, null=True)` | 商品 |
-| `variant` | `ForeignKey(product_variants, null=True)` | variant |
+| `product_variant` | `ForeignKey(product_variants, null=True)` | variant |
 | `seller` | `ForeignKey(users, null=True)` | 賣家 |
 | `product_name_snapshot` | `CharField` | 商品名稱 snapshot |
 | `display_name_snapshot` | `CharField` | 顯示名稱 snapshot |
@@ -642,18 +654,20 @@
 | `id` | `BigAutoField` | 主鍵 |
 | `site` | `ForeignKey(competitor_sites)` | 來源站點 |
 | `product` | `ForeignKey(products)` | 對應本站商品 |
-| `variant` | `ForeignKey(product_variants, null=True)` | 對應 variant |
-| `external_product_key` | `CharField(blank=True)` | 外部商品 key |
-| `external_title` | `CharField` | 外部標題 |
-| `external_url` | `URLField` | 外部網址 |
+| `external_product_id` | `CharField(blank=True)` | 外部站自己的商品 ID / key |
+| `name` | `CharField` | 外部商品名稱 |
+| `product_url` | `CharField(blank=True)` | 外部商品網址 |
+| `image_url` | `CharField(blank=True)` | 外部商品圖網址 |
 | `latest_price` | `DecimalField(null=True)` | 最新抓到的價格 |
 | `latest_currency` | `CharField(default="TWD")` | 最新價格的幣別 |
 | `availability_status` | `CharField(blank=True)` | `in_stock` / `out_of_stock` / `unknown` |
-| `matching_status` | `CharField` | `matched` / `possible` / `unmatched` / `archived` |
 | `last_checked_at` | `DateTimeField(null=True)` | 最後檢查時間 |
 | `latest_payload_json` | `JSONField(default=dict)` | 最近一次抓取的原始資料 |
 | `created_at` | `DateTimeField` | 建立時間 |
 | `updated_at` | `DateTimeField` | 更新時間 |
+
+建議 constraint：
+- `UniqueConstraint(fields=["product", "site", "external_product_id"])`
 
 ### 10.3 `product_recommendations`
 
