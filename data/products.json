@@ -75,7 +75,8 @@
     "price": 600.0,
     "compare_at_price": null,
     "brand": "none",
-    "category": "apparel",
+    "category": "上衣",
+    "category_slug": "tops",
     "tags": [
       "上衣"
     ],
@@ -102,7 +103,8 @@
     "price": 600.0,
     "compare_at_price": null,
     "brand": "none",
-    "category": "apparel",
+    "category": "上衣",
+    "category_slug": "tops",
     "tags": [
       "上衣"
     ],
@@ -339,7 +341,8 @@
     "price": 500.0,
     "compare_at_price": null,
     "brand": "acc",
-    "category": "短褲",
+    "category": "褲子",
+    "category_slug": "pants",
     "tags": [
       "短褲"
     ],
