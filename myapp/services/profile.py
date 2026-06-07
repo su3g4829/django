@@ -1,15 +1,13 @@
-"""會員中心 / 個人首頁資料組裝 service。
+"""會員中心 dashboard 聚合 service。
 
-來源模組：
-- `myapp.repositories.local_store`
-- `myapp.services.orders`
-- `myapp.services.personalization`
-- `myapp.services.product_management`
+這層專門替 `MeDashboardApi` 整理個人頁需要的資料，包含：
+- 使用者自己的評論、提問、回答
+- 社群貼文
+- 已上架商品
+- 訂單
+- 收藏與最近瀏覽
 
-用途：
-- 整理會員中心首頁需要的各種資料
-- 將評論、問答、回答、文章、商品、訂單、收藏、最近瀏覽整合成單一 payload
-- 供 `myapp.api.views.MeDashboardApi` 使用
+回傳格式會盡量維持前端既有 payload 形狀，讓 view 不需要再逐項重組。
 """
 
 from __future__ import annotations
@@ -19,186 +17,116 @@ from typing import Any, Dict, List
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
-from ..repositories import local_store
+from ..models import Product as ProductModel
+from . import community as community_service
 from . import orders as order_service
 from . import personalization as personalization_service
 from . import product_management
+from . import questions as question_service
+from . import reviews as review_service
 
 
 def _format_created_at(value: str) -> str:
-    """把 ISO datetime 字串轉成前端較好閱讀的本地時間格式。
-
-    來源模組：
-    - `django.utils.dateparse.parse_datetime`
-    - `django.utils.timezone.localtime`
-
-    用途：
-    - 會員中心列表頁只需要簡短時間字串
-    - 避免前端每個區塊都各自做時間格式化
-    """
-
+    # dashboard 卡片只需要簡短時間顯示，這裡統一做 timezone 與字串格式轉換。
     parsed = parse_datetime(value) if value else None
     return timezone.localtime(parsed).strftime("%Y-%m-%d %H:%M") if parsed else ""
 
 
 def _matches_user(item: Dict[str, Any], username: str, display_name: str) -> bool:
-    """判斷一筆內容是否屬於目前會員。
-
-    用途：
-    - 評論、問題、回答、社群文章目前都可能同時保存 `author_username` 或 `author`
-    - 這裡統一比對 username 與 display_name，避免不同資料來源格式不一致
-    """
-
-    return item.get("author_username") == username or item.get("author") == display_name
+    # 舊資料有些只有顯示名稱、沒有 author_username，所以 username / display_name 兩邊都要比。
+    item_username = str(item.get("author_username") or "").strip().lower()
+    item_display_name = str(item.get("author") or "").strip()
+    clean_username = str(username or "").strip().lower()
+    clean_display_name = str(display_name or "").strip()
+    return item_username == clean_username or item_display_name == clean_display_name
 
 
 def _product_stub(product_id: int) -> Dict[str, Any] | None:
-    """用商品 id 取回精簡商品資訊。
-
-    用途：
-    - 評論 / 問答 / 回答清單只需要最小商品資訊
-    - 避免把完整商品 payload 都塞進會員中心列表
-    """
-
-    product = local_store.get_product_by_id(product_id)
+    # 個人頁只需要商品最小摘要來做跳轉，不需要把完整商品 payload 全部灌進來。
+    try:
+        product = ProductModel.objects.filter(id=int(product_id)).first()
+    except Exception:
+        product = None
     if not product:
         return None
     return {
-        "id": product["id"],
-        "slug": product["slug"],
-        "name": product["name"],
+        "id": int(product.id),
+        "slug": str(product.slug),
+        "name": str(product.name),
     }
 
 
 def list_user_reviews(username: str, display_name: str) -> List[Dict[str, Any]]:
-    """列出會員撰寫過的商品評論。
-
-    前端使用頁面：
-    - 會員中心首頁
-    - 未來若有「我的評論」頁也可重用
-
-    功能：
-    - 從 reviews JSON 篩出目前會員的評論
-    - 補上商品 stub 與格式化時間
-    """
-
-    items = []
-    for review in sorted(local_store.get_reviews(), key=lambda item: item.get("created_at", ""), reverse=True):
+    # 蒐集會員自己發表的評論，並補上商品摘要供 dashboard 直接顯示。
+    items: List[Dict[str, Any]] = []
+    for review in review_service.list_all_reviews():
         if not _matches_user(review, username, display_name):
             continue
         item = dict(review)
-        item["created_at_display"] = _format_created_at(item.get("created_at", ""))
-        item["product"] = _product_stub(item["product_id"])
+        item["created_at_display"] = _format_created_at(str(item.get("created_at", "")))
+        item["product"] = _product_stub(int(item.get("product_id", 0) or 0))
         items.append(item)
     return items
 
 
 def list_user_questions(username: str, display_name: str) -> List[Dict[str, Any]]:
-    """列出會員提出過的商品問題。
-
-    前端使用頁面：
-    - 會員中心首頁
-
-    功能：
-    - 從 questions JSON 篩出目前會員提問
-    - 補上商品 stub、格式化時間與回答數量
-    """
-
-    items = []
-    for question in sorted(local_store.get_questions(), key=lambda item: item.get("created_at", ""), reverse=True):
+    # 個人頁問答區顯示使用者提出的問題，並預先算出 answer_count。
+    items: List[Dict[str, Any]] = []
+    for question in question_service.list_all_questions():
         if not _matches_user(question, username, display_name):
             continue
         item = dict(question)
-        item["created_at_display"] = _format_created_at(item.get("created_at", ""))
-        item["product"] = _product_stub(item["product_id"])
+        item["created_at_display"] = _format_created_at(str(item.get("created_at", "")))
+        item["product"] = _product_stub(int(item.get("product_id", 0) or 0))
         item["answer_count"] = len(item.get("answers", []))
         items.append(item)
     return items
 
 
 def list_user_answers(username: str, display_name: str) -> List[Dict[str, Any]]:
-    """列出會員回答過的商品問答。
-
-    前端使用頁面：
-    - 會員中心首頁
-
-    功能：
-    - 逐題展開 question answers
-    - 找出目前會員留下的回答
-    - 補上問題標題、商品 stub 與格式化時間
-    """
-
-    items = []
-    for question in local_store.get_questions():
-        product = _product_stub(question["product_id"])
+    # 回答是巢狀掛在 question 底下，這裡攤平成 dashboard 比較容易渲染的列表格式。
+    items: List[Dict[str, Any]] = []
+    for question in question_service.list_all_questions():
+        product = _product_stub(int(question.get("product_id", 0) or 0))
         for answer in question.get("answers", []):
             if not _matches_user(answer, username, display_name):
                 continue
             item = dict(answer)
-            item["created_at_display"] = _format_created_at(item.get("created_at", ""))
-            item["question_title"] = question["title"]
+            item["created_at_display"] = _format_created_at(str(item.get("created_at", "")))
+            item["question_title"] = str(question.get("title") or "")
             item["product"] = product
             items.append(item)
     return sorted(items, key=lambda item: item.get("created_at", ""), reverse=True)
 
 
 def list_user_posts(username: str, display_name: str) -> List[Dict[str, Any]]:
-    """列出會員建立過的社群文章。
-
-    前端使用頁面：
-    - 會員中心首頁
-
-    功能：
-    - 從 posts JSON 篩出目前會員的貼文
-    - 補上格式化時間與回覆數量
-    """
-
-    items = []
-    for post in sorted(local_store.get_posts(), key=lambda item: item.get("created_at", ""), reverse=True):
+    # 社群貼文區只保留 dashboard 需要的欄位，回覆數在這裡先整理好。
+    items: List[Dict[str, Any]] = []
+    for post in community_service.list_all_posts():
         if not _matches_user(post, username, display_name):
             continue
         item = dict(post)
-        item["created_at_display"] = _format_created_at(item.get("created_at", ""))
+        item["created_at_display"] = _format_created_at(str(item.get("created_at", "")))
         item["reply_count"] = len(item.get("replies", []))
         items.append(item)
     return items
 
 
 def list_user_products(username: str) -> List[Dict[str, Any]]:
-    """列出會員名下商品。
-
-    前端使用頁面：
-    - 會員中心首頁的賣家摘要
-    - 後續若有「我建立的商品」摘要也可重用
-
-    功能：
-    - 讀取賣家自己的商品
-    - 補上 created / updated 顯示時間
-    """
-
-    items = []
+    # 賣家會員中心會顯示自己建立的商品清單，時間欄位在這裡轉成顯示格式。
+    items: List[Dict[str, Any]] = []
     for product in product_management.list_products_for_user(username):
         item = dict(product)
-        item["created_at_display"] = _format_created_at(item.get("created_at", ""))
-        item["updated_at_display"] = _format_created_at(item.get("updated_at", ""))
+        item["created_at_display"] = _format_created_at(str(item.get("created_at", "")))
+        item["updated_at_display"] = _format_created_at(str(item.get("updated_at", "")))
         items.append(item)
     return items
 
 
 def build_profile_dashboard(user: Dict[str, str], session) -> Dict[str, Any]:
-    """組裝會員中心首頁需要的完整 dashboard payload。
-
-    前端使用頁面：
-    - `frontend/app/me/page.tsx` 或對應會員中心首頁
-
-    功能：
-    - 聚合會員自己的內容資料
-    - 聚合訂單、收藏、最近瀏覽
-    - 回傳給 `MeDashboardApi` 一次輸出
-    """
-
-    username = user["username"]
-    display_name = user["display_name"]
+    # 會員中心首頁一次組好所有分頁資料，避免 API 端點拆太細造成前端多次請求。
+    username = str(user["username"])
+    display_name = str(user["display_name"])
     return {
         "reviews": list_user_reviews(username, display_name),
         "questions": list_user_questions(username, display_name),

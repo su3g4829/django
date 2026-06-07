@@ -1,5 +1,30 @@
 'use client'
 
+/**
+ * `use client`
+ * 來源：Next.js App Router。
+ *
+ * 這頁需要：
+ * - 讀 route param
+ * - client-side 抓 API
+ * - 審核售後申請
+ *
+ * 所以必須在瀏覽器端執行。
+ */
+
+/**
+ * 管理端訂單詳情頁。
+ *
+ * 這頁同時顯示：
+ * - 訂單基本資料
+ * - 金流 debug
+ * - 售後申請審核操作
+ *
+ * 來源：
+ * - `useParams` 來自 `next/navigation`
+ * - `Promise.all` 來自 JavaScript Promise API
+ */
+
 import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'next/navigation'
 
@@ -8,6 +33,14 @@ import type { NewebpayPaymentDebug, Order } from '@/lib/types'
 
 export default function AdminOrderDetailPage() {
   const params = useParams<{ id: string }>()
+  /**
+   * `useMemo`
+   * 來源：React。
+   *
+   * 用途：
+   * - 把動態路由 id 收斂成穩定值
+   * - 讓後續 effect 明確依賴 `orderId`
+   */
   const orderId = useMemo(() => params.id, [params.id])
 
   const [order, setOrder] = useState<Order | null>(null)
@@ -17,6 +50,14 @@ export default function AdminOrderDetailPage() {
   const [error, setError] = useState('')
 
   async function loadDetail() {
+    /**
+     * 訂單詳情與 payment debug 併行抓取。
+     *
+     * `Promise.all([...])`
+     * - 來源：JavaScript Promise API
+     * - 用來同時等待多個非同步請求完成
+     * - 比先抓訂單再抓 payment debug 更快
+     */
     setLoading(true)
     try {
       const [orderPayload, debugPayload] = await Promise.all([
@@ -38,6 +79,13 @@ export default function AdminOrderDetailPage() {
   }, [orderId])
 
   async function reviewServiceRequest(approved: boolean) {
+    /**
+     * 管理端可直接核准 / 拒絕售後申請。
+     *
+     * `approved: boolean`
+     * - `boolean` 是 TypeScript 基本型別
+     * - 用來明確表達這個 action 只有「通過」或「拒絕」兩種分支
+     */
     try {
       setSubmitting(true)
       const payload = await apiFetch<Order>(`/staff/orders/${orderId}/service-review/`, {

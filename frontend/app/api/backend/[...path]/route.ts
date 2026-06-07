@@ -5,6 +5,11 @@
  * - 將 Next.js 前端的 `/api/backend/...` 請求代理到 Django DRF `/api/v1/...`
  * - 轉送 cookie 與 CSRF 資訊，讓 session 型登入可在前後端分離架構下正常運作
  * - 統一前端呼叫後端 API 的入口，避免瀏覽器直接跨來源打 Django
+ *
+ * 來源：
+ * - route handler / `NextRequest` 來自 `next/server`
+ * - `fetch` / `Headers` / `Response` 來自 Web Fetch API
+ * - CSRF 規則對應 Django CSRF middleware
  */
 
 import type { NextRequest } from 'next/server'
@@ -26,6 +31,16 @@ const BACKEND_ORIGIN = process.env.DJANGO_API_ORIGIN ?? 'http://127.0.0.1:8080'
  * pathSegments:
  * - 由 `[...path]` 動態路由拆出的路徑陣列
  * - 例如 `/api/backend/products/acme-mug/` 會變成 `['products', 'acme-mug']`
+ *
+ * 用法：
+ * - React page / component 端應統一透過 `frontend/lib/api.ts` 的 `apiFetch()`
+ * - 不直接在頁面裡硬寫 Django host，避免跨來源與 cookie 問題
+ *
+ * 程式語法：
+ * - 這是一個 `async function`，因為代理流程包含多個非同步步驟：
+ *   1. 讀 request body
+ *   2. `fetch()` Django
+ *   3. 等待 Django 回傳 response
  */
 async function proxy(request: NextRequest, pathSegments: string[]) {
   /** Django API 需要的相對路徑，例如 `products/acme-mug`。 */

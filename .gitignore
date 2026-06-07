@@ -13,3 +13,5 @@ staticfiles/
 var/
 tmp_unicode.txt
 django.env
+frontend/tsconfig.tsbuildinfo
+static/uploads/**

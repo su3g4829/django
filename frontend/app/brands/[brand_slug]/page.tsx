@@ -7,6 +7,10 @@
  *
  * 主要 API：
  * - GET `/api/v1/products/`
+ *
+ * 來源：
+ * - App Router 動態路由參數機制來自 Next.js `app/brands/[brand_slug]`
+ * - 商品列表 UI 與資料流實作來自 `@/components/catalog-browser`
  */
 
 import { CatalogBrowser } from '@/components/catalog-browser'
@@ -21,6 +25,14 @@ type BrandPageProps = {
  *
  * params:
  * - `brand_slug`: URL 中的品牌 slug，會先解碼，再傳給商品列表作為初始篩選條件。
+ *
+ * 用法：
+ * - `/brands/ACME` 會先把 `ACME` 解碼
+ * - 再交給 `CatalogBrowser` 當 `initialFilters.brand`
+ *
+ * 程式語法：
+ * - 這裡用 `async` 是因為 App Router 的 `params` 型別是 `Promise`
+ * - 所以元件一開始要先 `await params` 才拿得到真正的 `brand_slug`
  */
 export default async function BrandPage({ params }: BrandPageProps) {
   const { brand_slug } = await params

@@ -1,26 +1,44 @@
 /**
- * 前端共用型別定義
+ * 補充：
+ * 這個檔案是前端共用型別中心，描述 API payload 在前端的資料形狀。
+ * `type` / `interface` 都只存在於 TypeScript 編譯期，不會直接進到瀏覽器 runtime。
+ */
+/**
+ * 前端共用型別定義。
  *
- * 目的：
- * - 描述 Django DRF API 回傳 payload 的形狀
- * - 讓頁面與元件在取用資料欄位時有明確型別提示
- * - 降低前後端欄位名稱不一致時的出錯機率
+ * 功能：
+ * - 集中描述 Django / DRF API 回傳給前端的資料形狀
+ * - 讓 page、component、lib helper 共用同一組 TypeScript 型別
+ * - 避免每個頁面自己手寫一份 interface，導致欄位名稱逐漸漂移
+ *
+ * 來源：
+ * - TypeScript `type` 語法：用來定義靜態型別，不會出現在瀏覽器執行後的 JavaScript 內
+ * - 欄位後面的 `?`：代表 optional field，對應 API 可能有時給、有時不給
+ * - `Array<T>` 或 `T[]`：代表陣列
+ * - `Record<K, V>`：代表 key-value 物件，來自 TypeScript 標準型別工具
+ *
+ * 使用方式：
+ * - 頁面抓 API 時，搭配 `apiFetch<T>()` 指定預期 payload
+ * - component props 用這裡的型別，確保不同頁面看到同一組欄位語意
+ * - `import type { Foo } from '@/lib/types'` 代表只匯入型別，不增加 runtime bundle
  */
 
 /**
- * 示範會員 / 使用者資料。
+ * 會員 / 登入後共用的最小使用者快照。
  *
- * 來源：
+ * 主要出現在：
  * - `/api/v1/me/`
  * - `/api/v1/app/bootstrap/`
  * - `/api/v1/staff/users/`
+ *
+ * 這類型別通常只放跨多頁都共用的最小共同欄位。
  */
 export type DemoUser = {
-  /** 使用者主鍵。 */
+  /** 資料庫主鍵。 */
   id: number
   /** 登入帳號。 */
   username: string
-  /** 顯示名稱，用於頁面問候或作者資訊。 */
+  /** 前端顯示用名稱。 */
   display_name: string
   /** 角色，例如 buyer / seller / admin。 */
   role: string
@@ -28,11 +46,17 @@ export type DemoUser = {
   account_status?: string
   /** 賣家申請狀態，例如 pending / approved / rejected。 */
   seller_request_status?: string
-  /** 電子郵件。 */
+  /** 聯絡信箱。 */
   email?: string
+  /** 賣家運費規則。 */
   shipping_rules?: SellerShippingRules
 }
 
+/**
+ * 賣家運費規則。
+ *
+ * 這是會員中心運費設定頁與 checkout 群組運費試算會共用的資料形狀。
+ */
 export type SellerShippingRules = {
   home_delivery_enabled: boolean
   home_delivery_fee: string
@@ -42,11 +66,11 @@ export type SellerShippingRules = {
 }
 
 /**
- * 全站初始化資料。
+ * App bootstrap payload。
  *
- * 用途：
- * - 提供 header 顯示登入狀態
- * - 顯示購物車、比較清單、收藏數量
+ * Header、會員登入狀態、購物車數量、比較/收藏數量，都靠這支 API 一次帶回。
+ *
+ * 這是常見的 bootstrap payload 設計：用一支 API 準備整個頁面殼層初始化資訊。
  */
 export type AppBootstrapPayload = {
   user: DemoUser | null
@@ -55,6 +79,14 @@ export type AppBootstrapPayload = {
   favorite_count: number
 }
 
+/**
+ * 單一 Banner 資料。
+ *
+ * 同時給：
+ * - 首頁公開 Banner 輪播
+ * - 會員 Banner 申請頁
+ * - 管理端 Banner 審核頁
+ */
 export type Banner = {
   id: number
   title?: string
@@ -82,66 +114,81 @@ export type Banner = {
   is_currently_visible?: boolean
 }
 
+/**
+ * Banner 列表 payload。
+ */
 export type BannerListPayload = {
   items: Banner[]
 }
 
 /**
- * 商品資料。
+ * 商品主型別。
+ *
+ * 這是前端最常用的資料型別之一：
+ * - 首頁商品卡片
+ * - 商品總覽
+ * - 商品詳情
+ * - 賣家商品管理
+ * - 管理端商品管理
  */
 export type Product = {
   /** 商品主鍵。 */
   id: number
-  /** 商品網址 slug。 */
+  /** 商品 slug，用於前端路由與 API 查詢。 */
   slug: string
   /** 商品名稱。 */
   name: string
-  /** 基礎售價。 */
+  /** 單一基準價格。 */
   price: number
-  /** 原價，用來計算折扣顯示。 */
+  /** 原價或比較價。 */
   compare_at_price?: number | null
   /** 品牌名稱。 */
   brand: string
-  /** 分類名稱。 */
+  /** 類別顯示名稱。 */
   category: string
+  /** 類別 canonical slug。 */
   category_slug?: string
+  /** 類別顯示標籤。 */
   category_label?: string
-  /** 標籤清單。 */
+  /** 商品 tag 字串。 */
   tags?: string[]
-  /** 所有圖片路徑。 */
+  /** 多圖路徑。 */
   images?: string[]
-  /** 商品主圖。 */
+  /** 首圖。 */
   primary_image?: string
-  /** 總庫存。若無固定庫存可能為 null。 */
+  /** 總庫存；若商品完全以變體控庫，可能為 null。 */
   stock?: number | null
-  /** 庫存狀態字串，例如 in_stock / out_of_stock。 */
+  price_compare_enabled?: boolean
+  price_compare_query?: string
+  /** 庫存狀態，例如 in_stock / out_of_stock。 */
   stock_status?: string
-  /** 目前 session 是否已收藏此商品。 */
+  /** 目前登入者是否已收藏。 */
   is_favorite?: boolean
-  /** 可用顏色選項。 */
+  /** 可選顏色。 */
   color_options?: string[]
-  /** 可用尺寸選項。 */
+  /** 可選尺寸。 */
   size_options?: string[]
   /** 是否有折扣。 */
   has_discount?: boolean
   /** 折扣百分比。 */
   discount_percent?: number
-  /** 價格區間顯示文字。 */
+  /** 前端已整理好的價格區間顯示。 */
   price_range_label?: string
-  /** 後台審核或商品狀態。 */
+  /** 審核 / 上架狀態。 */
   status?: string
-  /** 狀態的人類可讀標籤。 */
+  /** 狀態文字。 */
   status_label?: string
-  /** 管理員下架商品時留下的附註。 */
+  /** 管理員審核備註。 */
   review_note?: string
-  /** 前端可直接顯示的庫存文字。 */
+  /** 商品詳情頁可直接顯示的庫存文字。 */
   stock_display?: string
-  /** 規格摘要文字。 */
+  /** 規格文字快照。 */
   specs_text?: string
-  /** 變體摘要文字。 */
+  /** 變體文字快照。 */
   variants_text?: string
-  /** 商品變體清單。 */
+  /** 結構化變體。 */
   variants?: ProductVariant[]
+  /** 單一商品可覆寫賣家運費規則。 */
   shipping_profile?: {
     use_seller_rules: boolean
     allow_home_delivery: boolean
@@ -149,13 +196,21 @@ export type Product = {
     override_home_delivery_fee?: number | null
     override_convenience_store_fee?: number | null
   }
+  /** 預設變體。 */
   default_variant?: ProductVariant | null
-  /** 擁有者使用者 ID。 */
+  /** 擁有者 user id。 */
   owner_user_id?: number | null
   owner_username?: string
   owner_display_name?: string
+  created_at?: string
+  updated_at?: string
 }
 
+/**
+ * 類別選項。
+ *
+ * 給 catalog facet、賣家新增商品、管理端分類管理頁共用。
+ */
 export type ProductCategoryOption = {
   id?: number
   slug: string
@@ -165,6 +220,14 @@ export type ProductCategoryOption = {
   sort_order?: number
 }
 
+/**
+ * 商品變體。
+ *
+ * 注意：
+ * - `id` 在前端目前常直接拿來當選項值，所以維持字串較方便
+ * - `attributes` 讓顏色/尺寸可結構化，而不只是一串文字
+ * - 這個型別同時服務商品詳情頁與賣家編輯頁，所以保留顯示與編輯兩邊都會用到的欄位
+ */
 export type ProductVariant = {
   id: string
   name: string
@@ -173,6 +236,7 @@ export type ProductVariant = {
   compare_at_price?: number | null
   stock: number
   image?: string
+  image_path_snapshot?: string
   image_index?: number | null
   attributes?: {
     color?: string
@@ -181,10 +245,10 @@ export type ProductVariant = {
 }
 
 /**
- * 商品列表 API 回傳格式。
+ * 商品列表 API payload。
  */
 export type ProductListPayload = {
-  /** 商品清單。 */
+  /** 目前頁面的商品陣列。 */
   items: Product[]
   /** 分頁資訊。 */
   meta: {
@@ -192,7 +256,7 @@ export type ProductListPayload = {
     total_pages: number
     total_items: number
   }
-  /** 篩選 facet 選項。 */
+  /** facet 選項，供篩選 UI 使用。 */
   facets?: {
     categories?: ProductCategoryOption[]
     brands?: string[]
@@ -200,27 +264,23 @@ export type ProductListPayload = {
     sizes?: string[]
     tags?: string[]
   }
-  /** 後端回顯目前實際套用的篩選條件。 */
+  /** 後端回傳的當前 filter 快照。 */
   filters?: Record<string, string>
 }
 
 /**
- * 商品比較清單。
+ * 商品比較列表。
  */
 export type CompareListPayload = {
-  /** 比較中的商品完整資料。 */
   items: Product[]
-  /** 僅保留 slug 的輕量清單，方便前端快速判斷是否已加入比較。 */
+  /** 目前比較清單裡的 slug，方便快速判斷按鈕狀態。 */
   slugs: string[]
 }
 
 /**
- * 商品評論。
- */
-/**
- * 單一外站比價結果。
+ * 單一外部比價結果。
  *
- * 目前是 mock 資料，用來示範 crawler / price compare 流程。
+ * 目前即使不完全落 DB，前端仍需要一個穩定型別呈現比較結果。
  */
 export type CompetitorPriceItem = {
   site: string
@@ -242,7 +302,7 @@ export type CompetitorPriceItem = {
 }
 
 /**
- * 商品比價結果 payload。
+ * 商品比價 payload。
  */
 export type PriceComparisonPayload = {
   our_product_slug: string
@@ -250,6 +310,7 @@ export type PriceComparisonPayload = {
   our_product_id: number
   our_price: number
   currency: string
+  query?: string
   is_mock: boolean
   source_type: string
   last_refreshed_at: string
@@ -260,31 +321,27 @@ export type PriceComparisonPayload = {
 }
 
 /**
- * 模擬重新抓價回應。
+ * 手動刷新比價後的回應。
  */
 export type PriceComparisonRefreshPayload = {
   detail: string
   result: PriceComparisonPayload
 }
 
+/**
+ * 商品評論。
+ */
 export type Review = {
   id: number
   product_id: number
-  /** 頁面顯示用作者名稱。 */
+  /** 前端公開顯示名稱。 */
   author: string
-  /** 作者帳號。 */
   author_username?: string | null
-  /** 作者使用者 ID。 */
   author_user_id?: number | null
-  /** 星等分數。 */
   rating: number
-  /** 評論標題。 */
   title: string
-  /** 評論內文。 */
   body: string
-  /** 原始建立時間。 */
   created_at: string
-  /** 格式化後可直接顯示的建立時間。 */
   created_at_display?: string
 }
 
@@ -296,6 +353,8 @@ export type QuestionAnswer = {
   author: string
   author_username?: string | null
   author_user_id?: number | null
+  is_seller_reply?: boolean
+  is_body_masked?: boolean
   body: string
   created_at: string
   created_at_display?: string
@@ -311,17 +370,17 @@ export type Question = {
   author_username?: string | null
   author_user_id?: number | null
   title: string
+  is_body_masked?: boolean
   body: string
   created_at: string
   created_at_display?: string
-  /** 回答數量摘要。 */
   answer_count?: number
-  /** 已展開時的回答清單。 */
+  /** 問題詳情頁 / 商品頁可能會直接附帶回答陣列。 */
   answers?: QuestionAnswer[]
 }
 
 /**
- * 社群文章的回覆。
+ * 社群貼文回覆。
  */
 export type CommunityReply = {
   id: number
@@ -334,7 +393,7 @@ export type CommunityReply = {
 }
 
 /**
- * 社群論壇文章。
+ * 社群貼文。
  */
 export type CommunityPost = {
   id: number
@@ -345,47 +404,44 @@ export type CommunityPost = {
   title: string
   body: string
   tags?: string[]
-  /** 文章投票分數。 */
   votes: number
+  has_voted?: boolean
   created_at: string
   created_at_display?: string
-  /** 回覆數量摘要。 */
   reply_count?: number
-  /** 文章詳情頁使用的完整回覆列表。 */
   replies?: CommunityReply[]
   can_edit?: boolean
   can_delete?: boolean
 }
 
 /**
- * 社群文章列表 payload。
+ * 社群貼文列表 payload。
  */
 export type CommunityPostListPayload = {
   items: CommunityPost[]
 }
 
 /**
- * 購物車單一項目。
+ * 購物車單一列。
  */
 export type CartItem = {
-  /** 前端操作此項目的唯一 key。 */
+  /** 前端暫存與更新用的穩定 key。 */
   key: string
   id: number
   slug: string
   name: string
-  /** 若有變體，顯示用名稱通常比原始 name 更完整。 */
+  /** 已帶上變體名稱的顯示名稱。 */
   display_name: string
   price: number
   qty: number
   variant_id?: string
   variant_name?: string
   sku?: string
-  /** 單列小計。 */
   line_total: number
 }
 
 /**
- * 購物車完整 payload。
+ * 購物車 payload。
  */
 export type CartPayload = {
   items: CartItem[]
@@ -419,7 +475,6 @@ export type CartPayload = {
       line_total: string
     }>
   }>
-  /** 後端可選回傳補充訊息。 */
   detail?: string
 }
 
@@ -443,7 +498,6 @@ export type Address = {
  * 發票設定。
  */
 export type InvoiceProfile = {
-  /** 發票類型，例如 personal / company。 */
   invoice_type: string
   carrier_code?: string
   company_name?: string
@@ -452,7 +506,7 @@ export type InvoiceProfile = {
 }
 
 /**
- * checkout 選項列。
+ * checkout 下拉選項。
  */
 export type CheckoutChoice = {
   value: string
@@ -461,6 +515,8 @@ export type CheckoutChoice = {
 
 /**
  * checkout 預覽 payload。
+ *
+ * 這支型別直接延伸 `CartPayload`，表示 preview 會把購物車資料一併帶回。
  */
 export type CheckoutPreviewPayload = CartPayload & {
   user: DemoUser | null
@@ -498,7 +554,12 @@ export type CheckoutPreviewPayload = CartPayload & {
 }
 
 /**
- * 訂單資料。
+ * 訂單主型別。
+ *
+ * 這支型別欄位多，是因為前端目前同時支援：
+ * - 買家訂單頁
+ * - 賣家訂單頁
+ * - 管理端訂單頁
  */
 export type Order = {
   id: number
@@ -532,11 +593,8 @@ export type Order = {
   shipped_at_display?: string
   completed_at_display?: string
   can_confirm_completion?: boolean
-  /** 訂單金額彙總。 */
   totals?: Record<string, string>
-  /** 賣家視角的金額摘要 */
   seller_totals?: Record<string, string>
-  /** 訂單項目。 */
   items?: Array<{
     id: number
     slug: string
@@ -549,7 +607,6 @@ export type Order = {
     seller_status_label?: string
     tracking_number?: string
   }>
-  /** 售後申請資訊。 */
   service_request?: {
     type?: string
     type_label?: string
@@ -560,7 +617,6 @@ export type Order = {
     reviewed_at?: string
     is_pending?: boolean
   }
-  /** 依賣家切分的物流 / 履約資訊。 */
   shipment_groups?: Array<{
     seller_username: string
     seller_display_name: string
@@ -598,11 +654,7 @@ export type Order = {
 }
 
 /**
- * 藍新支付 sandbox 設定摘要。
- *
- * 用途：
- * - 顯示後端是否已填好 MerchantID / HashKey / HashIV
- * - 顯示目前沙箱 gateway 與 callback URL 設定
+ * 藍新 sandbox payment runtime 摘要。
  */
 export type NewebpaySandboxPaymentSummary = {
   provider: string
@@ -618,11 +670,7 @@ export type NewebpaySandboxPaymentSummary = {
 }
 
 /**
- * 藍新支付 sandbox 準備結果。
- *
- * 用途：
- * - 前端可把 form_fields 組成 HTML form 後 POST 到 gateway_url
- * - 現階段也可直接顯示 payload，方便人工檢查
+ * 準備送往藍新的 payment payload。
  */
 export type NewebpaySandboxPaymentPrepared = {
   provider: string
@@ -637,6 +685,9 @@ export type NewebpaySandboxPaymentPrepared = {
   note: string
 }
 
+/**
+ * 藍新付款紀錄。
+ */
 export type NewebpayPaymentRecord = {
   provider: string
   mode: string
@@ -659,17 +710,16 @@ export type NewebpayPaymentRecord = {
   raw_payload?: Record<string, unknown>
 }
 
+/**
+ * 藍新 payment debug payload。
+ */
 export type NewebpayPaymentDebug = {
   runtime: NewebpaySandboxPaymentSummary
   records: NewebpayPaymentRecord[]
 }
 
 /**
- * 藍新物流 sandbox scaffold 設定摘要。
- *
- * 用途：
- * - 顯示物流測試所需的 merchant 與 callback 設定
- * - 若 configured 為 false，可直接提示缺少哪些設定
+ * 藍新物流 sandbox runtime 摘要。
  */
 export type NewebpaySandboxLogisticsSummary = {
   provider: string
@@ -684,11 +734,7 @@ export type NewebpaySandboxLogisticsSummary = {
 }
 
 /**
- * 藍新物流 sandbox scaffold 準備結果。
- *
- * 用途：
- * - 顯示訂單被整理後，建議送往物流 API 的 payload
- * - 現階段仍是 scaffold，不直接向藍新送件
+ * 藍新物流 sandbox scaffold payload。
  */
 export type NewebpaySandboxLogisticsPrepared = {
   provider: string
@@ -715,6 +761,9 @@ export type NewebpaySandboxLogisticsPrepared = {
   note: string
 }
 
+/**
+ * 藍新物流紀錄。
+ */
 export type NewebpayLogisticsRecord = {
   provider: string
   mode: string
@@ -760,7 +809,7 @@ export type SalesReport = {
 }
 
 /**
- * 審核中心首頁資料。
+ * 管理審核首頁摘要。
  */
 export type StaffReviewDashboard = {
   managed_products: Product[]
@@ -768,7 +817,7 @@ export type StaffReviewDashboard = {
 }
 
 /**
- * 管理儀表板摘要資料。
+ * 管理端儀表板摘要。
  */
 export type AdminDashboard = {
   users: Record<string, string | number>
@@ -781,7 +830,7 @@ export type AdminDashboard = {
 }
 
 /**
- * 通用選項欄位。
+ * 共用狀態下拉選項。
  */
 export type StatusChoice = {
   value: string
@@ -789,7 +838,7 @@ export type StatusChoice = {
 }
 
 /**
- * 會員中心摘要資料。
+ * 會員中心首頁摘要。
  */
 export type MeDashboard = {
   user: DemoUser

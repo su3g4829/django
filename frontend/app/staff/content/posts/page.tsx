@@ -1,5 +1,12 @@
 'use client'
 
+/**
+ * 管理端社群貼文管理頁。
+ *
+ * 提供搜尋、排序與刪除功能，
+ * 讓管理者快速處理不適合保留的文章。
+ */
+
 import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 
@@ -23,6 +30,7 @@ type PostListPayload = {
 type PostSortKey = 'created_desc' | 'created_asc' | 'replies_desc' | 'replies_asc' | 'title_asc'
 
 export default function AdminPostManagementPage() {
+  // 列表資料、搜尋條件與排序條件分開保存，避免互相覆蓋。
   const [items, setItems] = useState<AdminPost[]>([])
   const [filters, setFilters] = useState({ q: '', topic: '' })
   const [sortBy, setSortBy] = useState<PostSortKey>('created_desc')
@@ -31,6 +39,7 @@ export default function AdminPostManagementPage() {
   const [error, setError] = useState('')
 
   async function loadItems(nextFilters = filters) {
+    // 搜尋與刪除後都重抓完整列表，確保管理端看到最新內容。
     setLoading(true)
     try {
       const payload = await apiFetch<PostListPayload>(`/staff/content/posts/${toQueryString(nextFilters)}`)
@@ -71,6 +80,7 @@ export default function AdminPostManagementPage() {
   }, [items, sortBy])
 
   async function deleteItem(postId: number) {
+    // 刪文前先要求確認，降低誤刪風險。
     if (!window.confirm('確定要刪除這篇論壇文章嗎？')) {
       return
     }

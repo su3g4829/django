@@ -18,8 +18,23 @@ const INITIAL_FULFILLMENT_FORM: SellerFulfillmentFormState = {
   shipping_note: '',
 }
 
+/**
+ * 賣家訂單詳情頁。
+ *
+ * 功能：
+ * - 顯示單一賣家訂單
+ * - 允許賣家更新履約狀態、物流單號、出貨備註
+ */
 export default function SellerOrderDetailPage() {
   const params = useParams<{ id: string }>()
+
+  /**
+   * `useMemo` 來自 React。
+   *
+   * 用法：
+   * - 把 `params.id` 正規化成 `orderId`
+   * - 雖然這裡計算量不大，但可讓 effect dependency 比較穩定，也讓語意更清楚
+   */
   const orderId = useMemo(() => params.id, [params.id])
 
   const [order, setOrder] = useState<Order | null>(null)
@@ -46,11 +61,25 @@ export default function SellerOrderDetailPage() {
       .finally(() => setLoading(false))
   }, [orderId])
 
+  /**
+   * `K extends keyof SellerFulfillmentFormState` 是 TypeScript generic 約束語法。
+   *
+   * 來源：
+   * - TypeScript type system
+   *
+   * 用法：
+   * - `K` 只能是 `seller_status | tracking_number | shipping_note`
+   * - 可用一個 helper 安全更新不同欄位，避免每個 input 都各寫一套 setter
+   */
   function updateFulfillmentForm<K extends keyof SellerFulfillmentFormState>(field: K, value: SellerFulfillmentFormState[K]) {
     setFulfillmentForm((current) => ({ ...current, [field]: value }))
   }
 
   async function handleUpdateFulfillment(event: React.FormEvent<HTMLFormElement>) {
+    /**
+     * `FormEvent<HTMLFormElement>` 來自 React 型別定義。
+     * `preventDefault()` 會阻止瀏覽器原生 form submit 導頁。
+     */
     event.preventDefault()
     setFulfillmentSubmitting(true)
     setFulfillmentMessage('')
@@ -67,15 +96,15 @@ export default function SellerOrderDetailPage() {
       })
       setFulfillmentMessageType('success')
       if ((payload.seller_status ?? fulfillmentForm.seller_status) === 'completed') {
-        setFulfillmentMessage('已直接標記完成。')
+        setFulfillmentMessage('訂單已更新為完成。')
       } else if ((payload.seller_status ?? fulfillmentForm.seller_status) === 'pending_shipment') {
-        setFulfillmentMessage('已改回待出貨。')
+        setFulfillmentMessage('訂單已更新為待出貨。')
       } else {
-        setFulfillmentMessage('出貨狀態已更新。')
+        setFulfillmentMessage('履約資訊已更新。')
       }
     } catch (err) {
       setFulfillmentMessageType('error')
-      setFulfillmentMessage(err instanceof Error ? err.message : '更新出貨狀態失敗。')
+      setFulfillmentMessage(err instanceof Error ? err.message : '更新履約資訊失敗。')
     } finally {
       setFulfillmentSubmitting(false)
     }
@@ -113,11 +142,11 @@ export default function SellerOrderDetailPage() {
                 <div>
                   {order.pickup_store_brand_label ?? order.pickup_store_brand} / {order.pickup_store_name}
                 </div>
-                <div className="muted">門市代碼：{order.pickup_store_code || '-'}</div>
+                <div className="muted">門市代號：{order.pickup_store_code || '-'}</div>
                 <div className="muted">門市地址：{order.pickup_store_address || '-'}</div>
               </>
             ) : (
-              <div className="muted">這張訂單尚未收到超商門市資料。</div>
+              <div className="muted">這筆訂單尚未選擇超商門市。</div>
             )}
           </section>
         ) : (
@@ -135,7 +164,7 @@ export default function SellerOrderDetailPage() {
                 </div>
               </>
             ) : (
-              <div className="muted">這張訂單沒有收件地址。</div>
+              <div className="muted">這筆訂單沒有收件資訊。</div>
             )}
           </section>
         )}
@@ -152,7 +181,7 @@ export default function SellerOrderDetailPage() {
       <section className="card stack">
         <h2>商品明細</h2>
         {!order?.items?.length ? (
-          <div className="muted">這張訂單沒有商品資料。</div>
+          <div className="muted">這筆訂單沒有商品明細。</div>
         ) : (
           <table className="table">
             <thead>
@@ -180,8 +209,8 @@ export default function SellerOrderDetailPage() {
       </section>
 
       <section className="card stack">
-        <h2>出貨操作</h2>
-        <div className="muted">標記出貨後，買家端才會出現完成訂單按鈕。sandbox 測試需要時，仍可直接標記為已完成。</div>
+        <h2>履約操作</h2>
+        <div className="muted">標記出貨後，買家端會出現完成訂單按鈕。sandbox 測試仍可直接標記為完成。</div>
         {fulfillmentMessage ? <div className={fulfillmentMessageType === 'success' ? 'notice success' : 'notice'}>{fulfillmentMessage}</div> : null}
         <form className="stack" onSubmit={handleUpdateFulfillment}>
           <label className="stack">
@@ -189,7 +218,7 @@ export default function SellerOrderDetailPage() {
             <select value={fulfillmentForm.seller_status} onChange={(event) => updateFulfillmentForm('seller_status', event.target.value)}>
               <option value="pending_shipment">待出貨</option>
               <option value="shipped">已出貨</option>
-              <option value="completed">已完成（測試用）</option>
+              <option value="completed">已完成</option>
             </select>
           </label>
           <label className="stack">
@@ -210,7 +239,7 @@ export default function SellerOrderDetailPage() {
             />
           </label>
           <button className="btn-primary" disabled={fulfillmentSubmitting} type="submit">
-            {fulfillmentSubmitting ? '儲存中...' : '儲存出貨狀態'}
+            {fulfillmentSubmitting ? '儲存中...' : '儲存履約狀態'}
           </button>
         </form>
         {order?.shipped_at_display ? <div className="muted">出貨時間：{order.shipped_at_display}</div> : null}

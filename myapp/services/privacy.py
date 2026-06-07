@@ -1,3 +1,9 @@
+"""隱私相關 helper。
+
+目前主要提供公開頁面作者名稱的去識別化處理，讓評論、問答、社群等
+模組可以共用一致的顯示規則。
+"""
+
 from __future__ import annotations
 
 import re
@@ -8,6 +14,7 @@ ENGLISH_NAME_RE = re.compile(r"^[A-Za-z]+(?:\s+[A-Za-z]+)*$")
 
 
 def anonymize_public_name(name: str) -> str:
+    # 公開頁面顯示作者名稱時，依資料型態選擇不同遮罩規則。
     normalized = (name or "").strip()
     if not normalized:
         return ""

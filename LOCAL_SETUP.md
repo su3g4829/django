@@ -36,8 +36,7 @@ cd store
 ## 3. 建立 Python 虛擬環境
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+..\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
@@ -60,7 +59,7 @@ cd ..
 - `store/.env`
 - `frontend/.env.local`
 - `db.sqlite3`
-- `.venv/`
+- `../Scripts/` (parent Python virtual environment)
 
 所以換機後需要自己建立。
 
@@ -110,7 +109,7 @@ DJANGO_ALLOWED_HOSTS=127.0.0.1,localhost,testserver
 首次在新電腦啟動時，先跑：
 
 ```powershell
-.\.venv\Scripts\python.exe manage.py migrate
+..\Scripts\python.exe manage.py migrate
 ```
 
 這會建立 Django 自己需要的基本資料表。
@@ -118,7 +117,7 @@ DJANGO_ALLOWED_HOSTS=127.0.0.1,localhost,testserver
 ## 7. 啟動後端
 
 ```powershell
-.\.venv\Scripts\python.exe manage.py runserver 127.0.0.1:8000
+..\Scripts\python.exe manage.py runserver 127.0.0.1:8000
 ```
 
 後端網址：
@@ -196,8 +195,7 @@ npm run dev
 ```powershell
 git clone <你的-repo-url>
 cd store
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+..\Scripts\Activate.ps1
 pip install -r requirements.txt
 Copy-Item frontend\.env.example frontend\.env.local
 ```
@@ -205,8 +203,8 @@ Copy-Item frontend\.env.example frontend\.env.local
 手動建立 `store/.env` 後繼續：
 
 ```powershell
-.\.venv\Scripts\python.exe manage.py migrate
-.\.venv\Scripts\python.exe manage.py runserver 127.0.0.1:8000
+..\Scripts\python.exe manage.py migrate
+..\Scripts\python.exe manage.py runserver 127.0.0.1:8000
 ```
 
 另開終端：

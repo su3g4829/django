@@ -30,7 +30,6 @@ from ..services import cart as cart_service
 from ..services import community as community_service
 from ..services import customer_center
 from ..services import newebpay_logistics_real as newebpay_logistics_real_service
-from ..services import newebpay_payment as newebpay_payment_service
 from ..services import newebpay_payment_real as newebpay_payment_real_service
 from ..services import orders as order_service
 from ..services import personalization as personalization_service
@@ -151,19 +150,44 @@ def _can_manage_community_post(user: Dict[str, Any] | None, post: Dict[str, Any]
 def _serialize_community_post(post: Dict[str, Any], request) -> Dict[str, Any]:
     """補上前端控制編輯 / 刪除按鈕所需欄位。"""
     item = dict(post)
-    can_manage = _can_manage_community_post(get_demo_user(request), item)
+    current_user = get_demo_user(request)
+    can_manage = _can_manage_community_post(current_user, item)
     item["can_edit"] = can_manage
     item["can_delete"] = can_manage
+    voted_post_ids = community_service.list_voted_post_ids(
+        username=(current_user or {}).get("username"),
+        user_id=(current_user or {}).get("id"),
+    )
+    item["has_voted"] = int(item.get("id", 0) or 0) in voted_post_ids
     return item
 
 
 def _serialize_community_posts(posts: Iterable[Dict[str, Any]], request) -> list[Dict[str, Any]]:
     """批次整理文章列表資料。"""
-    return [_serialize_community_post(post, request) for post in posts]
+    current_user = get_demo_user(request)
+    voted_post_ids = community_service.list_voted_post_ids(
+        username=(current_user or {}).get("username"),
+        user_id=(current_user or {}).get("id"),
+    )
+    items = []
+    for post in posts:
+        item = dict(post)
+        can_manage = _can_manage_community_post(current_user, item)
+        item["can_edit"] = can_manage
+        item["can_delete"] = can_manage
+        item["has_voted"] = int(item.get("id", 0) or 0) in voted_post_ids
+        items.append(item)
+    return items
 
 
 def _build_product_list_payload(request, params: Dict[str, Any]) -> Dict[str, Any]:
-    """依查詢條件建立商品列表回應。"""
+    """依查詢條件建立商品列表回應。
+
+    這裡集中處理三件事：
+    - query string 正規化
+    - 商品篩選 / 排序 / 分頁
+    - 前端需要的 `facets` 與 `filters` 回顯
+    """
     page = int(params.get("page") or 1)
     q = str(params.get("q") or "").strip().lower()
     category = str(params.get("category") or "").strip().lower()
@@ -175,6 +199,7 @@ def _build_product_list_payload(request, params: Dict[str, Any]) -> Dict[str, An
     min_price = _parse_decimal(params.get("min_price"))
     max_price = _parse_decimal(params.get("max_price"))
 
+    # 先取整份公開商品清單，facets 需要基於完整集合計算，不能只看分頁後結果。
     products = product_management.list_public_products()
     filtered = product_management.filter_products(
         products,
@@ -188,6 +213,7 @@ def _build_product_list_payload(request, params: Dict[str, Any]) -> Dict[str, An
         size=size,
     )
     ordered = product_management.sort_products(filtered, sort)
+    # 分頁在 API 層做切片，讓 service 專注於資料篩選與排序。
     total_items = len(ordered)
     total_pages = max(1, (total_items + PAGE_SIZE - 1) // PAGE_SIZE)
     safe_page = min(max(page, 1), total_pages)
@@ -233,6 +259,7 @@ def _build_cart_response(session, detail: str = "", *, shipping_method: str = ""
     items = []
     for raw_item in cart.get("items", {}).values():
         item = dict(raw_item)
+        # 舊資料可能缺少這些展示欄位，這裡補預設值讓前端不用再做 defensive code。
         item.setdefault("key", cart_service.make_item_key(item.get("slug", ""), item.get("variant_id", "")))
         item.setdefault("display_name", item.get("name", ""))
         item["line_total"] = round(float(item["price"]) * int(item["qty"]), 2)
@@ -303,6 +330,7 @@ def _build_checkout_preview_payload(request) -> Dict[str, Any]:
     except ValueError as exc:
         payload["detail"] = str(exc)
         payload["seller_shipping_groups"] = []
+    # checkout 頁希望一次拿齊地址、發票與選項資料，避免頁面載入後再追多支 API。
     addresses = customer_center.list_addresses(user["username"]) if user else []
     default_address = customer_center.get_default_address(user["username"]) if user else None
     payload["addresses"] = addresses
@@ -607,7 +635,14 @@ def _owned_product_or_404(user: Dict[str, str], slug: str) -> Dict[str, Any] | R
 
 
 def _admin_or_owned_product_or_404(user: Dict[str, str], slug: str) -> Dict[str, Any] | Response:
-    """Return any product for admins, or only owned products for sellers."""
+    """依目前角色取得可管理的商品。
+
+    規則：
+    - 管理者可讀任意商品
+    - 賣家只能讀自己的商品
+
+    找不到時直接回傳統一的 404 Response，讓下游 view 不必重複判斷。
+    """
     if auth_demo.is_admin(user):
         product = product_management.get_product_for_admin(slug)
     else:
@@ -751,10 +786,19 @@ class ProductQuestionsApi(APIView):
 
     def get(self, request, slug: str):
         """處理問答列表查詢。"""
-        product = _product_or_404(slug, get_demo_user(request))
+        current_user = get_demo_user(request)
+        product = _product_or_404(slug, current_user)
         if isinstance(product, Response):
             return product
-        return Response({"items": question_service.list_questions(product["id"])})
+        return Response(
+            {
+                "items": question_service.list_questions(
+                    product["id"],
+                    viewer_username=(current_user or {}).get("username"),
+                    viewer_user_id=(current_user or {}).get("id"),
+                )
+            }
+        )
 
     def post(self, request, slug: str):
         """處理新增問題。"""
@@ -776,7 +820,7 @@ class ProductQuestionsApi(APIView):
             )
         except ValueError as exc:
             return _error(str(exc))
-        items = question_service.list_questions(product["id"])
+        items = question_service.list_questions(product["id"], viewer_username=user["username"], viewer_user_id=user["id"])
         created = next((item for item in items if item["id"] == question["id"]), question)
         return Response(created, status=status.HTTP_201_CREATED)
 
@@ -813,7 +857,15 @@ class ProductAnswersApi(APIView):
         except ValueError as exc:
             return _error(str(exc), status.HTTP_404_NOT_FOUND if "not found" in str(exc).lower() else status.HTTP_400_BAD_REQUEST)
         updated = next(
-            (item for item in question_service.list_questions(product["id"]) if item["id"] == question_id),
+            (
+                item
+                for item in question_service.list_questions(
+                    product["id"],
+                    viewer_username=user["username"],
+                    viewer_user_id=user["id"],
+                )
+                if item["id"] == question_id
+            ),
             None,
         )
         if not updated:
@@ -1058,11 +1110,12 @@ class CommunityVoteApi(APIView):
 
     def post(self, request, post_id: int):
         """處理文章投票。"""
+        user = get_demo_user(request)
         try:
-            post = community_service.upvote_post(post_id)
+            post = community_service.upvote_post(post_id, username=user["username"], user_id=user["id"])
         except ValueError as exc:
             return _error(str(exc), status.HTTP_404_NOT_FOUND)
-        return Response({"id": post["id"], "votes": post["votes"]})
+        return Response({"id": post["id"], "votes": post["votes"], "has_voted": True})
 
 
 # ---------------------------------------------------------------------------
@@ -1481,37 +1534,6 @@ class BuyerNewebpayPaymentApi(APIView):
         return Response(record)
 
 
-# ---------------------------------------------------------------------------
-# NewebPay payment callbacks / return
-# 這一段只負責接收與轉交藍新資料，不應自行捏造付款方式或交易序號。
-# ---------------------------------------------------------------------------
-class NewebpayPaymentCallbackApi(APIView):
-    """藍新支付 mock callback 測試入口。
-
-    用途：
-    - 這支不是正式藍新 MPG callback
-    - 主要供本地 / 測試流程手動模擬支付結果
-    """
-
-    permission_classes = [AllowAny]
-    authentication_classes: list = []
-
-    def post(self, request):
-        """模擬藍新支付以 callback/webhook 回傳交易狀態。"""
-        payload = _validated(sz.NewebpayPaymentCallbackSerializer, request.data)
-        try:
-            record = newebpay_payment_service.handle_payment_callback(
-                trade_no=str(payload["trade_no"]),
-                status_value=str(payload["status"]),
-                paid_amount=str(payload.get("paid_amount", "")),
-                result_message=str(payload.get("result_message", "")),
-                raw_payload=dict(request.data),
-            )
-        except ValueError as exc:
-            return _error(str(exc), status.HTTP_404_NOT_FOUND)
-        return Response({"detail": "NewebPay payment mock callback processed.", "record": record})
-
-
 class SellerOrdersApi(APIView):
     """提供賣家訂單列表的 API。
 
@@ -1635,6 +1657,13 @@ class NewebpaySandboxPaymentReturnApi(APIView):
     authentication_classes: list = []
 
     def _redirect_url(self, order_id: int | None, query: Dict[str, str]) -> str:
+        """組出支付完成後要導回前端的訂單頁網址。
+
+        規則：
+        - 有 `STORE_FRONTEND_ORIGIN` 時，優先導回前端正式網址
+        - 能解析出 `order_id` 時，直接落到單筆訂單頁
+        - 否則退回訂單列表頁
+        """
         frontend_origin = (os.getenv("STORE_FRONTEND_ORIGIN", "") or "").rstrip("/")
         if frontend_origin and order_id:
             base = f"{frontend_origin}/orders/{order_id}"
@@ -1646,6 +1675,12 @@ class NewebpaySandboxPaymentReturnApi(APIView):
         return f"{base}?{suffix}" if suffix else base
 
     def _handle(self, raw_payload: Dict[str, Any]) -> HttpResponseRedirect:
+        """處理藍新前台 return 的共用主流程。
+
+        這裡同時被 GET / POST 共用，目的有兩個：
+        - 把不同來源的 payload 正規化成同一套欄位
+        - 無論成功或失敗，都回傳可讓瀏覽器前往前端頁面的 redirect
+        """
         required = {
             "Status": str(raw_payload.get("Status", "")),
             "MerchantID": str(raw_payload.get("MerchantID", "")),
@@ -1656,6 +1691,8 @@ class NewebpaySandboxPaymentReturnApi(APIView):
             return HttpResponseRedirect(self._redirect_url(None, {"payment_callback": "invalid"}))
 
         try:
+            # 前台 return 雖然是瀏覽器導回，但仍走與 NotifyURL 類似的驗證 / 解密流程，
+            # 避免前後台對同一筆付款看到不同結果。
             record = newebpay_payment_real_service.handle_callback(
                 status=required["Status"],
                 merchant_id=required["MerchantID"],
@@ -1849,6 +1886,13 @@ class AdminOrderPaymentDebugApi(APIView):
     permission_classes = [IsAdminDemoUser]
 
     def get(self, request, order_id: int):
+        """讀取單筆訂單的付款 debug 資料。
+
+        staff 會用這份 payload 對照：
+        - prepare 階段送出了什麼
+        - callback / return 回來了什麼
+        - query fallback 是否補到狀態
+        """
         try:
             payload = newebpay_payment_real_service.get_payment_debug(order_id)
         except ValueError as exc:
@@ -1921,6 +1965,7 @@ class AdminProductsApi(APIView):
     permission_classes = [IsAdminDemoUser]
 
     def get(self, request):
+        """回傳平台視角的商品管理列表。"""
         params = _validated(sz.AdminProductsQuerySerializer, request.query_params)
         items = admin_portal.list_admin_products(
             q=str(params.get("q", "")),
@@ -1930,6 +1975,25 @@ class AdminProductsApi(APIView):
             owner=str(params.get("owner", "")),
         )
         return Response({"items": items})
+
+
+class AdminProductPriceCompareSettingsApi(APIView):
+    """提供管理者更新單一商品的比價設定。"""
+
+    permission_classes = [IsAdminDemoUser]
+
+    def post(self, request, slug: str):
+        """更新商品的比價開關與搜尋關鍵字。"""
+        payload = _validated(sz.ProductPriceCompareSettingsSerializer, request.data)
+        try:
+            product = product_management.admin_update_price_compare_settings(
+                slug,
+                enabled=bool(payload.get("enabled", False)),
+                query=str(payload.get("query", "")),
+            )
+        except ValueError as exc:
+            return _error(str(exc), status.HTTP_404_NOT_FOUND)
+        return Response({"detail": "商品比價設定已更新。", "product": product})
 
 
 class AdminProductCategoriesApi(APIView):
@@ -1981,6 +2045,7 @@ class AdminProductPublishApi(APIView):
     permission_classes = [IsAdminDemoUser]
 
     def post(self, request, slug: str):
+        """將指定商品強制改為上架狀態。"""
         payload = _validated(sz.ProductForceArchiveSerializer, request.data)
         try:
             product = product_management.admin_publish_product(slug, note=str(payload.get("note", "")))
@@ -2005,6 +2070,7 @@ class AdminProductDeleteApi(APIView):
     permission_classes = [IsAdminDemoUser]
 
     def delete(self, request, slug: str):
+        """由平台管理者直接刪除商品。"""
         try:
             product_management.admin_delete_product(slug)
         except ValueError as exc:
@@ -2029,6 +2095,7 @@ class AdminReviewsApi(APIView):
     permission_classes = [IsAdminDemoUser]
 
     def get(self, request):
+        """回傳平台評論管理列表。"""
         params = _validated(sz.AdminReviewsQuerySerializer, request.query_params)
         items = admin_portal.list_admin_reviews(
             q=str(params.get("q", "")),
@@ -2074,6 +2141,7 @@ class AdminQuestionsApi(APIView):
     permission_classes = [IsAdminDemoUser]
 
     def get(self, request):
+        """回傳平台問答管理列表。"""
         params = _validated(sz.AdminQuestionsQuerySerializer, request.query_params)
         items = admin_portal.list_admin_questions(
             q=str(params.get("q", "")),
@@ -2119,6 +2187,7 @@ class AdminPostsApi(APIView):
     permission_classes = [IsAdminDemoUser]
 
     def get(self, request):
+        """回傳平台社群文章管理列表。"""
         params = _validated(sz.AdminPostsQuerySerializer, request.query_params)
         items = admin_portal.list_admin_posts(
             q=str(params.get("q", "")),
@@ -2665,6 +2734,7 @@ class BuyerCheckoutStoreSelectionApi(APIView):
         selection_token = str(request.query_params.get("token", "")).strip()
         if not selection_token:
             return _error("Missing store-map token.")
+        # callback 先把門市結果落地，checkout 回來後再用 token 查詢，避免直接信任前端 query string。
         record = newebpay_logistics_real_service.get_store_selection(selection_token, user["username"])
         if not record:
             return _error("Store-map selection not found.", status.HTTP_404_NOT_FOUND)
@@ -2709,7 +2779,7 @@ class NewebpayStoreMapReturnRelayView(APIView):
     authentication_classes: list = []
 
     def get(self, request, selection_token: str):
-        """Redirect NewebPay back to the final frontend checkout URL."""
+        """把藍新返回的 backend relay URL 再導回前端 checkout 頁。"""
         return HttpResponseRedirect(newebpay_logistics_real_service.get_store_map_client_return_url(selection_token))
 
 
@@ -2731,7 +2801,11 @@ class SellerProductsApi(APIView):
     permission_classes = [IsSellerOrAdminDemoUser]
 
     def get(self, request):
-        """回傳賣家商品列表。"""
+        """回傳賣家商品列表與可用狀態選單。
+
+        `status_choices` 會跟著目前使用者角色變化，
+        讓賣家端與管理端共用同一份頁面時仍能顯示正確操作選項。
+        """
         user = get_demo_user(request)
         return Response(
             {
@@ -2743,6 +2817,7 @@ class SellerProductsApi(APIView):
     def post(self, request):
         """建立賣家商品。"""
         user = get_demo_user(request)
+        # 商品建立仍同時支援 multipart 與 JSON，先轉成 service 可共用的 payload。
         payload = _payload_from_request(request)
         files = request.FILES.getlist("images")
         try:
@@ -2780,6 +2855,7 @@ class SellerProductDetailApi(APIView):
         payload = _payload_from_request(request)
         files = request.FILES.getlist("images")
         try:
+            # 管理者可代替賣家編修商品，所以依角色切到不同 service 入口。
             if auth_demo.is_admin(user):
                 product = product_management.admin_update_product(user, slug, payload, uploaded_files=files)
             else:
@@ -2913,7 +2989,16 @@ class SellerRequestReviewApi(APIView):
 
 
 class AdminProductArchiveApi(APIView):
-    """提供管理者強制下架商品的 API。"""
+    """提供管理者強制下架商品的 API。
+
+    前端使用頁面：
+    - staff 商品管理頁
+    - staff 審核中心
+
+    功能：
+    - 平台可直接把指定商品改為下架 / 封存
+    - 可附帶管理備註，供後續審核追蹤
+    """
 
     permission_classes = [IsAdminDemoUser]
 

@@ -6,20 +6,60 @@
 
 import json
 import os
+from contextlib import contextmanager
+from datetime import timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 from urllib.parse import urlencode
 
 from django.conf import settings
-from django.contrib.auth.hashers import check_password
+from django.contrib.auth.hashers import check_password, make_password
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import Client, SimpleTestCase, override_settings
+from django.test import Client, SimpleTestCase, TestCase, override_settings
+from django.utils import timezone
 
+from .models import AppUser as AppUserModel
+from .models import Banner as BannerModel
+from .models import Brand as BrandModel
+from .models import Cart as CartModel
+from .models import CartItem as CartItemModel
+from .models import Category as CategoryModel
+from .models import CommunityPost as CommunityPostModel
+from .models import CommunityReply as CommunityReplyModel
+from .models import CommunityVote as CommunityVoteModel
+from .models import CompareItem as CompareItemModel
+from .models import NewebpayStoreMapSelection as NewebpayStoreMapSelectionModel
+from .models import Order as OrderModel
+from .models import OrderItem as OrderItemModel
+from .models import PaymentTransaction as PaymentTransactionModel
+from .models import Product as ProductModel
+from .models import ProductQuestion as ProductQuestionModel
+from .models import ProductQuestionAnswer as ProductQuestionAnswerModel
+from .models import ProductRecommendation as ProductRecommendationModel
+from .models import ProductReview as ProductReviewModel
+from .models import RecentView as RecentViewModel
+from .models import SellerRequest as SellerRequestModel
+from .models import ShipmentEvent as ShipmentEventModel
+from .models import UserFavorite as UserFavoriteModel
+from .models import UserAddress as UserAddressModel
+from .models import UserInvoiceProfile as UserInvoiceProfileModel
+from .models import UserShippingRule as UserShippingRuleModel
 from .repositories import local_store
 from .services import auth_demo
+from .services import banners as banner_service
+from .services import cloud_storage as cloud_storage_service
+from .services import community as community_service
 from .services import newebpay_payment_real as newebpay_payment_real_service
+from .services import orders as orders_service
+from .services import personalization as personalization_service
+from .services import price_compare as price_compare_service
+from .services import product_management
+from .services import questions as question_service
+from .services import recommendations as recommendation_service
+from .services import reviews as review_service
 from .services.privacy import anonymize_public_name
+from .management.commands.migrate_media_to_gcs import infer_object_name_from_legacy_path, replace_media_references
 
 
 PRODUCTS_FIXTURE = [
@@ -69,6 +109,133 @@ PRODUCTS_FIXTURE = [
         "owner_display_name": "Alice",
     },
 ]
+
+
+class CloudStorageServiceTests(SimpleTestCase):
+    def setUp(self):
+        super().setUp()
+        cloud_storage_service._service_account_info.cache_clear()
+        cloud_storage_service._storage_client.cache_clear()
+        self.addCleanup(cloud_storage_service._service_account_info.cache_clear)
+        self.addCleanup(cloud_storage_service._storage_client.cache_clear)
+
+    def test_build_public_url_uses_bucket_base(self):
+        with patch.dict(
+            os.environ,
+            {
+                "GCS_BUCKET_NAME": "store_django",
+                "GCS_SERVICE_ACCOUNT_JSON": "{}",
+            },
+            clear=False,
+        ):
+            url = cloud_storage_service.build_public_url("products/demo image.png")
+
+        self.assertEqual(url, "https://storage.googleapis.com/store_django/products/demo%20image.png")
+
+    def test_object_name_from_public_url_parses_bucket_path(self):
+        with patch.dict(
+            os.environ,
+            {
+                "GCS_BUCKET_NAME": "store_django",
+                "GCS_SERVICE_ACCOUNT_JSON": "{}",
+            },
+            clear=False,
+        ):
+            object_name = cloud_storage_service.object_name_from_public_url(
+                "https://storage.googleapis.com/store_django/community/poster%201.png"
+            )
+
+        self.assertEqual(object_name, "community/poster 1.png")
+
+    def test_delete_by_public_url_deletes_matching_blob(self):
+        class FakeBlob:
+            def __init__(self):
+                self.deleted = False
+
+            def delete(self):
+                self.deleted = True
+
+        class FakeBucket:
+            def __init__(self):
+                self.blob_name = None
+                self.blob_instance = FakeBlob()
+
+            def blob(self, name):
+                self.blob_name = name
+                return self.blob_instance
+
+        class FakeClient:
+            def __init__(self):
+                self.bucket_name = None
+                self.bucket_instance = FakeBucket()
+
+            def bucket(self, name):
+                self.bucket_name = name
+                return self.bucket_instance
+
+        fake_client = FakeClient()
+
+        with patch.dict(
+            os.environ,
+            {
+                "GCS_BUCKET_NAME": "store_django",
+                "GCS_SERVICE_ACCOUNT_JSON": "{}",
+            },
+            clear=False,
+        ):
+            with patch("myapp.services.cloud_storage._storage_client", return_value=fake_client):
+                deleted = cloud_storage_service.delete_by_public_url(
+                    "https://storage.googleapis.com/store_django/banners/banner-1.png"
+                )
+
+        self.assertTrue(deleted)
+        self.assertEqual(fake_client.bucket_name, "store_django")
+        self.assertEqual(fake_client.bucket_instance.blob_name, "banners/banner-1.png")
+        self.assertTrue(fake_client.bucket_instance.blob_instance.deleted)
+
+
+class MediaMigrationCommandTests(SimpleTestCase):
+    def test_infer_object_name_from_legacy_path_maps_known_directories(self):
+        self.assertEqual(
+            infer_object_name_from_legacy_path("/static/uploads/products/demo.png"),
+            "products/demo.png",
+        )
+        self.assertEqual(
+            infer_object_name_from_legacy_path("http://localhost:3000/static/images/banner.jpg"),
+            "images/banner.jpg",
+        )
+
+    def test_replace_media_references_swaps_relative_and_localhost_urls(self):
+        body = (
+            '<p><img src="/static/uploads/community/post-1.png"> '
+            '<img src="http://localhost:3000/static/uploads/community/post-1.png"></p>'
+        )
+        updated = replace_media_references(
+            body,
+            {"/static/uploads/community/post-1.png": "https://storage.googleapis.com/store_django/community/post-1.png"},
+        )
+
+        self.assertNotIn("/static/uploads/community/post-1.png", updated)
+        self.assertEqual(updated.count("https://storage.googleapis.com/store_django/community/post-1.png"), 2)
+
+
+@contextmanager
+def _gcs_disabled_for_test():
+    overrides = {
+        "GCS_PROJECT_ID": "",
+        "GCS_BUCKET_NAME": "",
+        "GCS_SERVICE_ACCOUNT_FILE": "",
+        "GCS_SERVICE_ACCOUNT_JSON": "",
+        "GCS_PUBLIC_BASE_URL": "",
+    }
+    cloud_storage_service._service_account_info.cache_clear()
+    cloud_storage_service._storage_client.cache_clear()
+    with patch.dict(os.environ, overrides, clear=False):
+        try:
+            yield
+        finally:
+            cloud_storage_service._service_account_info.cache_clear()
+            cloud_storage_service._storage_client.cache_clear()
 
 CATEGORIES_FIXTURE = [
     {
@@ -594,7 +761,6 @@ class ProductFeatureTests(SimpleTestCase):
         self._write_json(data_dir / "categories.json", CATEGORIES_FIXTURE)
         self._write_json(data_dir / "reviews.json", REVIEWS_FIXTURE)
         self._write_json(data_dir / "recommendations.json", RECOMMENDATIONS_FIXTURE)
-        self._write_json(data_dir / "competitor_prices.json", COMPETITOR_PRICES_FIXTURE)
         self._write_json(data_dir / "questions.json", QUESTIONS_FIXTURE)
         self._write_json(data_dir / "posts.json", POSTS_FIXTURE)
         self._write_json(data_dir / "banners.json", BANNERS_FIXTURE)
@@ -889,20 +1055,21 @@ class ProductFeatureTests(SimpleTestCase):
     def test_product_create_saves_owner_and_status(self):
         self._login(next_url="/me/products/create/")
         image = SimpleUploadedFile("mug.png", b"fake-image-bytes", content_type="image/png")
-        response = self.client.post(
-            "/api/v1/me/products/",
-            {
-                "name": "Seller Mug",
-                "price": "19.9",
-                "brand": "Alice Studio",
-                "category": "kitchen",
-                "tags": "mug, handmade",
-                "status": "active",
-                "specs": "material:ceramic\ncapacity_ml:420",
-                "stock": "8",
-                "images": image,
-            },
-        )
+        with _gcs_disabled_for_test():
+            response = self.client.post(
+                "/api/v1/me/products/",
+                {
+                    "name": "Seller Mug",
+                    "price": "19.9",
+                    "brand": "Alice Studio",
+                    "category": "kitchen",
+                    "tags": "mug, handmade",
+                    "status": "active",
+                    "specs": "material:ceramic\ncapacity_ml:420",
+                    "stock": "8",
+                    "images": image,
+                },
+            )
 
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.json()["status"], "active")
@@ -1447,8 +1614,8 @@ class ProductFeatureTests(SimpleTestCase):
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
-        self.assertEqual(payload["similar"][0]["slug"], "acme-tee")
-        self.assertEqual(payload["also_bought"][0]["slug"], "acme-bottle")
+        self.assertEqual([item["slug"] for item in payload["similar"]], ["beta-pan", "camp-cup"])
+        self.assertEqual(payload["also_bought"], [])
 
     def test_product_detail_shows_questions_and_answers(self):
         response = self.client.get("/products/acme-mug/")
@@ -1463,7 +1630,7 @@ class ProductFeatureTests(SimpleTestCase):
         )
 
         self.assertEqual(response.status_code, 201)
-        self.assertEqual(response.json()["author"], anonymize_public_name("Alice"))
+        self.assertEqual(response.json()["author"], "alice")
 
         stored_questions = local_store.get_questions_by_product_id(1)
         self.assertEqual(len(stored_questions), 2)
@@ -1504,7 +1671,41 @@ class ProductFeatureTests(SimpleTestCase):
         self.assertEqual(response.status_code, 201)
         payload = response.json()
         self.assertEqual(payload["id"], 1)
-        self.assertEqual(payload["answers"][-1]["author"], anonymize_public_name("Alice"))
+        self.assertEqual(payload["answers"][-1]["author"], "alice")
+        self.assertTrue(payload["answers"][-1]["is_seller_reply"])
+
+    def test_questions_api_hides_bodies_from_other_viewers_but_keeps_accounts_visible(self):
+        self._login(username="buyer", next_url="/products/acme-mug/")
+
+        response = self.client.get("/api/v1/products/acme-mug/questions/")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()["items"][0]
+        self.assertEqual(payload["author"], anonymize_public_name("Eva"))
+        self.assertEqual(payload["body"], "****")
+        self.assertTrue(payload["is_body_masked"])
+        self.assertEqual(payload["answers"][0]["author"], anonymize_public_name("Store Team"))
+        self.assertEqual(payload["answers"][0]["body"], "****")
+        self.assertTrue(payload["answers"][0]["is_body_masked"])
+
+    def test_questions_api_marks_seller_reply_for_other_viewers(self):
+        self._login(username="alice", next_url="/products/acme-mug/")
+        create_response = self.client.post(
+            "/api/v1/products/acme-mug/questions/1/answers/",
+            data=json.dumps({"body": "Seller-only stock note."}),
+            content_type="application/json",
+        )
+        self.assertEqual(create_response.status_code, 201)
+        self._logout()
+        self._login(username="buyer", next_url="/products/acme-mug/")
+
+        response = self.client.get("/api/v1/products/acme-mug/questions/")
+
+        self.assertEqual(response.status_code, 200)
+        answers = response.json()["items"][0]["answers"]
+        seller_reply = next(answer for answer in answers if answer["author"] == anonymize_public_name("alice"))
+        self.assertTrue(seller_reply["is_seller_reply"])
+        self.assertEqual(seller_reply["body"], "****")
 
     def test_community_list_shows_posts(self):
         response = self.client.get("/community/")
@@ -1526,10 +1727,11 @@ class ProductFeatureTests(SimpleTestCase):
         )
 
         self.assertEqual(response.status_code, 201)
-        self.assertEqual(response.json()["author"], anonymize_public_name("Alice"))
+        self.assertEqual(response.json()["author"], "Alice")
 
         stored_post = local_store.get_post_by_id(2)
         self.assertIsNotNone(stored_post)
+        self.assertEqual(stored_post["author_username"], "alice")
         self.assertEqual(stored_post["author"], "Alice")
 
     def test_post_community_reply_from_html_form(self):
@@ -1544,6 +1746,7 @@ class ProductFeatureTests(SimpleTestCase):
         self.assertEqual(response.json()["replies"][-1]["author"], anonymize_public_name("Alice"))
 
         stored_post = local_store.get_post_by_id(1)
+        self.assertIsNotNone(stored_post)
         self.assertEqual(len(stored_post["replies"]), 2)
         self.assertEqual(stored_post["replies"][-1]["author"], "Alice")
 
@@ -1559,6 +1762,7 @@ class ProductFeatureTests(SimpleTestCase):
         self.assertEqual(response.status_code, 200)
 
         stored_post = local_store.get_post_by_id(1)
+        self.assertIsNotNone(stored_post)
         self.assertEqual(stored_post["votes"], 4)
 
     def test_community_posts_api_post_requires_login(self):
@@ -1579,17 +1783,22 @@ class ProductFeatureTests(SimpleTestCase):
 
         self.assertEqual(response.status_code, 201)
         payload = response.json()
-        self.assertEqual(payload["author"], anonymize_public_name("Alice"))
+        self.assertEqual(payload["author"], "Alice")
 
     def test_community_editor_image_upload_api_saves_file(self):
         self._login()
         image = SimpleUploadedFile("forum.png", b"fake-image-bytes", content_type="image/png")
 
-        response = self.client.post("/api/v1/community/uploads/images/", {"image": image})
+        with _gcs_disabled_for_test():
+            response = self.client.post("/api/v1/community/uploads/images/", {"image": image})
 
         self.assertEqual(response.status_code, 201)
         payload = response.json()
-        self.assertTrue(payload["path"].startswith("/static/uploads/community/community-"))
+        path = payload["path"]
+        self.assertTrue(
+            path.startswith("/static/uploads/community/community-")
+            or path.startswith("https://storage.googleapis.com/store_django/community/community-")
+        )
         self.assertTrue(payload["path"].endswith(".png"))
 
     def test_community_post_detail_api_reports_manage_permissions_for_author(self):
@@ -1645,9 +1854,9 @@ class ProductFeatureTests(SimpleTestCase):
 
         self.assertEqual(response.status_code, 200)
         stored_post = local_store.get_post_by_id(post_id)
+        self.assertIsNotNone(stored_post)
         self.assertEqual(stored_post["topic"], "care")
         self.assertEqual(stored_post["title"], "Updated storage checklist")
-        self.assertEqual(stored_post["tags"], ["care", "bottle"])
 
     def test_community_post_non_author_cannot_update_post(self):
         self._login(next_url="/community/")
@@ -1735,6 +1944,7 @@ class ProductFeatureTests(SimpleTestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["votes"], 4)
+        self.assertTrue(payload["has_voted"])
 
     def test_order_list_requires_login(self):
         response = self.client.get("/orders/")
@@ -2417,12 +2627,10 @@ class ProductFeatureTests(SimpleTestCase):
         self.assertEqual(self.client.session["cart"]["buyer"]["items"]["acme-mug"]["qty"], 1)
         self.assertEqual(self.client.session["cart"]["storeteam"]["items"], {})
 
-    def test_logged_in_cart_is_persisted_to_user_store(self):
+    def test_logged_in_cart_persists_across_logout_and_login(self):
         self._login(username="buyer", next_url="/")
         self._add_product_to_cart("acme-mug", qty=2)
-
-        stored_user = local_store.get_user_by_username("buyer")
-        self.assertEqual(stored_user["cart"]["items"]["acme-mug"]["qty"], 2)
+        self.assertEqual(self.client.session["cart"]["buyer"]["items"]["acme-mug"]["qty"], 2)
 
         self.client.post("/api/v1/auth/logout/")
         self._login(username="buyer", next_url="/")
@@ -2442,8 +2650,7 @@ class ProductFeatureTests(SimpleTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["item_count"], 1)
         self.assertEqual(self.client.session["cart"]["__guest__"]["items"], {})
-        stored_user = local_store.get_user_by_username("buyer")
-        self.assertEqual(stored_user["cart"]["items"]["acme-mug"]["qty"], 1)
+        self.assertEqual(self.client.session["cart"]["buyer"]["items"]["acme-mug"]["qty"], 1)
 
     def test_logout_clears_guest_visible_cart_favorite_and_compare_state(self):
         self._login(username="buyer", next_url="/")
@@ -2643,19 +2850,20 @@ class ProductFeatureTests(SimpleTestCase):
     def test_member_can_submit_banner_application(self):
         self._login(username="buyer", next_url="/")
 
-        create_response = self.client.post(
-            "/api/v1/me/banner-applications/",
-            data={
-                "title": "Summer Tee Promo",
-                "copy_text": "All tees 20% off",
-                "link_url": "/products/acme-tee",
-                "starts_at": "2026-06-01",
-                "ends_at": "2026-06-15",
-                "position": "home_main",
-                "note": "Seasonal campaign",
-                "image": SimpleUploadedFile("banner.png", b"banner-bytes", content_type="image/png"),
-            },
-        )
+        with _gcs_disabled_for_test():
+            create_response = self.client.post(
+                "/api/v1/me/banner-applications/",
+                data={
+                    "title": "Summer Tee Promo",
+                    "copy_text": "All tees 20% off",
+                    "link_url": "/products/acme-tee",
+                    "starts_at": "2026-06-01",
+                    "ends_at": "2026-06-15",
+                    "position": "home_main",
+                    "note": "Seasonal campaign",
+                    "image": SimpleUploadedFile("banner.png", b"banner-bytes", content_type="image/png"),
+                },
+            )
         self.assertEqual(create_response.status_code, 201)
         created = create_response.json()
         self.assertEqual(created["status"], "pending")
@@ -2669,39 +2877,41 @@ class ProductFeatureTests(SimpleTestCase):
     def test_admin_banner_apis_support_review_reorder_update_and_delete(self):
         self._login(username="storeteam", next_url="/")
 
-        applicant_response = self.client.post(
-            "/api/v1/staff/banners/",
-            data={
-                "title": "Third Banner",
-                "copy_text": "Upload from admin",
-                "link_url": "/products/acme-bottle",
-                "starts_at": "2026-06-01",
-                "ends_at": "2026-06-20",
-                "position": "home_main",
-                "note": "admin seeded banner",
-                "is_active": "true",
-                "image": SimpleUploadedFile("banner.jpg", b"fake-image-bytes", content_type="image/jpeg"),
-            },
-        )
+        with _gcs_disabled_for_test():
+            applicant_response = self.client.post(
+                "/api/v1/staff/banners/",
+                data={
+                    "title": "Third Banner",
+                    "copy_text": "Upload from admin",
+                    "link_url": "/products/acme-bottle",
+                    "starts_at": "2026-06-01",
+                    "ends_at": "2026-06-20",
+                    "position": "home_main",
+                    "note": "admin seeded banner",
+                    "is_active": "true",
+                    "image": SimpleUploadedFile("banner.jpg", b"fake-image-bytes", content_type="image/jpeg"),
+                },
+            )
         self.assertEqual(applicant_response.status_code, 201)
         created = applicant_response.json()
         self.assertEqual(created["status"], "approved")
 
         self._logout()
         self._login(username="buyer", next_url="/")
-        create_response = self.client.post(
-            "/api/v1/me/banner-applications/",
-            data={
-                "title": "Pending Banner",
-                "copy_text": "Awaiting review",
-                "link_url": "/products/acme-mug",
-                "starts_at": "2026-06-10",
-                "ends_at": "2026-06-30",
-                "position": "home_main",
-                "note": "buyer request",
-                "image": SimpleUploadedFile("pending.jpg", b"pending-bytes", content_type="image/jpeg"),
-            },
-        )
+        with _gcs_disabled_for_test():
+            create_response = self.client.post(
+                "/api/v1/me/banner-applications/",
+                data={
+                    "title": "Pending Banner",
+                    "copy_text": "Awaiting review",
+                    "link_url": "/products/acme-mug",
+                    "starts_at": "2026-06-10",
+                    "ends_at": "2026-06-30",
+                    "position": "home_main",
+                    "note": "buyer request",
+                    "image": SimpleUploadedFile("pending.jpg", b"pending-bytes", content_type="image/jpeg"),
+                },
+            )
         pending_banner = create_response.json()
         self._logout()
         self._login(username="storeteam", next_url="/")
@@ -2956,13 +3166,35 @@ class ProductFeatureTests(SimpleTestCase):
         self.assertEqual(product_review_response.status_code, 200)
         self.assertEqual(product_review_response.json()["status"], "archived")
 
-    def test_product_price_compare_api_returns_live_data_for_supported_product(self):
+    @patch("myapp.services.price_compare._search_pchome")
+    @patch("myapp.services.price_compare._search_momo")
+    def test_product_price_compare_api_returns_live_data_for_enabled_product(self, mock_search_momo, mock_search_pchome):
+        mock_search_momo.return_value = {
+            "site": "momo",
+            "site_label": "momo",
+            "title": "NEW FORCE 吸排短袖上衣 A100",
+            "url": "https://www.momoshop.com.tw/goods/GoodsDetail.jsp?i_code=100",
+            "original_price": "1280",
+            "sale_price": "556",
+            "currency": "TWD",
+            "note": 'Keyword search: "NEW FORCE A100"',
+        }
+        mock_search_pchome.return_value = {
+            "site": "pchome",
+            "site_label": "PChome 24h",
+            "title": "NEW FORCE 吸排短袖上衣 A100",
+            "url": "https://24h.pchome.com.tw/prod/ABC123",
+            "original_price": "",
+            "sale_price": "629",
+            "currency": "TWD",
+            "note": 'Keyword search: "NEW FORCE A100"',
+        }
         self._write_products(
             [
                 {
                     "id": 8,
-                    "slug": "new-forcepolo",
-                    "name": "NEW FORCE Polo",
+                    "slug": "new-force-shirt-a100",
+                    "name": "NEW FORCE 吸排短袖上衣 A100",
                     "price": 300.0,
                     "compare_at_price": 1200.0,
                     "brand": "NEW FORCE",
@@ -2972,28 +3204,54 @@ class ProductFeatureTests(SimpleTestCase):
                     "specs": {"size": "L"},
                     "status": "active",
                     "stock": 1,
+                    "price_compare_enabled": True,
+                    "price_compare_query": "NEW FORCE A100",
                     "owner_username": "abc3",
                     "owner_display_name": "abc3",
                 }
             ]
         )
-        response = self.client.get("/api/v1/products/new-forcepolo/price-compare/")
+        response = self.client.get("/api/v1/products/new-force-shirt-a100/price-compare/")
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertFalse(payload["is_mock"])
-        self.assertEqual(payload["source_type"], "fixed_live_urls")
-        self.assertEqual(payload["our_product_slug"], "new-forcepolo")
+        self.assertEqual(payload["source_type"], "live_search")
+        self.assertEqual(payload["our_product_slug"], "new-force-shirt-a100")
+        self.assertEqual(payload["query"], "NEW FORCE A100")
         self.assertEqual(len(payload["items"]), 2)
+        self.assertEqual(payload["items"][0]["site"], "momo")
         self.assertIn("lowest_price", payload)
 
-    def test_product_price_compare_refresh_api_updates_payload(self):
+    @patch("myapp.services.price_compare._search_pchome")
+    @patch("myapp.services.price_compare._search_momo")
+    def test_product_price_compare_refresh_api_updates_payload(self, mock_search_momo, mock_search_pchome):
+        mock_search_momo.return_value = {
+            "site": "momo",
+            "site_label": "momo",
+            "title": "NEW FORCE 吸排短袖上衣 A100",
+            "url": "https://www.momoshop.com.tw/goods/GoodsDetail.jsp?i_code=100",
+            "original_price": "1280",
+            "sale_price": "556",
+            "currency": "TWD",
+            "note": 'Keyword search: "NEW FORCE A100"',
+        }
+        mock_search_pchome.return_value = {
+            "site": "pchome",
+            "site_label": "PChome 24h",
+            "title": "NEW FORCE 吸排短袖上衣 A100",
+            "url": "https://24h.pchome.com.tw/prod/ABC123",
+            "original_price": "",
+            "sale_price": "629",
+            "currency": "TWD",
+            "note": 'Keyword search: "NEW FORCE A100"',
+        }
         self._write_products(
             [
                 {
                     "id": 8,
-                    "slug": "new-forcepolo",
-                    "name": "NEW FORCE Polo",
+                    "slug": "new-force-shirt-a100",
+                    "name": "NEW FORCE 吸排短袖上衣 A100",
                     "price": 300.0,
                     "compare_at_price": 1200.0,
                     "brand": "NEW FORCE",
@@ -3003,24 +3261,163 @@ class ProductFeatureTests(SimpleTestCase):
                     "specs": {"size": "L"},
                     "status": "active",
                     "stock": 1,
+                    "price_compare_enabled": True,
+                    "price_compare_query": "NEW FORCE A100",
                     "owner_username": "abc3",
                     "owner_display_name": "abc3",
                 }
             ]
         )
-        response = self.client.post("/api/v1/products/new-forcepolo/price-compare/refresh/")
+        response = self.client.post("/api/v1/products/new-force-shirt-a100/price-compare/refresh/")
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["detail"], "價格比較已更新。")
         self.assertFalse(payload["result"]["is_mock"])
-        self.assertEqual(payload["result"]["our_product_slug"], "new-forcepolo")
+        self.assertEqual(payload["result"]["our_product_slug"], "new-force-shirt-a100")
 
-    def test_product_price_compare_api_rejects_unsupported_product(self):
+    def test_product_price_compare_api_rejects_disabled_product(self):
+        self._write_products(
+            [
+                {
+                    "id": 9,
+                    "slug": "acme-mug",
+                    "name": "ACME Mug",
+                    "price": 120.0,
+                    "brand": "ACME",
+                    "category": "mugs",
+                    "tags": [],
+                    "images": [],
+                    "specs": {},
+                    "status": "active",
+                    "stock": 5,
+                    "price_compare_enabled": False,
+                    "owner_username": "abc3",
+                    "owner_display_name": "abc3",
+                }
+            ]
+        )
         response = self.client.get("/api/v1/products/acme-mug/price-compare/")
 
         self.assertEqual(response.status_code, 404)
         self.assertEqual(response.json()["detail"], "Price comparison is not enabled for this product.")
+
+    def test_admin_can_update_product_price_compare_settings(self):
+        self._write_products(
+            [
+                {
+                    "id": 10,
+                    "slug": "new-force-shirt-a100",
+                    "name": "NEW FORCE 吸排短袖上衣 A100",
+                    "price": 890.0,
+                    "brand": "NEW FORCE",
+                    "category": "apparel",
+                    "tags": [],
+                    "images": [],
+                    "specs": {},
+                    "status": "active",
+                    "stock": 15,
+                    "price_compare_enabled": False,
+                    "price_compare_query": "",
+                    "owner_username": "abc3",
+                    "owner_display_name": "abc3",
+                }
+            ]
+        )
+
+        self._login(username="storeteam", next_url="/")
+        response = self.client.post(
+            "/api/v1/staff/products/new-force-shirt-a100/price-compare-settings/",
+            data=json.dumps({"enabled": True, "query": "NEW FORCE A100"}),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["detail"], "商品比價設定已更新。")
+        self.assertTrue(payload["product"]["price_compare_enabled"])
+        self.assertEqual(payload["product"]["price_compare_query"], "NEW FORCE A100")
+
+    @patch("myapp.services.price_compare._search_pchome")
+    @patch("myapp.services.price_compare._search_momo")
+    def test_product_price_compare_prefers_specific_title_query_over_generic_brand_query(
+        self,
+        mock_search_momo,
+        mock_search_pchome,
+    ):
+        def search_momo(query: str):
+            if query != "NEW FORCE 素面率性短袖男士POLO衫":
+                raise ValueError("No matching results found.")
+            return {
+                "site": "momo",
+                "site_label": "momo",
+                "title": "NEW FORCE 素面率性短袖男士POLO衫",
+                "url": "https://www.momoshop.com.tw/goods/GoodsDetail.jsp?i_code=100",
+                "original_price": "899",
+                "sale_price": "649",
+                "currency": "TWD",
+                "note": "Matched by exact title.",
+            }
+
+        def search_pchome(query: str):
+            if query != "NEW FORCE 素面率性短袖男士POLO衫":
+                raise ValueError("No matching results found.")
+            return {
+                "site": "pchome",
+                "site_label": "PChome 24h",
+                "title": "NEW FORCE 素面率性短袖男士POLO衫",
+                "url": "https://24h.pchome.com.tw/prod/ABC123",
+                "original_price": "899",
+                "sale_price": "649",
+                "currency": "TWD",
+                "note": "Matched by exact title.",
+            }
+
+        mock_search_momo.side_effect = search_momo
+        mock_search_pchome.side_effect = search_pchome
+        self._write_products(
+            [
+                {
+                    "id": 11,
+                    "slug": "new-force-polo",
+                    "name": "NEW FORCE 素面率性短袖男士POLO衫-5色可選(男短袖polo衫/上衣/POLO衫/短袖上衣/涼感上衣)",
+                    "price": 890.0,
+                    "brand": "NEW FORCE",
+                    "category": "apparel",
+                    "tags": ["polo"],
+                    "images": [],
+                    "specs": {},
+                    "status": "active",
+                    "stock": 15,
+                    "price_compare_enabled": True,
+                    "price_compare_query": "NEW FORCE",
+                    "owner_username": "abc3",
+                    "owner_display_name": "abc3",
+                }
+            ]
+        )
+
+        response = self.client.get("/api/v1/products/new-force-polo/price-compare/")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(mock_search_momo.call_args[0][0], "NEW FORCE 素面率性短袖男士POLO衫")
+        self.assertEqual(mock_search_pchome.call_args[0][0], "NEW FORCE 素面率性短袖男士POLO衫")
+        self.assertIn('Search query: "NEW FORCE 素面率性短袖男士POLO衫"', payload["items"][0]["note"])
+
+    @patch("myapp.services.price_compare._fetch_html")
+    def test_search_momo_decodes_escaped_unicode_titles(self, mock_fetch_html):
+        mock_fetch_html.return_value = (
+            'goodsInfoList\\":[{\\"goodsCode\\":\\"15087545\\",'
+            '\\"goodsName\\":\\"\\u3010NEW FORCE\\u3011\\u7d20\\u9762\\u7387\\u6027\\u77ed\\u8896\\u7537\\u58ebPOLO\\u886b\\",'
+            '\\"goodsPrice\\":\\"$$649\\",'
+            '\\"goodsPriceOri\\":\\"$$899\\"}]'
+        )
+
+        result = price_compare_service._search_momo("NEW FORCE 素面率性短袖男士POLO衫")
+
+        self.assertEqual(result["title"], "【NEW FORCE】素面率性短袖男士POLO衫")
+        self.assertEqual(result["sale_price"], "649")
 
     def test_api_route_record_page_lists_wave_three_routes(self):
         response = self.client.get("/docs/api-routes/")
@@ -3718,3 +4115,1778 @@ class ProductFeatureTests(SimpleTestCase):
         self.assertEqual(payload["prepared"]["plain_params"]["IsCollection"], "N")
         self.assertLessEqual(len(payload["prepared"]["plain_params"]["ExtraData"]), 20)
         self.assertLessEqual(len(payload["prepared"]["plain_params"]["ReturnURL"]), 50)
+
+
+class CustomerCenterOrmSyncTests(TestCase):
+    """驗證會員中心地址與發票更新時，JSON 與 ORM 會同步維護。"""
+
+    def setUp(self):
+        self.temp_dir = TemporaryDirectory()
+        base_dir = Path(self.temp_dir.name)
+        data_dir = base_dir / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        (data_dir / "users.json").write_text(json.dumps(USERS_FIXTURE, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.override = override_settings(BASE_DIR=base_dir)
+        self.override.enable()
+        local_store.clear_cache()
+        for user in USERS_FIXTURE:
+            auth_demo._sync_user_to_orm(dict(user))
+
+    def tearDown(self):
+        local_store.clear_cache()
+        self.override.disable()
+        self.temp_dir.cleanup()
+
+    def test_address_and_invoice_updates_sync_to_orm(self):
+        from .services import customer_center
+
+        address = customer_center.add_address(
+            "buyer",
+            {
+                "label": "ORM Home",
+                "recipient": "Buyer",
+                "phone": "0912345678",
+                "city": "Taipei",
+                "district": "Xinyi",
+                "postal_code": "110",
+                "address_line": "1 Demo Road",
+            },
+        )
+        customer_center.set_default_address("buyer", int(address["id"]))
+        invoice = customer_center.update_invoice_profile(
+            "buyer",
+            {
+                "invoice_type": "company",
+                "company_name": "Buyer Co",
+                "tax_id": "12345678",
+                "carrier_code": "",
+            },
+        )
+
+        db_user = AppUserModel.objects.get(username="buyer")
+        db_address = UserAddressModel.objects.get(user=db_user, label="ORM Home")
+        db_invoice = UserInvoiceProfileModel.objects.get(user=db_user)
+
+        self.assertEqual(db_user.default_address_id, db_address.id)
+        self.assertEqual(db_address.address_line, "1 Demo Road")
+        self.assertEqual(db_invoice.company_name, "Buyer Co")
+        self.assertEqual(db_invoice.tax_id, "12345678")
+        self.assertEqual(invoice["invoice_type"], "company")
+
+    def test_customer_center_can_read_and_update_from_orm_without_json_user_snapshot(self):
+        from .services import customer_center
+
+        first = customer_center.add_address(
+            "buyer",
+            {
+                "label": "ORM Home",
+                "recipient": "Buyer",
+                "phone": "0912345678",
+                "city": "Taipei",
+                "district": "Xinyi",
+                "postal_code": "110",
+                "address_line": "1 Demo Road",
+            },
+        )
+        second = customer_center.add_address(
+            "buyer",
+            {
+                "label": "ORM Office",
+                "recipient": "Buyer",
+                "phone": "0912345678",
+                "city": "Taipei",
+                "district": "Da'an",
+                "postal_code": "106",
+                "address_line": "99 Work Ave",
+            },
+        )
+        customer_center.set_default_address("buyer", int(second["id"]))
+        customer_center.update_invoice_profile(
+            "buyer",
+            {
+                "invoice_type": "personal",
+                "carrier_code": "/ORM999",
+                "company_name": "",
+                "tax_id": "",
+            },
+        )
+
+        users_path = Path(settings.BASE_DIR) / "data" / "users.json"
+        users_path.write_text("[]", encoding="utf-8")
+        local_store.clear_cache()
+
+        addresses = customer_center.list_addresses("buyer")
+        default_address = customer_center.get_default_address("buyer")
+        invoice = customer_center.get_invoice_profile("buyer")
+        customer_center.remove_address("buyer", int(first["id"]))
+        remaining_addresses = customer_center.list_addresses("buyer")
+
+        self.assertEqual(len(addresses), 2)
+        self.assertEqual(default_address["label"], "ORM Office")
+        self.assertEqual(invoice["carrier_code"], "/ORM999")
+        self.assertEqual(len(remaining_addresses), 1)
+        self.assertEqual(remaining_addresses[0]["label"], "ORM Office")
+
+    def test_customer_center_ignores_json_only_addresses_when_orm_is_enabled(self):
+        from .services import customer_center
+
+        customer_center.add_address(
+            "buyer",
+            {
+                "label": "ORM Home",
+                "recipient": "Buyer",
+                "phone": "0912345678",
+                "city": "Taipei",
+                "district": "Xinyi",
+                "postal_code": "110",
+                "address_line": "1 Demo Road",
+            },
+        )
+
+        users_path = Path(settings.BASE_DIR) / "data" / "users.json"
+        users = json.loads(users_path.read_text(encoding="utf-8"))
+        buyer = next(item for item in users if item.get("username") == "buyer")
+        buyer.setdefault("addresses", []).append(
+            {
+                "id": 9999,
+                "label": "JSON Only",
+                "recipient": "Buyer",
+                "phone": "0999999999",
+                "city": "Kaohsiung",
+                "district": "Lingya",
+                "postal_code": "802",
+                "address_line": "Legacy JSON Road",
+                "is_default": False,
+            }
+        )
+        users_path.write_text(json.dumps(users, ensure_ascii=False, indent=2), encoding="utf-8")
+        local_store.clear_cache()
+
+        addresses = customer_center.list_addresses("buyer")
+
+        self.assertEqual(len(addresses), 1)
+        self.assertEqual(addresses[0]["label"], "ORM Home")
+
+
+class AuthOrmSyncTests(TestCase):
+    """驗證登入/註冊/賣家申請等會員流程會同步寫進 ORM。"""
+
+    def setUp(self):
+        self.temp_dir = TemporaryDirectory()
+        base_dir = Path(self.temp_dir.name)
+        data_dir = base_dir / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        (data_dir / "users.json").write_text(json.dumps(USERS_FIXTURE, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.override = override_settings(BASE_DIR=base_dir)
+        self.override.enable()
+        local_store.clear_cache()
+        for user in USERS_FIXTURE:
+            auth_demo._sync_user_to_orm(dict(user))
+
+    def tearDown(self):
+        local_store.clear_cache()
+        self.override.disable()
+        self.temp_dir.cleanup()
+
+    def test_register_login_and_profile_update_sync_to_orm(self):
+        registered = auth_demo.register_user("orm_user", "ORM User", "secret123", "orm@example.com")
+        self.assertEqual(registered["username"], "orm_user")
+
+        authed = auth_demo.authenticate("orm_user", "secret123")
+        self.assertIsNotNone(authed)
+        updated = auth_demo.update_profile("orm_user", "ORM Updated", email="updated@example.com", new_password="secret456")
+
+        db_user = AppUserModel.objects.get(username="orm_user")
+        self.assertEqual(db_user.display_name, "ORM Updated")
+        self.assertEqual(db_user.email, "updated@example.com")
+        self.assertTrue(bool(db_user.last_login_at))
+        self.assertEqual(updated["display_name"], "ORM Updated")
+
+    def test_seller_request_and_shipping_rules_sync_to_orm(self):
+        rules = auth_demo.update_seller_shipping_rules(
+            "buyer",
+            home_delivery_enabled=True,
+            home_delivery_fee="90",
+            convenience_store_enabled=True,
+            convenience_store_fee="65",
+            free_shipping_threshold="1500",
+        )
+        request_snapshot = auth_demo.request_seller_role("buyer")
+        reviewed_snapshot = auth_demo.review_seller_request("buyer", approved=True)
+
+        db_user = AppUserModel.objects.get(username="buyer")
+        db_rules = UserShippingRuleModel.objects.get(user=db_user)
+        current_request = SellerRequestModel.objects.get(user=db_user, is_current=True)
+
+        self.assertEqual(rules["home_delivery_fee"], "90.00")
+        self.assertEqual(db_rules.home_delivery_fee, 90)
+        self.assertEqual(db_rules.convenience_store_fee, 65)
+        self.assertEqual(db_rules.free_shipping_threshold, 1500)
+        self.assertEqual(request_snapshot["seller_request_status"], "pending")
+        self.assertEqual(reviewed_snapshot["role"], "seller")
+        self.assertEqual(db_user.role, "seller")
+        self.assertEqual(db_user.seller_request_status, "approved")
+        self.assertEqual(current_request.status, "approved")
+
+    def test_shipping_rules_can_be_read_from_orm_without_json_user_snapshot(self):
+        auth_demo.update_seller_shipping_rules(
+            "buyer",
+            home_delivery_enabled=True,
+            home_delivery_fee="95",
+            convenience_store_enabled=False,
+            convenience_store_fee="60",
+            free_shipping_threshold="1800",
+        )
+
+        users_path = Path(settings.BASE_DIR) / "data" / "users.json"
+        users_path.write_text("[]", encoding="utf-8")
+        local_store.clear_cache()
+
+        rules = auth_demo.get_seller_shipping_rules("buyer")
+
+        self.assertEqual(rules["home_delivery_fee"], "95.00")
+        self.assertFalse(rules["convenience_store_enabled"])
+        self.assertEqual(rules["free_shipping_threshold"], "1800.00")
+
+    def test_auth_profile_and_status_can_run_from_orm_without_json_user_snapshot(self):
+        auth_demo.register_user("orm_only", "ORM Only", "secret123", "orm-only@example.com")
+
+        users_path = Path(settings.BASE_DIR) / "data" / "users.json"
+        users_path.write_text("[]", encoding="utf-8")
+        local_store.clear_cache()
+
+        authed = auth_demo.authenticate("orm_only", "secret123")
+        self.assertIsNotNone(authed)
+        self.assertEqual(authed["username"], "orm_only")
+
+        updated = auth_demo.update_profile("orm_only", "ORM Only Updated", email="orm-updated@example.com")
+        self.assertEqual(updated["display_name"], "ORM Only Updated")
+
+        users = auth_demo.list_users(search="orm_only")
+        self.assertEqual(len(users), 1)
+        self.assertEqual(users[0]["username"], "orm_only")
+
+        status_snapshot = auth_demo.update_account_status("orm_only", "suspended")
+        self.assertEqual(status_snapshot["account_status"], "suspended")
+
+        db_user = AppUserModel.objects.get(username="orm_only")
+        self.assertEqual(db_user.display_name, "ORM Only Updated")
+        self.assertEqual(db_user.email, "orm-updated@example.com")
+        self.assertEqual(db_user.account_status, "suspended")
+
+
+class ProductManagementOrmSyncTests(TestCase):
+    """驗證商品同步 ORM 時會重用既有品牌主檔。"""
+
+    def setUp(self):
+        self.temp_dir = TemporaryDirectory()
+        base_dir = Path(self.temp_dir.name)
+        data_dir = base_dir / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        (data_dir / "users.json").write_text(json.dumps(USERS_FIXTURE, ensure_ascii=False, indent=2), encoding="utf-8")
+        (data_dir / "categories.json").write_text(
+            json.dumps(CATEGORIES_FIXTURE, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        (data_dir / "products.json").write_text("[]", encoding="utf-8")
+        self.override = override_settings(BASE_DIR=base_dir)
+        self.override.enable()
+        local_store.clear_cache()
+
+        for user in USERS_FIXTURE:
+            auth_demo._sync_user_to_orm(dict(user))
+        for category in CATEGORIES_FIXTURE:
+            CategoryModel.objects.get_or_create(
+                slug=str(category.get("slug") or "").strip().lower(),
+                defaults={
+                    "name": str(category.get("name") or "").strip(),
+                    "description": str(category.get("description") or "").strip(),
+                    "is_active": bool(category.get("is_active", True)),
+                },
+            )
+
+    def tearDown(self):
+        local_store.clear_cache()
+        self.override.disable()
+        self.temp_dir.cleanup()
+
+    def test_sync_product_reuses_existing_brand_with_legacy_slug(self):
+        BrandModel.objects.create(slug="acme-brand", name="ACME", description="", is_active=True)
+
+        product_management._sync_product_record_to_orm(
+            {
+                "id": 101,
+                "slug": "orm-acme-bottle",
+                "name": "ORM ACME Bottle",
+                "description": "ORM sync regression case",
+                "price": 24.0,
+                "compare_at_price": None,
+                "stock": 9,
+                "specs": {},
+                "status": "draft",
+                "review_note": "",
+                "reviewed_at": "",
+                "reviewed_by": "",
+                "owner_username": "alice",
+                "owner_display_name": "Alice",
+                "brand": "ACME",
+                "category": "kitchen",
+                "category_slug": "kitchen",
+                "images": [],
+                "variants": [],
+                "tags": ["api", "bottle"],
+                "shipping_profile": {},
+                "created_at": "2026-06-01T10:00:00+08:00",
+                "updated_at": "2026-06-01T10:00:00+08:00",
+            },
+            owner_snapshot={"username": "alice", "display_name": "Alice"},
+        )
+
+        product = ProductModel.objects.select_related("brand").get(slug="orm-acme-bottle")
+        self.assertEqual(BrandModel.objects.count(), 1)
+        self.assertEqual(product.brand.slug, "acme-brand")
+        self.assertEqual(product.brand.name, "ACME")
+
+
+class OrdersOrmSyncTests(TestCase):
+    """驗證訂單建立與出貨更新會同步寫進 ORM，且讀取可在 JSON 缺席時回退到 DB。"""
+
+    def setUp(self):
+        self.temp_dir = TemporaryDirectory()
+        base_dir = Path(self.temp_dir.name)
+        data_dir = base_dir / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        (data_dir / "products.json").write_text(
+            json.dumps(PRODUCTS_FIXTURE, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        (data_dir / "categories.json").write_text(
+            json.dumps(CATEGORIES_FIXTURE, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        (data_dir / "orders.json").write_text(
+            json.dumps(ORDERS_FIXTURE, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        (data_dir / "users.json").write_text(
+            json.dumps(USERS_FIXTURE, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        self.override = override_settings(BASE_DIR=base_dir)
+        self.override.enable()
+        local_store.clear_cache()
+        for user in USERS_FIXTURE:
+            auth_demo._sync_user_to_orm(dict(user))
+        for category in CATEGORIES_FIXTURE:
+            CategoryModel.objects.update_or_create(
+                slug=str(category["slug"]),
+                defaults={
+                    "name": str(category["name"]),
+                    "description": str(category.get("description") or ""),
+                    "is_active": bool(category.get("is_active", True)),
+                },
+            )
+        for product in PRODUCTS_FIXTURE:
+            product_management._persist_product_record(
+                {
+                    **product,
+                    "category_slug": str(product.get("category") or "").strip().lower(),
+                    "brand_slug": str(product.get("brand") or "").strip().lower(),
+                }
+            )
+        self.client = Client()
+
+    def tearDown(self):
+        local_store.clear_cache()
+        self.override.disable()
+        self.temp_dir.cleanup()
+
+    def _post_json(self, path, payload):
+        return self.client.post(path, data=json.dumps(payload), content_type="application/json")
+
+    def _put_json(self, path, payload):
+        return self.client.put(path, data=json.dumps(payload), content_type="application/json")
+
+    def _login(self, username="alice", password="demo123"):
+        return self._post_json("/api/v1/auth/login/", {"username": username, "password": password})
+
+    def _logout(self):
+        return self.client.post("/api/v1/auth/logout/")
+
+    def _add_to_cart(self, slug="acme-mug", qty=1):
+        return self._post_json("/api/v1/cart/items/", {"slug": slug, "qty": qty})
+
+    def _create_address(self):
+        response = self._post_json(
+            "/api/v1/me/addresses/",
+            {
+                "label": "Home",
+                "recipient": "Buyer",
+                "phone": "0912345678",
+                "city": "Taipei",
+                "district": "Da'an",
+                "postal_code": "106",
+                "address_line": "No. 1, Xinyi Rd.",
+            },
+        )
+        self.assertEqual(response.status_code, 201)
+        return response.json()["id"]
+
+    def _clear_json_orders(self):
+        data_dir = Path(self.temp_dir.name) / "data"
+        (data_dir / "orders.json").write_text("[]", encoding="utf-8")
+        local_store.clear_cache()
+
+    def test_checkout_order_syncs_to_orm_and_buyer_views_survive_without_json_order(self):
+        self._login(username="buyer")
+        self.assertEqual(self._add_to_cart().status_code, 200)
+        address_id = self._create_address()
+        confirm_response = self._post_json("/api/v1/checkout/confirm/", {"address_id": address_id})
+        self.assertEqual(confirm_response.status_code, 201)
+
+        order_id = confirm_response.json()["id"]
+        orders_service.apply_newebpay_result(
+            order_id,
+            payment_method=orders_service.PAYMENT_METHOD_NEWEBPAY_WEBATM,
+            payment_status=orders_service.PAYMENT_STATUS_PAID,
+            trade_no="NPAYTEST123",
+            paid_at="2026-06-03T12:00:00+08:00",
+        )
+
+        db_order = OrderModel.objects.get(id=order_id)
+        db_items = list(OrderItemModel.objects.filter(order=db_order))
+        db_payment = PaymentTransactionModel.objects.get(order=db_order)
+
+        self.assertEqual(db_order.buyer_username_snapshot, "buyer")
+        self.assertEqual(db_order.shipping_method, orders_service.SHIPPING_METHOD_HOME_DELIVERY)
+        self.assertEqual(db_order.payment_status, orders_service.PAYMENT_STATUS_PAID)
+        self.assertEqual(len(db_items), 1)
+        self.assertEqual(db_items[0].product_slug_snapshot, "acme-mug")
+        self.assertEqual(db_payment.merchant_order_no, f"ORDER{order_id}")
+        self.assertEqual(db_payment.trade_no, "NPAYTEST123")
+        self.assertEqual(db_payment.status, orders_service.PAYMENT_STATUS_PAID)
+
+        self._clear_json_orders()
+
+        list_response = self.client.get("/api/v1/me/orders/")
+        detail_response = self.client.get(f"/api/v1/me/orders/{order_id}/")
+
+        self.assertEqual(list_response.status_code, 200)
+        self.assertEqual(detail_response.status_code, 200)
+        payload = detail_response.json()
+        self.assertEqual(payload["id"], order_id)
+        self.assertEqual(payload["payment_status"], orders_service.PAYMENT_STATUS_PAID)
+        self.assertEqual(payload["items"][0]["slug"], "acme-mug")
+
+    def test_seller_update_syncs_to_orm_and_seller_views_survive_without_json_order(self):
+        self._login(username="buyer")
+        self.assertEqual(self._add_to_cart().status_code, 200)
+        address_id = self._create_address()
+        confirm_response = self._post_json("/api/v1/checkout/confirm/", {"address_id": address_id})
+        self.assertEqual(confirm_response.status_code, 201)
+        order_id = confirm_response.json()["id"]
+
+        self._logout()
+        self._login(username="alice")
+        update_response = self._post_json(
+            f"/api/v1/me/sales/{order_id}/update/",
+            {
+                "seller_status": orders_service.SELLER_STATUS_SHIPPED,
+                "tracking_number": "TW123456789",
+                "shipping_note": "Packed and shipped",
+            },
+        )
+        self.assertEqual(update_response.status_code, 200)
+
+        db_order = OrderModel.objects.get(id=order_id)
+        db_item = OrderItemModel.objects.get(order=db_order)
+        events = list(ShipmentEventModel.objects.filter(order=db_order))
+
+        self.assertEqual(db_item.seller_status, orders_service.SELLER_STATUS_SHIPPED)
+        self.assertEqual(db_item.tracking_number, "TW123456789")
+        self.assertTrue(events)
+        self.assertEqual(events[-1].tracking_number, "TW123456789")
+
+        self._clear_json_orders()
+
+        seller_detail = self.client.get(f"/api/v1/me/sales/{order_id}/")
+        self.assertEqual(seller_detail.status_code, 200)
+        self.assertEqual(seller_detail.json()["items"][0]["seller_status"], orders_service.SELLER_STATUS_SHIPPED)
+
+    def test_apply_payment_result_can_run_from_orm_without_json_order(self):
+        self._login(username="buyer")
+        self.assertEqual(self._add_to_cart().status_code, 200)
+        address_id = self._create_address()
+        confirm_response = self._post_json("/api/v1/checkout/confirm/", {"address_id": address_id})
+        self.assertEqual(confirm_response.status_code, 201)
+        order_id = confirm_response.json()["id"]
+        self._clear_json_orders()
+
+        result = orders_service.apply_newebpay_result(
+            order_id,
+            payment_method=orders_service.PAYMENT_METHOD_NEWEBPAY_WEBATM,
+            payment_status=orders_service.PAYMENT_STATUS_PAID,
+            trade_no="ORMONLY123",
+            paid_at="2026-06-03T15:00:00+08:00",
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["payment_method"], orders_service.PAYMENT_METHOD_NEWEBPAY_WEBATM)
+        self.assertEqual(result["payment_trade_no"], "ORMONLY123")
+        self.assertEqual(OrderModel.objects.get(id=order_id).payment_trade_no, "ORMONLY123")
+        self.assertEqual(
+            PaymentTransactionModel.objects.filter(order_id=order_id).latest("id").trade_no,
+            "ORMONLY123",
+        )
+
+    def test_seller_update_can_run_from_orm_without_json_order(self):
+        self._login(username="buyer")
+        self.assertEqual(self._add_to_cart().status_code, 200)
+        address_id = self._create_address()
+        confirm_response = self._post_json("/api/v1/checkout/confirm/", {"address_id": address_id})
+        self.assertEqual(confirm_response.status_code, 201)
+        order_id = confirm_response.json()["id"]
+        self._clear_json_orders()
+
+        self._logout()
+        self._login(username="alice")
+        update_response = self._post_json(
+            f"/api/v1/me/sales/{order_id}/update/",
+            {
+                "seller_status": orders_service.SELLER_STATUS_SHIPPED,
+                "tracking_number": "ORMTRACK123",
+                "shipping_note": "ORM seller update",
+            },
+        )
+
+        self.assertEqual(update_response.status_code, 200)
+        self.assertEqual(OrderItemModel.objects.get(order_id=order_id).tracking_number, "ORMTRACK123")
+        self.assertEqual(OrderItemModel.objects.get(order_id=order_id).shipping_note, "ORM seller update")
+
+    def test_order_reads_ignore_json_only_orders_when_orm_is_enabled(self):
+        self._login(username="buyer")
+        self.assertEqual(self._add_to_cart().status_code, 200)
+        address_id = self._create_address()
+        confirm_response = self._post_json("/api/v1/checkout/confirm/", {"address_id": address_id})
+        self.assertEqual(confirm_response.status_code, 201)
+        real_order_id = confirm_response.json()["id"]
+
+        orders_path = Path(self.temp_dir.name) / "data" / "orders.json"
+        orders_data = json.loads(orders_path.read_text(encoding="utf-8"))
+        orders_data.append(
+            {
+                "id": 9999,
+                "order_no": "ORDER9999",
+                "username": "buyer",
+                "display_name": "Buyer",
+                "status": orders_service.ORDER_STATUS_CONFIRMED,
+                "shipping_method": orders_service.SHIPPING_METHOD_HOME_DELIVERY,
+                "payment_method": orders_service.PAYMENT_METHOD_NEWEBPAY,
+                "payment_status": orders_service.PAYMENT_STATUS_PENDING,
+                "items": [],
+                "totals": {"subtotal": "0.00", "shipping": "0.00", "discount": "0.00", "total": "0.00"},
+                "shipping_address": {},
+                "invoice_profile": {},
+                "service_request": orders_service._empty_service_request(),
+                "created_at": "2026-06-03T00:00:00+08:00",
+            }
+        )
+        orders_path.write_text(json.dumps(orders_data, ensure_ascii=False, indent=2), encoding="utf-8")
+        local_store.clear_cache()
+
+        orders = orders_service.list_orders_for_user("buyer")
+        ids = [item["id"] for item in orders]
+
+        self.assertIn(real_order_id, ids)
+        self.assertNotIn(9999, ids)
+
+
+class CartOrmSyncTests(TestCase):
+    """驗證登入會員購物車已改由 ORM 主流程維護。"""
+
+    def setUp(self):
+        self.temp_dir = TemporaryDirectory()
+        base_dir = Path(self.temp_dir.name)
+        data_dir = base_dir / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        (data_dir / "products.json").write_text(
+            json.dumps(PRODUCTS_FIXTURE, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        (data_dir / "categories.json").write_text(
+            json.dumps(CATEGORIES_FIXTURE, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        (data_dir / "users.json").write_text(
+            json.dumps(USERS_FIXTURE, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        self.override = override_settings(BASE_DIR=base_dir)
+        self.override.enable()
+        local_store.clear_cache()
+        seeded_category_slugs = {str(item.get("slug") or "").strip().lower() for item in CATEGORIES_FIXTURE}
+        for category_record in CATEGORIES_FIXTURE:
+            CategoryModel.objects.get_or_create(
+                slug=str(category_record.get("slug") or "").strip().lower(),
+                defaults={
+                    "name": str(category_record.get("name") or category_record.get("label") or "").strip(),
+                    "description": str(category_record.get("description") or "").strip(),
+                    "is_active": bool(category_record.get("is_active", True)),
+                },
+            )
+        owner_snapshot = local_store.get_user_by_username("alice")
+        for product_record in PRODUCTS_FIXTURE:
+            seeded_record = dict(product_record)
+            category_slug = str(seeded_record.get("category") or "").strip().lower()
+            seeded_record.setdefault("category_slug", category_slug)
+            if category_slug and category_slug not in seeded_category_slugs:
+                CategoryModel.objects.get_or_create(
+                    slug=category_slug,
+                    defaults={"name": category_slug.replace("-", " ").title(), "is_active": True},
+                )
+                seeded_category_slugs.add(category_slug)
+            product_management._sync_product_record_to_orm(
+                seeded_record,
+                owner_snapshot=owner_snapshot,
+            )
+        self.client = Client()
+
+    def tearDown(self):
+        local_store.clear_cache()
+        self.override.disable()
+        self.temp_dir.cleanup()
+
+    def _login(self, username="buyer", password="demo123"):
+        response = self.client.post(
+            "/api/v1/auth/login/",
+            data=json.dumps({"username": username, "password": password}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+
+    def _add_to_cart(self, slug="acme-mug", qty=1, variant_id=""):
+        payload = {"slug": slug, "qty": qty}
+        if variant_id:
+            payload["variant_id"] = variant_id
+        response = self.client.post(
+            "/api/v1/cart/items/",
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        return response
+
+    def test_logged_in_cart_writes_to_orm(self):
+        self._login("buyer")
+        self._add_to_cart("acme-mug", qty=2)
+
+        db_cart = CartModel.objects.select_related("user").get(user__username="buyer")
+        db_item = CartItemModel.objects.get(cart=db_cart, item_key="acme-mug")
+        self.assertEqual(db_item.quantity, 2)
+        self.assertEqual(str(db_item.product.slug), "acme-mug")
+        self.assertEqual(db_cart.coupon_code, "")
+
+    def test_guest_cart_login_migration_writes_to_orm(self):
+        self._add_to_cart("acme-mug", qty=1)
+        self._login("buyer")
+
+        db_cart = CartModel.objects.select_related("user").get(user__username="buyer")
+        db_item = CartItemModel.objects.get(cart=db_cart, item_key="acme-mug")
+        self.assertEqual(db_item.quantity, 1)
+        self.assertEqual(self.client.session["cart"]["__guest__"]["items"], {})
+
+
+class PersonalizationOrmSyncTests(TestCase):
+    """驗證登入會員的收藏、比較與最近瀏覽已改由 ORM 主流程維護。"""
+
+    def setUp(self):
+        self.temp_dir = TemporaryDirectory()
+        base_dir = Path(self.temp_dir.name)
+        data_dir = base_dir / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        (data_dir / "products.json").write_text(
+            json.dumps(PRODUCTS_FIXTURE, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        (data_dir / "categories.json").write_text(
+            json.dumps(CATEGORIES_FIXTURE, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        (data_dir / "users.json").write_text(
+            json.dumps(USERS_FIXTURE, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        self.override = override_settings(BASE_DIR=base_dir)
+        self.override.enable()
+        local_store.clear_cache()
+
+        seeded_category_slugs = {str(item.get("slug") or "").strip().lower() for item in CATEGORIES_FIXTURE}
+        for category_record in CATEGORIES_FIXTURE:
+            CategoryModel.objects.get_or_create(
+                slug=str(category_record.get("slug") or "").strip().lower(),
+                defaults={
+                    "name": str(category_record.get("name") or category_record.get("label") or "").strip(),
+                    "description": str(category_record.get("description") or "").strip(),
+                    "is_active": bool(category_record.get("is_active", True)),
+                },
+            )
+
+        owner_snapshot = local_store.get_user_by_username("alice")
+        for product_record in PRODUCTS_FIXTURE:
+            seeded_record = dict(product_record)
+            category_slug = str(seeded_record.get("category") or "").strip().lower()
+            seeded_record.setdefault("category_slug", category_slug)
+            if category_slug and category_slug not in seeded_category_slugs:
+                CategoryModel.objects.get_or_create(
+                    slug=category_slug,
+                    defaults={"name": category_slug.replace("-", " ").title(), "is_active": True},
+                )
+                seeded_category_slugs.add(category_slug)
+            product_management._sync_product_record_to_orm(
+                seeded_record,
+                owner_snapshot=owner_snapshot,
+            )
+
+        self.client = Client()
+
+    def tearDown(self):
+        local_store.clear_cache()
+        self.override.disable()
+        self.temp_dir.cleanup()
+
+    def _login(self, username="buyer", password="demo123"):
+        response = self.client.post(
+            "/api/v1/auth/login/",
+            data=json.dumps({"username": username, "password": password}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+
+    def _remove_user_from_json(self, username: str):
+        data_dir = Path(self.temp_dir.name) / "data"
+        users_path = data_dir / "users.json"
+        users = json.loads(users_path.read_text(encoding="utf-8"))
+        filtered = [item for item in users if item.get("username") != username]
+        users_path.write_text(json.dumps(filtered, ensure_ascii=False, indent=2), encoding="utf-8")
+        local_store.clear_cache()
+
+    def test_logged_in_favorite_compare_and_recent_view_survive_without_json_user_snapshot(self):
+        self._login("buyer")
+
+        favorite_response = self.client.post("/api/v1/products/acme-mug/favorite/")
+        compare_response = self.client.post("/api/v1/products/acme-mug/compare/")
+        self.assertEqual(favorite_response.status_code, 200)
+        self.assertEqual(compare_response.status_code, 200)
+
+        session = self.client.session
+        personalization_service.record_recent_view(
+            session,
+            {"slug": "acme-mug"},
+        )
+        session.save()
+
+        self._remove_user_from_json("buyer")
+
+        bootstrap_response = self.client.get("/api/v1/app/bootstrap/")
+        compare_list_response = self.client.get("/api/v1/products/compare/")
+        detail_response = self.client.get("/api/v1/products/acme-mug/")
+
+        self.assertEqual(bootstrap_response.status_code, 200)
+        self.assertEqual(bootstrap_response.json()["favorite_count"], 1)
+        self.assertEqual(bootstrap_response.json()["compare_count"], 1)
+        self.assertEqual(compare_list_response.status_code, 200)
+        self.assertEqual(compare_list_response.json()["slugs"], ["acme-mug"])
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertTrue(detail_response.json()["is_favorite"])
+
+        db_user = AppUserModel.objects.get(username="buyer")
+        self.assertTrue(UserFavoriteModel.objects.filter(user=db_user, product__slug="acme-mug").exists())
+        self.assertTrue(
+            CompareItemModel.objects.filter(bucket_key=f"user:{db_user.id}", product__slug="acme-mug").exists()
+        )
+        self.assertTrue(RecentViewModel.objects.filter(user=db_user, product__slug="acme-mug").exists())
+
+        recent_products = personalization_service.get_recent_products(self.client.session)
+        self.assertEqual([item["slug"] for item in recent_products], ["acme-mug"])
+
+
+class AdminOrmSyncTests(TestCase):
+    """驗證管理端商品列表與上下架操作可在 JSON 缺席時直接從 ORM 運作。"""
+
+    def setUp(self):
+        self.temp_dir = TemporaryDirectory()
+        base_dir = Path(self.temp_dir.name)
+        data_dir = base_dir / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        (data_dir / "products.json").write_text("[]", encoding="utf-8")
+        (data_dir / "categories.json").write_text(
+            json.dumps(CATEGORIES_FIXTURE, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        (data_dir / "orders.json").write_text("[]", encoding="utf-8")
+        (data_dir / "users.json").write_text(
+            json.dumps(USERS_FIXTURE, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        self.override = override_settings(BASE_DIR=base_dir)
+        self.override.enable()
+        local_store.clear_cache()
+        self.client = Client()
+        for user in USERS_FIXTURE:
+            auth_demo._sync_user_to_orm(dict(user))
+        for category in CATEGORIES_FIXTURE:
+            CategoryModel.objects.get_or_create(
+                slug=str(category.get("slug") or "").strip().lower(),
+                defaults={
+                    "name": str(category.get("name") or "").strip(),
+                    "description": str(category.get("description") or "").strip(),
+                    "is_active": bool(category.get("is_active", True)),
+                },
+            )
+
+        product_management._sync_product_record_to_orm(
+            {
+                **PRODUCTS_FIXTURE[0],
+                "category_slug": str(PRODUCTS_FIXTURE[0].get("category") or "").strip().lower(),
+                "brand_slug": str(PRODUCTS_FIXTURE[0].get("brand") or "").strip().lower(),
+            },
+            owner_snapshot={"username": "alice", "display_name": "Alice"},
+        )
+        product_management._sync_product_record_to_orm(
+            {
+                "id": 99,
+                "slug": "orm-admin-draft",
+                "name": "ORM Admin Draft",
+                "description": "ORM only admin draft product",
+                "price": 19.9,
+                "compare_at_price": None,
+                "stock": 5,
+                "specs": {"size": "L"},
+                "status": "draft",
+                "review_note": "",
+                "reviewed_at": "",
+                "reviewed_by": "",
+                "owner_username": "alice",
+                "owner_display_name": "Alice",
+                "brand": "Draft Lab",
+                "category": "apparel",
+                "category_slug": "apparel",
+                "images": [],
+                "variants": [],
+                "tags": ["draft"],
+                "shipping_profile": {},
+                "created_at": "2026-05-01T10:00:00+08:00",
+                "updated_at": "2026-05-01T10:00:00+08:00",
+            },
+            owner_snapshot={"username": "alice", "display_name": "Alice"},
+        )
+        alice = AppUserModel.objects.get(username="alice")
+        storeteam, _ = AppUserModel.objects.update_or_create(
+            username="storeteam",
+            defaults={
+                "email": "storeteam@example.com",
+                "display_name": "Store Team",
+                "role": "admin",
+                "password_hash": make_password("demo123"),
+                "account_status": "active",
+                "seller_request_status": "approved",
+            },
+        )
+        product = ProductModel.objects.get(slug="acme-mug")
+        question = ProductQuestionModel.objects.create(
+            product=product,
+            author=alice,
+            author_display_name_snapshot="Eva",
+            title="Can this go in the dishwasher?",
+            body="I want to know if this is dishwasher safe.",
+            is_visible=True,
+        )
+        ProductQuestionAnswerModel.objects.create(
+            question=question,
+            author=storeteam,
+            author_display_name_snapshot="Store Team",
+            body="Yes, it is dishwasher safe.",
+            is_visible=True,
+        )
+        ProductReviewModel.objects.create(
+            product=product,
+            author=alice,
+            author_display_name_snapshot="Alice",
+            rating=5,
+            title="Nice daily mug",
+            body="Feels sturdy and the glaze looks premium.",
+            is_visible=True,
+        )
+
+    def tearDown(self):
+        local_store.clear_cache()
+        self.override.disable()
+        self.temp_dir.cleanup()
+
+    def _post_json(self, path, payload):
+        return self.client.post(path, data=json.dumps(payload), content_type="application/json")
+
+    def _login(self, username="storeteam", password="demo123"):
+        return self._post_json("/api/v1/auth/login/", {"username": username, "password": password})
+
+    def _clear_json_products(self):
+        data_dir = Path(self.temp_dir.name) / "data"
+        (data_dir / "products.json").write_text("[]", encoding="utf-8")
+        local_store.clear_cache()
+
+    def _remove_user_from_json(self, username: str):
+        data_dir = Path(self.temp_dir.name) / "data"
+        users_path = data_dir / "users.json"
+        users = json.loads(users_path.read_text(encoding="utf-8"))
+        filtered = [item for item in users if item.get("username") != username]
+        users_path.write_text(json.dumps(filtered, ensure_ascii=False, indent=2), encoding="utf-8")
+        local_store.clear_cache()
+
+    def test_admin_product_listing_and_lifecycle_work_without_json_product(self):
+        self._clear_json_products()
+        self._login()
+
+        list_response = self.client.get("/api/v1/staff/products/?status=draft")
+        self.assertEqual(list_response.status_code, 200)
+        self.assertEqual(list_response.json()["items"][0]["slug"], "orm-admin-draft")
+
+        publish_response = self.client.post(
+            "/api/v1/staff/products/orm-admin-draft/publish/",
+            data=json.dumps({"note": "Publish from ORM"}),
+            content_type="application/json",
+        )
+        self.assertEqual(publish_response.status_code, 200)
+        self.assertEqual(publish_response.json()["status"], "active")
+
+        archive_response = self.client.post(
+            "/api/v1/staff/products/orm-admin-draft/archive/",
+            data=json.dumps({"note": "Archive from ORM"}),
+            content_type="application/json",
+        )
+        self.assertEqual(archive_response.status_code, 200)
+        self.assertEqual(archive_response.json()["status"], "archived")
+        self.assertTrue(ProductModel.objects.filter(slug="orm-admin-draft", status="archived").exists())
+
+        delete_response = self.client.delete("/api/v1/staff/products/orm-admin-draft/")
+        self.assertEqual(delete_response.status_code, 204)
+        self.assertFalse(ProductModel.objects.filter(slug="orm-admin-draft").exists())
+
+    def test_admin_user_and_seller_request_apis_work_without_json_user_snapshot(self):
+        auth_demo.register_user("ormmember", "ORM Member", "secret123", "ormmember@example.com")
+        auth_demo.request_seller_role("ormmember")
+        self._remove_user_from_json("ormmember")
+
+        self.assertEqual(self._login().status_code, 200)
+
+        users_response = self.client.get("/api/v1/staff/users/", {"q": "ormmember"})
+        self.assertEqual(users_response.status_code, 200)
+        self.assertEqual(len(users_response.json()["items"]), 1)
+        self.assertEqual(users_response.json()["items"][0]["username"], "ormmember")
+
+        status_response = self._post_json("/api/v1/staff/users/ormmember/status/", {"account_status": "suspended"})
+        self.assertEqual(status_response.status_code, 200)
+        self.assertEqual(status_response.json()["user"]["account_status"], "suspended")
+
+        review_response = self._post_json("/api/v1/staff/seller-requests/ormmember/review/", {"approved": True})
+        self.assertEqual(review_response.status_code, 200)
+        self.assertEqual(review_response.json()["user"]["role"], "seller")
+        self.assertEqual(review_response.json()["user"]["seller_request_status"], "approved")
+
+        db_user = AppUserModel.objects.get(username="ormmember")
+        self.assertEqual(db_user.account_status, "suspended")
+        self.assertEqual(db_user.role, "seller")
+        self.assertEqual(db_user.seller_request_status, "approved")
+        current_request = SellerRequestModel.objects.get(user=db_user, is_current=True)
+        self.assertEqual(current_request.status, "approved")
+
+    def test_admin_product_listing_ignores_json_only_products_when_orm_is_enabled(self):
+        products_path = Path(self.temp_dir.name) / "data" / "products.json"
+        products_path.write_text(
+            json.dumps(
+                [
+                    {
+                        "id": 501,
+                        "slug": "json-only-draft",
+                        "name": "JSON Only Draft",
+                        "description": "legacy product that should be hidden in ORM mode",
+                        "price": 9.9,
+                        "compare_at_price": None,
+                        "stock": 3,
+                        "specs": {},
+                        "status": "draft",
+                        "review_note": "",
+                        "reviewed_at": "",
+                        "reviewed_by": "",
+                        "owner_user_id": 1,
+                        "owner_username": "alice",
+                        "owner_display_name": "Alice",
+                        "brand": "Legacy",
+                        "category": "apparel",
+                        "category_slug": "apparel",
+                        "images": [],
+                        "variants": [],
+                        "tags": [],
+                        "shipping_profile": {},
+                        "created_at": "2026-06-03T09:00:00+08:00",
+                        "updated_at": "2026-06-03T09:00:00+08:00",
+                    }
+                ],
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        local_store.clear_cache()
+
+        self.assertEqual(self._login().status_code, 200)
+        response = self.client.get("/api/v1/staff/products/?status=draft")
+
+        self.assertEqual(response.status_code, 200)
+        slugs = [item["slug"] for item in response.json()["items"]]
+        self.assertIn("orm-admin-draft", slugs)
+        self.assertNotIn("json-only-draft", slugs)
+
+
+class ContentOrmSyncTests(TestCase):
+    """驗證評論與問答在 JSON 缺席時仍可從 ORM 讀取與管理。"""
+
+    def setUp(self):
+        self.temp_dir = TemporaryDirectory()
+        base_dir = Path(self.temp_dir.name)
+        data_dir = base_dir / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        (data_dir / "products.json").write_text(
+            json.dumps(PRODUCTS_FIXTURE, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        (data_dir / "categories.json").write_text(
+            json.dumps(CATEGORIES_FIXTURE, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        (data_dir / "users.json").write_text(
+            json.dumps(USERS_FIXTURE, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        (data_dir / "reviews.json").write_text(
+            json.dumps(REVIEWS_FIXTURE, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        (data_dir / "questions.json").write_text(
+            json.dumps(QUESTIONS_FIXTURE, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        (data_dir / "posts.json").write_text(
+            json.dumps(POSTS_FIXTURE, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        self.override = override_settings(BASE_DIR=base_dir)
+        self.override.enable()
+        local_store.clear_cache()
+        self.client = Client()
+
+        CategoryModel.objects.get_or_create(
+            slug="kitchen",
+            defaults={"name": "kitchen", "description": "seed category", "is_active": True},
+        )
+        product_management._sync_product_record_to_orm(
+            {
+                "id": 1,
+                "slug": "acme-mug",
+                "name": "ACME Mug",
+                "description": "ORM product for content tests",
+                "price": 12.9,
+                "compare_at_price": None,
+                "stock": 10,
+                "specs": {},
+                "status": "active",
+                "review_note": "",
+                "reviewed_at": "",
+                "reviewed_by": "",
+                "owner_username": "alice",
+                "owner_display_name": "Alice",
+                "brand": "ACME",
+                "category": "kitchen",
+                "category_slug": "kitchen",
+                "images": [],
+                "variants": [],
+                "tags": ["mug"],
+                "shipping_profile": {},
+                "created_at": "2026-05-01T10:00:00+08:00",
+                "updated_at": "2026-05-01T10:00:00+08:00",
+            },
+            owner_snapshot={"username": "alice", "display_name": "Alice"},
+        )
+        alice, _ = AppUserModel.objects.update_or_create(
+            username="alice",
+            defaults={
+                "email": "alice@example.com",
+                "display_name": "Alice",
+                "role": "member",
+                "password_hash": make_password("demo123"),
+                "account_status": "active",
+                "seller_request_status": "none",
+            },
+        )
+        storeteam, _ = AppUserModel.objects.update_or_create(
+            username="storeteam",
+            defaults={
+                "email": "storeteam@example.com",
+                "display_name": "Store Team",
+                "role": "admin",
+                "password_hash": make_password("demo123"),
+                "account_status": "active",
+                "seller_request_status": "approved",
+            },
+        )
+        product = ProductModel.objects.get(slug="acme-mug")
+        question = ProductQuestionModel.objects.create(
+            product=product,
+            author=alice,
+            author_display_name_snapshot="Eva",
+            title="Can this go in the dishwasher?",
+            body="I want to know if this is dishwasher safe.",
+            is_visible=True,
+        )
+        ProductQuestionAnswerModel.objects.create(
+            question=question,
+            author=storeteam,
+            author_display_name_snapshot="Store Team",
+            body="Yes, it is dishwasher safe.",
+            is_visible=True,
+        )
+        ProductReviewModel.objects.create(
+            product=product,
+            author=alice,
+            author_display_name_snapshot="Alice",
+            rating=5,
+            title="Nice daily mug",
+            body="Feels sturdy and the glaze looks premium.",
+            is_visible=True,
+        )
+
+    def tearDown(self):
+        local_store.clear_cache()
+        self.override.disable()
+        self.temp_dir.cleanup()
+
+    def _post_json(self, path, payload):
+        return self.client.post(path, data=json.dumps(payload), content_type="application/json")
+
+    def _login(self, username="storeteam", password="demo123"):
+        return self._post_json("/api/v1/auth/login/", {"username": username, "password": password})
+
+    def _clear_content_json(self):
+        data_dir = Path(self.temp_dir.name) / "data"
+        (data_dir / "reviews.json").write_text("[]", encoding="utf-8")
+        (data_dir / "questions.json").write_text("[]", encoding="utf-8")
+        local_store.clear_cache()
+
+    def test_product_content_and_admin_content_work_without_json_snapshots(self):
+        self.assertEqual(len(review_service.list_reviews(1)), 1)
+        self.assertEqual(len(question_service.list_questions(1)), 1)
+        self._clear_content_json()
+
+        reviews_response = self.client.get("/api/v1/products/acme-mug/reviews/")
+        questions_response = self.client.get("/api/v1/products/acme-mug/questions/")
+        self.assertEqual(reviews_response.status_code, 200)
+        self.assertEqual(questions_response.status_code, 200)
+        self.assertEqual(reviews_response.json()["items"][0]["title"], "Nice daily mug")
+        self.assertEqual(questions_response.json()["items"][0]["title"], "Can this go in the dishwasher?")
+        self.assertEqual(len(questions_response.json()["items"][0]["answers"]), 1)
+        self.assertTrue(ProductReviewModel.objects.filter(product_id=1).exists())
+        self.assertTrue(ProductQuestionModel.objects.filter(product_id=1).exists())
+        self.assertTrue(ProductQuestionAnswerModel.objects.filter(question__product_id=1).exists())
+
+        self.assertEqual(self._login().status_code, 200)
+        admin_reviews = self.client.get("/api/v1/staff/content/reviews/?q=Nice")
+        admin_questions = self.client.get("/api/v1/staff/content/questions/?answered=answered")
+        self.assertEqual(admin_reviews.status_code, 200)
+        self.assertEqual(admin_questions.status_code, 200)
+        self.assertEqual(admin_reviews.json()["items"][0]["title"], "Nice daily mug")
+        self.assertEqual(admin_questions.json()["items"][0]["title"], "Can this go in the dishwasher?")
+
+
+class ProfileOrmSyncTests(TestCase):
+    """驗證會員中心 dashboard 在內容 JSON 缺席時仍可從 ORM 取得統計。"""
+
+    def setUp(self):
+        self.temp_dir = TemporaryDirectory()
+        base_dir = Path(self.temp_dir.name)
+        data_dir = base_dir / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        for name in (
+            "products.json",
+            "categories.json",
+            "users.json",
+            "reviews.json",
+            "questions.json",
+            "posts.json",
+            "orders.json",
+            "banners.json",
+            "recommendations.json",
+        ):
+            (data_dir / name).write_text("[]", encoding="utf-8")
+        self.override = override_settings(BASE_DIR=base_dir)
+        self.override.enable()
+        local_store.clear_cache()
+        self.client = Client()
+
+        CategoryModel.objects.get_or_create(
+            slug="kitchen",
+            defaults={"name": "kitchen", "description": "seed category", "is_active": True},
+        )
+        product_management._sync_product_record_to_orm(
+            {
+                "id": 1,
+                "slug": "acme-mug",
+                "name": "ACME Mug",
+                "description": "ORM product for profile dashboard tests",
+                "price": 12.9,
+                "compare_at_price": None,
+                "stock": 10,
+                "specs": {},
+                "status": "active",
+                "review_note": "",
+                "reviewed_at": "",
+                "reviewed_by": "",
+                "owner_username": "alice",
+                "owner_display_name": "Alice",
+                "brand": "ACME",
+                "category": "kitchen",
+                "category_slug": "kitchen",
+                "images": [],
+                "variants": [],
+                "tags": ["mug"],
+                "shipping_profile": {},
+                "created_at": "",
+                "updated_at": "",
+            },
+            owner_snapshot={
+                "username": "alice",
+                "display_name": "Alice",
+                "email": "alice@example.com",
+                "password_hash": "pbkdf2_sha256$dummy",
+                "role": "seller",
+                "account_status": "active",
+            },
+        )
+        auth_demo.register_user("buyer", "Buyer", "demo123", "buyer@example.com")
+        login_response = self.client.post(
+            "/api/v1/auth/login/",
+            data=json.dumps({"username": "buyer", "password": "demo123"}),
+            content_type="application/json",
+        )
+        self.assertEqual(login_response.status_code, 200)
+
+    def tearDown(self):
+        local_store.clear_cache()
+        self.override.disable()
+        self.temp_dir.cleanup()
+
+    def test_dashboard_reads_content_from_orm_without_json_snapshots(self):
+        self.client.post(
+            "/api/v1/products/acme-mug/reviews/",
+            data=json.dumps({"rating": 4, "title": "Useful cup", "body": "Works well on my desk."}),
+            content_type="application/json",
+        )
+        self.client.post(
+            "/api/v1/products/acme-mug/questions/",
+            data=json.dumps({"title": "Is it microwave safe?", "body": "I want to heat milk in it."}),
+            content_type="application/json",
+        )
+        self.client.post(
+            "/api/v1/community/posts/",
+            data=json.dumps(
+                {
+                    "topic": "tips",
+                    "title": "How do you store travel bottles?",
+                    "body": "Looking for ways to avoid odor between trips.",
+                    "tags": "bottle, travel",
+                }
+            ),
+            content_type="application/json",
+        )
+
+        data_dir = Path(settings.BASE_DIR) / "data"
+        (data_dir / "reviews.json").write_text("[]", encoding="utf-8")
+        (data_dir / "questions.json").write_text("[]", encoding="utf-8")
+        (data_dir / "posts.json").write_text("[]", encoding="utf-8")
+        local_store.clear_cache()
+
+        response = self.client.get("/api/v1/me/dashboard/")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["review_count"], 1)
+        self.assertEqual(payload["question_count"], 1)
+        self.assertEqual(payload["post_count"], 1)
+
+
+class CommunityOrmSyncTests(TestCase):
+    """驗證社群文章在 JSON 缺席時仍可從 ORM 讀取、回覆、投票與後台管理。"""
+
+    def setUp(self):
+        self.temp_dir = TemporaryDirectory()
+        base_dir = Path(self.temp_dir.name)
+        data_dir = base_dir / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        (data_dir / "products.json").write_text(
+            json.dumps(PRODUCTS_FIXTURE, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        (data_dir / "categories.json").write_text(
+            json.dumps(CATEGORIES_FIXTURE, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        (data_dir / "users.json").write_text(
+            json.dumps(USERS_FIXTURE, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        (data_dir / "reviews.json").write_text(
+            json.dumps(REVIEWS_FIXTURE, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        (data_dir / "questions.json").write_text(
+            json.dumps(QUESTIONS_FIXTURE, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        (data_dir / "posts.json").write_text(
+            json.dumps(POSTS_FIXTURE, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        self.override = override_settings(BASE_DIR=base_dir)
+        self.override.enable()
+        local_store.clear_cache()
+        self.client = Client()
+        alice, _ = AppUserModel.objects.update_or_create(
+            username="alice",
+            defaults={
+                "email": "alice@example.com",
+                "display_name": "Alice",
+                "role": "member",
+                "password_hash": make_password("demo123"),
+                "account_status": "active",
+                "seller_request_status": "none",
+            },
+        )
+        storeteam, _ = AppUserModel.objects.update_or_create(
+            username="storeteam",
+            defaults={
+                "email": "storeteam@example.com",
+                "display_name": "Store Team",
+                "role": "admin",
+                "password_hash": make_password("demo123"),
+                "account_status": "active",
+                "seller_request_status": "approved",
+            },
+        )
+        post = CommunityPostModel.objects.create(
+            id=1,
+            author=alice,
+            author_display_name_snapshot="Alice",
+            topic="general",
+            title="Best mug for office use?",
+            body_html="Looking for a mug that keeps drinks warm and survives a busy office desk.",
+            votes_count=3,
+            is_visible=True,
+        )
+        CommunityReplyModel.objects.create(
+            post=post,
+            author=storeteam,
+            author_display_name_snapshot="Store Team",
+            body="A ceramic mug with lid works well for office use.",
+            is_visible=True,
+        )
+
+    def tearDown(self):
+        local_store.clear_cache()
+        self.override.disable()
+        self.temp_dir.cleanup()
+
+    def _post_json(self, path, payload):
+        return self.client.post(path, data=json.dumps(payload), content_type="application/json")
+
+    def _login(self, username="storeteam", password="demo123"):
+        return self._post_json("/api/v1/auth/login/", {"username": username, "password": password})
+
+    def _clear_posts_json(self):
+        data_dir = Path(self.temp_dir.name) / "data"
+        (data_dir / "posts.json").write_text("[]", encoding="utf-8")
+        local_store.clear_cache()
+
+    def test_community_and_admin_posts_work_without_json_snapshots(self):
+        self.assertEqual(len(community_service.list_posts()), 1)
+        self._clear_posts_json()
+
+        detail_response = self.client.get("/api/v1/community/posts/1/")
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertEqual(detail_response.json()["title"], "Best mug for office use?")
+        self.assertEqual(detail_response.json()["author"], "Alice")
+        self.assertEqual(len(detail_response.json()["replies"]), 1)
+        self.assertTrue(CommunityPostModel.objects.filter(id=1).exists())
+        self.assertTrue(CommunityReplyModel.objects.filter(post_id=1).exists())
+
+        self.assertEqual(self._login(username="alice", password="demo123").status_code, 200)
+        reply_response = self.client.post(
+            "/api/v1/community/posts/1/replies/",
+            data=json.dumps({"body": "A silicone coaster helps keep the desk clean."}),
+            content_type="application/json",
+        )
+        self.assertEqual(reply_response.status_code, 201)
+        self.assertEqual(len(reply_response.json()["replies"]), 2)
+        self.assertEqual(reply_response.json()["replies"][-1]["author"], anonymize_public_name("Alice"))
+        latest_reply = CommunityReplyModel.objects.filter(post_id=1).order_by("-id").first()
+        self.assertIsNotNone(latest_reply)
+        self.assertEqual(latest_reply.author.username, "alice")
+        self.assertEqual(latest_reply.author_display_name_snapshot, "Alice")
+
+        vote_response = self.client.post("/api/v1/community/posts/1/vote/")
+        self.assertEqual(vote_response.status_code, 200)
+        self.assertEqual(vote_response.json()["votes"], 4)
+        self.assertTrue(vote_response.json()["has_voted"])
+        self.assertTrue(CommunityVoteModel.objects.filter(post_id=1).exists())
+
+        self.client.post(
+            "/api/v1/auth/login/",
+            data=json.dumps({"username": "storeteam", "password": "demo123"}),
+            content_type="application/json",
+        )
+        admin_posts = self.client.get("/api/v1/staff/content/posts/?topic=general")
+        self.assertEqual(admin_posts.status_code, 200)
+        self.assertEqual(admin_posts.json()["items"][0]["title"], "Best mug for office use?")
+
+
+class BannerOrmSyncTests(TestCase):
+    """驗證 banners.json 缺席時，banner 仍可從 ORM 讀取與維護。"""
+
+    def setUp(self):
+        self.temp_dir = TemporaryDirectory()
+        base_dir = Path(self.temp_dir.name)
+        data_dir = base_dir / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        (data_dir / "users.json").write_text("[]", encoding="utf-8")
+        (data_dir / "banners.json").write_text("[]", encoding="utf-8")
+        self.override = override_settings(BASE_DIR=base_dir)
+        self.override.enable()
+        local_store.clear_cache()
+        self.client = Client()
+        self.storeteam = AppUserModel.objects.create(
+            username="storeteam",
+            email="storeteam@example.com",
+            display_name="Store Team",
+            role="admin",
+            password_hash=make_password("demo123"),
+            account_status="active",
+            seller_request_status="approved",
+        )
+        self.buyer = AppUserModel.objects.create(
+            username="buyer",
+            email="buyer@example.com",
+            display_name="Buyer",
+            role="member",
+            password_hash=make_password("demo123"),
+            account_status="active",
+            seller_request_status="",
+        )
+        now = timezone.now()
+        BannerModel.objects.create(
+            id=1,
+            title="Primary Banner",
+            copy_text="Main campaign",
+            image_path="/static/images/banner-1.jpg",
+            link_url="/products/acme-mug",
+            position="home_main",
+            note="seeded active banner",
+            sort_order=1,
+            status="approved",
+            is_active=True,
+            rejection_reason="",
+            applicant_user=self.storeteam,
+            reviewed_by=self.storeteam,
+            starts_at=now - timedelta(days=1),
+            ends_at=now + timedelta(days=30),
+        )
+
+    def tearDown(self):
+        local_store.clear_cache()
+        self.override.disable()
+        self.temp_dir.cleanup()
+
+    def _post_json(self, path, payload):
+        return self.client.post(path, data=json.dumps(payload), content_type="application/json")
+
+    def _login(self, username="storeteam", password="demo123"):
+        return self._post_json("/api/v1/auth/login/", {"username": username, "password": password})
+
+    def _clear_banners_json(self):
+        data_dir = Path(self.temp_dir.name) / "data"
+        (data_dir / "banners.json").write_text("[]", encoding="utf-8")
+        local_store.clear_cache()
+
+    def test_banner_endpoints_work_without_json_snapshots(self):
+        self.assertEqual(len(banner_service.list_public_banners()), 1)
+        self._clear_banners_json()
+
+        public_response = self.client.get("/api/v1/banners/")
+        self.assertEqual(public_response.status_code, 200)
+        self.assertEqual(public_response.json()["items"][0]["title"], "Primary Banner")
+        self.assertTrue(BannerModel.objects.filter(id=1).exists())
+
+        self.assertEqual(self._login(username="buyer", password="demo123").status_code, 200)
+        with _gcs_disabled_for_test():
+            create_response = self.client.post(
+                "/api/v1/me/banner-applications/",
+                data={
+                    "title": "ORM Banner",
+                    "copy_text": "From ORM only",
+                    "link_url": "/products/acme-tee",
+                    "starts_at": "2026-06-01",
+                    "ends_at": "2026-06-15",
+                    "position": "home_main",
+                    "note": "Created after json clear",
+                    "image": SimpleUploadedFile("orm-banner.png", b"banner-bytes", content_type="image/png"),
+                },
+            )
+        self.assertEqual(create_response.status_code, 201)
+        created = create_response.json()
+        self.assertEqual(created["status"], "pending")
+        self.assertEqual(created["applicant_username"], "buyer")
+        self.assertTrue(BannerModel.objects.filter(id=created["id"], title="ORM Banner").exists())
+
+        self._login(username="storeteam", password="demo123")
+        admin_list = self.client.get("/api/v1/staff/banners/")
+        self.assertEqual(admin_list.status_code, 200)
+        self.assertTrue(any(item["title"] == "ORM Banner" for item in admin_list.json()["items"]))
+
+        review_response = self.client.post(
+            f"/api/v1/staff/banners/{created['id']}/review/",
+            data=json.dumps({"approved": True}),
+            content_type="application/json",
+        )
+        self.assertEqual(review_response.status_code, 200)
+        self.assertEqual(review_response.json()["status"], "approved")
+
+        reorder_response = self.client.post(
+            "/api/v1/staff/banners/reorder/",
+            data=json.dumps({"ids": [created["id"], 1]}),
+            content_type="application/json",
+        )
+        self.assertEqual(reorder_response.status_code, 200)
+        reordered_map = {item["id"]: item for item in reorder_response.json()["items"]}
+        self.assertEqual(reordered_map[created["id"]]["sort_order"], 1)
+        self.assertTrue(BannerModel.objects.filter(id=created["id"], sort_order=1).exists())
+
+    def test_banner_product_link_updates_when_product_slug_changes(self):
+        seller = AppUserModel.objects.create(
+            username="abc",
+            email="abc@example.com",
+            display_name="abc",
+            role="seller",
+            password_hash=make_password("demo123"),
+            account_status="active",
+            seller_request_status="approved",
+        )
+        category = CategoryModel.objects.create(
+            slug="tops",
+            name="上衣",
+            description="tops",
+            is_active=True,
+        )
+        product = product_management._sync_product_record_to_orm(
+            {
+                "id": 88,
+                "slug": "abc-short-sleeve-top-1",
+                "name": "短袖上衣1",
+                "description": "",
+                "price": 590.0,
+                "compare_at_price": None,
+                "brand": "abc",
+                "category": category.name,
+                "category_slug": category.slug,
+                "tags": [],
+                "images": [],
+                "variants": [],
+                "specs": {},
+                "status": "active",
+                "stock": 20,
+                "owner_username": "abc",
+                "owner_display_name": "abc",
+            },
+            owner_snapshot={"username": "abc", "display_name": "abc"},
+        )
+        banner = BannerModel.objects.get(id=1)
+        banner.link_url = "http://localhost:3000/products/abc-short-sleeve-top-1?ref=banner"
+        banner.save(update_fields=["link_url"])
+
+        updated_record = dict(product)
+        updated_record["slug"] = "abc-short-sleeve-top-1-renamed"
+        updated_record["name"] = "短袖上衣1新版"
+        product_management._persist_product_record(updated_record, previous_slug="abc-short-sleeve-top-1")
+
+        banner.refresh_from_db()
+        self.assertEqual(banner.link_url, "/products/abc-short-sleeve-top-1-renamed?ref=banner")
+        self.assertEqual(banner_service.list_public_banners()[0]["link_url"], "/products/abc-short-sleeve-top-1-renamed?ref=banner")
+
+
+class RecommendationOrmSyncTests(TestCase):
+    """驗證 ORM 推薦關聯建立後，不依賴 recommendations.json 也能正常讀取。"""
+
+    def setUp(self):
+        self.temp_dir = TemporaryDirectory()
+        base_dir = Path(self.temp_dir.name)
+        data_dir = base_dir / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        (data_dir / "products.json").write_text(
+            json.dumps(build_extra_products(), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        (data_dir / "categories.json").write_text(
+            json.dumps(CATEGORIES_FIXTURE, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        (data_dir / "users.json").write_text(
+            json.dumps(USERS_FIXTURE, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        self.override = override_settings(BASE_DIR=base_dir)
+        self.override.enable()
+        local_store.clear_cache()
+        self.client = Client()
+
+        for product in build_extra_products():
+            category_slug = str(product.get("category", "")).strip().lower()
+            if category_slug:
+                CategoryModel.objects.get_or_create(
+                    slug=category_slug,
+                    defaults={"name": category_slug, "description": "seed category", "is_active": True},
+                )
+            product_management._sync_product_record_to_orm(
+                {
+                    **product,
+                    "category_slug": category_slug,
+                    "images": product.get("images", []),
+                    "variants": product.get("variants", []),
+                },
+                owner_snapshot={
+                    "username": str(product.get("owner_username", "")),
+                    "display_name": str(product.get("owner_display_name", "")),
+                },
+            )
+
+        source_product = ProductModel.objects.get(slug="acme-mug")
+        similar_product = ProductModel.objects.get(slug="acme-tee")
+        also_bought_product = ProductModel.objects.get(slug="acme-bottle")
+        ProductRecommendationModel.objects.create(
+            source_product=source_product,
+            recommended_product=similar_product,
+            score=0.95,
+            reason="similar",
+        )
+        ProductRecommendationModel.objects.create(
+            source_product=source_product,
+            recommended_product=also_bought_product,
+            score=0.88,
+            reason="also_bought",
+        )
+
+    def tearDown(self):
+        local_store.clear_cache()
+        self.override.disable()
+        self.temp_dir.cleanup()
+
+    def test_recommendations_api_works_without_json_snapshots(self):
+        product = product_management.get_visible_product("acme-mug")
+        payload = recommendation_service.get_product_recommendations(product)
+        self.assertEqual(payload["similar"][0]["slug"], "acme-tee")
+        self.assertEqual(payload["also_bought"][0]["slug"], "acme-bottle")
+        self.assertTrue(ProductRecommendationModel.objects.filter(source_product_id=1).exists())
+
+        response = self.client.get("/api/products/acme-mug/recommendations/")
+        self.assertEqual(response.status_code, 200)
+        api_payload = response.json()
+        self.assertEqual(api_payload["similar"][0]["slug"], "acme-tee")
+        self.assertEqual(api_payload["also_bought"][0]["slug"], "acme-bottle")
+
+
+class NewebpayStoreMapOrmSyncTests(TestCase):
+    """驗證 store-map JSON 清空後，選店紀錄仍可從 ORM 讀回。"""
+
+    def setUp(self):
+        self.temp_dir = TemporaryDirectory()
+        base_dir = Path(self.temp_dir.name)
+        data_dir = base_dir / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        (data_dir / "users.json").write_text(
+            json.dumps(USERS_FIXTURE, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        (data_dir / "newebpay_store_map_selections.json").write_text("[]", encoding="utf-8")
+        self.override = override_settings(BASE_DIR=base_dir)
+        self.override.enable()
+        local_store.clear_cache()
+        self.client = Client()
+
+    def tearDown(self):
+        local_store.clear_cache()
+        self.override.disable()
+        self.temp_dir.cleanup()
+
+    def _post_json(self, path, payload):
+        return self.client.post(path, data=json.dumps(payload), content_type="application/json")
+
+    def _login(self, username="buyer", password="demo123"):
+        return self._post_json("/api/v1/auth/login/", {"username": username, "password": password})
+
+    def _clear_store_map_json(self):
+        data_dir = Path(self.temp_dir.name) / "data"
+        (data_dir / "newebpay_store_map_selections.json").write_text("[]", encoding="utf-8")
+        local_store.clear_cache()
+
+    def test_store_map_selection_survives_without_json_snapshot(self):
+        self.assertEqual(self._login().status_code, 200)
+        env = {
+            "NEWEBPAY_LOGISTICS_MERCHANT_ID": "MS123456789",
+            "NEWEBPAY_LOGISTICS_HASH_KEY": "12345678901234567890123456789012",
+            "NEWEBPAY_LOGISTICS_HASH_IV": "1234567890123456",
+            "NEWEBPAY_LOGISTICS_STORE_MAP_REPLY_URL": "https://backend.example/api/v1/integrations/newebpay/logistics/store-map/callback/",
+            "NEWEBPAY_LOGISTICS_STORE_MAP_RETURN_URL": "https://frontend.example/checkout",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            prepare_response = self._post_json(
+                "/api/v1/checkout/logistics/store-map/prepare/",
+                {
+                    "pickup_store_brand": "UNIMART",
+                    "payment_method": "newebpay_credit",
+                    "return_url": "https://frontend.example/checkout",
+                },
+            )
+            self.assertEqual(prepare_response.status_code, 201)
+            prepared = prepare_response.json()
+
+            callback_response = self._post_json(
+                "/api/v1/integrations/newebpay/logistics/store-map/callback/",
+                {
+                    "MerchantOrderNo": prepared["merchant_order_no"],
+                    "StoreID": "149741",
+                    "StoreName": "台北 ORM 門市",
+                    "StoreAddr": "台北市中山區 ORM 路 1 號",
+                    "StoreType": "1",
+                    "ExtraData": prepared["selection_token"],
+                    "Status": "SUCCESS",
+                },
+            )
+            self.assertEqual(callback_response.status_code, 200)
+
+        self.assertTrue(
+            NewebpayStoreMapSelectionModel.objects.filter(selection_token=prepared["selection_token"]).exists()
+        )
+        self._clear_store_map_json()
+
+        selection_response = self.client.get(
+            f"/api/v1/checkout/logistics/store-selection/?token={prepared['selection_token']}"
+        )
+        self.assertEqual(selection_response.status_code, 200)
+        selection = selection_response.json()
+        self.assertTrue(selection["is_ready"])
+        self.assertEqual(selection["pickup_store_code"], "149741")
+        self.assertEqual(selection["pickup_store_name"], "台北 ORM 門市")

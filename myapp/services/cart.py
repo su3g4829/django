@@ -1,29 +1,34 @@
-"""購物車 service，採用訪客 session + 會員持久化混合模式。
+"""購物車 service。
 
-目前規則：
-- 未登入訪客使用 Django session
-- 已登入會員將 cart 持久化到本地 user store
+這個模組同時處理三種資料來源：
+- 訪客購物車：存在 Django session
+- 已登入購物車：優先存在 ORM `Cart` / `CartItem`
+- 過渡期 legacy 資料：必要時從 `local_store` JSON 匯入
 
-用途：
-- 支援購物車 CRUD
-- 支援登入時把訪客 cart 合併到會員 cart
-- 未來可平滑遷移到真正的資料庫 `Cart` / `CartItem` model
+雖然登入後的主資料來源是 ORM，session 仍保留一份鏡像 bucket，
+用來維持目前前端與既有流程對 session cart 的相容性。
 """
 
 from __future__ import annotations
 
-from copy import deepcopy
 from decimal import Decimal
 from typing import Any, Dict, Optional
 
+from django.db import transaction
+
+from ..models import AppUser as AppUserModel
+from ..models import Cart as CartModel
+from ..models import CartItem as CartItemModel
+from ..models import Product as ProductModel
+from ..models import ProductVariant as ProductVariantModel
 from ..repositories import local_store
 
 CART_KEY = "cart"
 SESSION_USER_KEY = "demo_user"
 GUEST_BUCKET_KEY = "__guest__"
 
-# Legacy single-seller defaults kept for coupon math; checkout shipping now
-# comes from order_service and seller/product shipping rules.
+# 這組運費與折扣常數只保留給舊版 `compute_totals(...)` 使用。
+# 真正 checkout 的運費計算已改由 `order_service` 與賣家運費規則處理。
 SHIPPING_FEE = Decimal("60.0")
 FREE_SHIPPING_THRESHOLD = Decimal("1000.0")
 COUPONS = {
@@ -31,15 +36,18 @@ COUPONS = {
 }
 
 
-# cart 基本結構：
-# - `items`: 以 item_key 為 key 的購物車項目 map
-# - `coupon`: 目前套用的折扣碼
 def _default_cart() -> Dict[str, Any]:
+    """回傳 cart 的標準空結構。"""
     return {"items": {}, "coupon": None}
 
 
 def _normalize_cart_payload(raw: Any) -> Dict[str, Any]:
-    """把任意輸入整理成一致的 cart payload 結構。"""
+    """把任意輸入正規化成 cart 標準結構。
+
+    無論來源是 session、ORM 還是 legacy JSON，最終都要長成：
+    - `items`: dict
+    - `coupon`: str | None
+    """
 
     if not isinstance(raw, dict):
         return _default_cart()
@@ -52,7 +60,12 @@ def _normalize_cart_payload(raw: Any) -> Dict[str, Any]:
 
 
 def _session_bucket_name(session) -> str:
-    """依 session 內 demo_user 決定目前要讀寫哪個 bucket。"""
+    """回傳目前 session 應使用的 bucket 名稱。
+
+    規則：
+    - 已登入：使用 username 當 bucket key
+    - 訪客：固定落在 `__guest__`
+    """
 
     user = session.get(SESSION_USER_KEY)
     if isinstance(user, dict):
@@ -63,14 +76,22 @@ def _session_bucket_name(session) -> str:
 
 
 def _logged_in_username(session) -> str:
-    """取得目前登入會員的 username；若為訪客則回空字串。"""
+    """回傳目前登入 username；訪客則回傳空字串。"""
 
     bucket_name = _session_bucket_name(session)
     return "" if bucket_name == GUEST_BUCKET_KEY else bucket_name
 
 
 def _normalize_cart_map(session) -> Dict[str, Any]:
-    """確保 session 內的 cart 容器是 bucket map 格式。"""
+    """確保 session 內的 cart 容器是 bucket map 結構。
+
+    新結構：
+    - `cart[username]`
+    - `cart["__guest__"]`
+
+    舊 session 可能直接把單一購物車 dict 放在 `cart` 底下，
+    這裡會順手升級成 bucket map。
+    """
 
     raw = session.get(CART_KEY)
     if not isinstance(raw, dict):
@@ -79,7 +100,7 @@ def _normalize_cart_map(session) -> Dict[str, Any]:
         session.modified = True
         return raw
 
-    # Older sessions stored a single cart dict directly under "cart".
+    # 舊版 session 直接把單一 cart dict 塞在 `cart` 下，這裡統一轉成 guest bucket。
     if "items" in raw or "coupon" in raw:
         raw = {GUEST_BUCKET_KEY: _normalize_cart_payload(raw)}
         session[CART_KEY] = raw
@@ -90,7 +111,7 @@ def _normalize_cart_map(session) -> Dict[str, Any]:
 
 
 def _ensure_guest_cart(session) -> Dict[str, Any]:
-    """確保訪客 bucket 的 cart 存在且結構正確。"""
+    """確保訪客 bucket 存在，且內容符合標準 cart 結構。"""
 
     cart_map = _normalize_cart_map(session)
     cart = cart_map.get(GUEST_BUCKET_KEY)
@@ -102,32 +123,204 @@ def _ensure_guest_cart(session) -> Dict[str, Any]:
     return normalized
 
 
-def _get_persisted_user_cart(username: str) -> Dict[str, Any]:
-    """從本地 user store 讀取會員持久化 cart。"""
+def _db_cart_enabled() -> bool:
+    """判斷第二波購物車 ORM 表是否已可用。"""
 
-    user = local_store.get_user_by_username(username)
+    try:
+        CartModel.objects.count()
+        return True
+    except Exception:
+        return False
+
+
+def _get_or_bootstrap_db_user(username: str) -> Optional[AppUserModel]:
+    """取得對應的 ORM 會員；必要時從 legacy user 補建。
+
+    購物車 ORM 需要先有 `AppUser` 列，所以這裡會在過渡期做 bootstrap。
+    """
+
+    clean_username = str(username or "").strip().lower()
+    if not clean_username or not _db_cart_enabled():
+        return None
+    db_user = AppUserModel.objects.filter(username=clean_username).first()
+    if db_user:
+        return db_user
+
+    from . import auth_demo
+
+    return auth_demo._get_or_bootstrap_db_user(clean_username)
+
+
+def _resolve_product_variant(product: ProductModel, variant_id: str) -> Optional[ProductVariantModel]:
+    """把 cart 的公開 variant id 對應到 ORM 變體列。"""
+
+    clean_variant_id = str(variant_id or "").strip()
+    if not clean_variant_id:
+        return None
+    variant = ProductVariantModel.objects.filter(product=product, external_variant_id=clean_variant_id).first()
+    if variant:
+        return variant
+    if clean_variant_id.isdigit():
+        return ProductVariantModel.objects.filter(product=product, id=int(clean_variant_id)).first()
+    return None
+
+
+def _line_variant_id(item: CartItemModel) -> str:
+    """回傳 cart API payload 要公開使用的 variant id。
+
+    優先順序：
+    - `product_variant.external_variant_id`
+    - 從 `item_key` 反推
+    """
+
+    if item.product_variant_id and item.product_variant and item.product_variant.external_variant_id:
+        return str(item.product_variant.external_variant_id)
+    key = str(item.item_key or "")
+    if "__" in key:
+        return key.split("__", 1)[1]
+    return ""
+
+
+def _db_cart_to_payload(db_cart: CartModel) -> Dict[str, Any]:
+    """把 ORM cart 列序列化成目前 API / session 共用的 payload。"""
+
+    payload = _default_cart()
+    payload["coupon"] = db_cart.coupon_code or None
+    items: Dict[str, Any] = {}
+    queryset = db_cart.items.select_related("product", "product_variant").order_by("id")
+    for line in queryset:
+        variant_id = _line_variant_id(line)
+        variant_name = str(line.variant_name_snapshot or "")
+        name = str(line.product_name_snapshot or (line.product.name if line.product_id else ""))
+        items[line.item_key] = {
+            "key": line.item_key,
+            "id": line.product_id,
+            "slug": str(line.product.slug if line.product_id else ""),
+            "name": name,
+            "display_name": f"{name} - {variant_name}" if variant_name else name,
+            "price": float(line.unit_price_snapshot),
+            "qty": int(line.quantity),
+            "variant_id": variant_id,
+            "variant_name": variant_name,
+            "sku": str(line.sku_snapshot or ""),
+        }
+    payload["items"] = items
+    return payload
+
+
+@transaction.atomic
+def _replace_db_cart_from_payload(db_cart: CartModel, cart: Dict[str, Any]) -> Dict[str, Any]:
+    """用標準 cart payload 完整覆蓋 ORM cart 內容。
+
+    這個 helper 主要用在：
+    - guest cart 併入登入購物車後回寫 ORM
+    - 每次更新登入 cart 時，把目前有效狀態同步到 ORM
+    """
+
+    normalized = _normalize_cart_payload(cart)
+    db_cart.coupon_code = str(normalized.get("coupon") or "")
+    db_cart.save(update_fields=["coupon_code", "updated_at"])
+    db_cart.items.all().delete()
+
+    items = normalized.get("items", {})
+    if isinstance(items, dict):
+        for item_key, item in items.items():
+            if not isinstance(item, dict):
+                continue
+            slug = str(item.get("slug") or "").strip()
+            if not slug:
+                continue
+            product = ProductModel.objects.filter(slug=slug).first()
+            if not product:
+                product = ProductModel.objects.filter(id=item.get("id")).first()
+            if not product:
+                continue
+            variant_id = str(item.get("variant_id") or "").strip()
+            variant = _resolve_product_variant(product, variant_id)
+            name = str(item.get("name") or product.name)
+            variant_name = str(item.get("variant_name") or "")
+            CartItemModel.objects.create(
+                cart=db_cart,
+                product=product,
+                product_variant=variant,
+                item_key=str(item_key),
+                quantity=max(int(item.get("qty") or 0), 1),
+                unit_price_snapshot=Decimal(str(item.get("price") or product.price)),
+                product_name_snapshot=name,
+                variant_name_snapshot=variant_name,
+                sku_snapshot=str(item.get("sku") or (variant.sku if variant else "")),
+            )
+    db_cart.refresh_from_db()
+    return _db_cart_to_payload(db_cart)
+
+
+def _get_or_create_db_cart(username: str) -> Optional[CartModel]:
+    """取得或建立登入會員對應的 ORM 購物車。"""
+
+    db_user = _get_or_bootstrap_db_user(username)
+    if not db_user:
+        return None
+    db_cart, _ = CartModel.objects.get_or_create(user=db_user, defaults={"coupon_code": ""})
+    return db_cart
+
+
+def _bootstrap_db_cart_from_legacy(username: str, db_cart: CartModel) -> None:
+    """在 ORM cart 仍為空時，單次匯入 legacy JSON cart。"""
+
+    if db_cart.items.exists() or db_cart.coupon_code:
+        return
+    legacy_user = local_store.get_user_by_username(username)
+    if not legacy_user:
+        return
+    legacy_cart = _normalize_cart_payload(legacy_user.get("cart"))
+    if not legacy_cart.get("items") and not legacy_cart.get("coupon"):
+        return
+    _replace_db_cart_from_payload(db_cart, legacy_cart)
+
+
+def _get_persisted_user_cart(username: str) -> Dict[str, Any]:
+    """讀取登入會員的持久化購物車。
+
+    優先順序：
+    - ORM cart
+    - legacy JSON cart
+    - 空 cart
+    """
+
+    clean_username = str(username or "").strip().lower()
+    if not clean_username:
+        return _default_cart()
+    if _db_cart_enabled():
+        db_cart = _get_or_create_db_cart(clean_username)
+        if db_cart:
+            _bootstrap_db_cart_from_legacy(clean_username, db_cart)
+            return _db_cart_to_payload(db_cart)
+    user = local_store.get_user_by_username(clean_username)
     if not user:
         return _default_cart()
     return _normalize_cart_payload(user.get("cart"))
 
 
 def _save_persisted_user_cart(username: str, cart: Dict[str, Any]) -> Dict[str, Any]:
-    """把會員 cart 寫回本地 user store。"""
+    """保存登入會員購物車，優先寫入 ORM。"""
 
-    clean_username = username.strip().lower()
-    users = deepcopy(local_store.get_users())
+    clean_username = str(username or "").strip().lower()
     normalized = _normalize_cart_payload(cart)
-    for item in users:
-        if str(item.get("username", "")).strip().lower() != clean_username:
-            continue
-        item["cart"] = normalized
-        local_store.save_users(users)
+    if not clean_username:
         return normalized
+    if _db_cart_enabled():
+        db_cart = _get_or_create_db_cart(clean_username)
+        if db_cart:
+            return _replace_db_cart_from_payload(db_cart, normalized)
     return normalized
 
 
 def _sync_session_bucket(session, bucket_name: str, cart: Dict[str, Any]) -> None:
-    """把某個 bucket 的 cart 狀態同步回 session。"""
+    """把 cart payload 鏡像同步回 session bucket。
+
+    即使登入後真正主資料在 ORM，session 還是保留一份，
+    讓目前前端與既有 middleware / helper 能維持相容。
+    """
 
     cart_map = _normalize_cart_map(session)
     cart_map[bucket_name] = _normalize_cart_payload(cart)
@@ -136,7 +329,12 @@ def _sync_session_bucket(session, bucket_name: str, cart: Dict[str, Any]) -> Non
 
 
 def _read_active_cart(session) -> Dict[str, Any]:
-    """讀取目前有效的 cart；會員優先走持久化 cart。"""
+    """讀取目前有效 cart。
+
+    規則：
+    - 已登入：讀持久化 cart，並同步回 session bucket
+    - 訪客：直接讀 guest bucket
+    """
 
     username = _logged_in_username(session)
     if username:
@@ -147,7 +345,12 @@ def _read_active_cart(session) -> Dict[str, Any]:
 
 
 def _write_active_cart(session, cart: Dict[str, Any]) -> Dict[str, Any]:
-    """寫入目前有效的 cart；會員同步寫入持久化 store。"""
+    """寫入目前有效 cart。
+
+    規則：
+    - 已登入：先寫持久化 cart，再同步 session bucket
+    - 訪客：只更新 guest bucket
+    """
 
     username = _logged_in_username(session)
     normalized = _normalize_cart_payload(cart)
@@ -160,13 +363,13 @@ def _write_active_cart(session, cart: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def get_cart(session) -> Dict[str, Any]:
-    """取得目前使用者 / 訪客的有效購物車。"""
+    """回傳目前會員或訪客的有效購物車。"""
 
     return _read_active_cart(session)
 
 
 def make_item_key(slug: str, variant_id: str = "") -> str:
-    """用商品 slug 與 variant id 產生購物車 item key。"""
+    """由商品 slug 與 variant id 組出穩定的 cart line key。"""
 
     clean_variant_id = str(variant_id).strip()
     return f"{slug}__{clean_variant_id}" if clean_variant_id else slug
@@ -184,7 +387,10 @@ def add_item(
     variant_name: str = "",
     sku: str = "",
 ) -> None:
-    """加入商品到購物車；同 key 已存在時累加數量。"""
+    """加入一筆商品到購物車。
+
+    若同一個 `item_key` 已存在，則直接累加數量，而不是新增第二列。
+    """
 
     if qty <= 0:
         return
@@ -210,7 +416,7 @@ def add_item(
 
 
 def update_qty(session, item_key: str, qty: int) -> None:
-    """更新購物車單項數量；小於等於 0 時直接刪除。"""
+    """更新單一 cart line 數量；`qty <= 0` 時直接移除。"""
 
     cart = _read_active_cart(session)
     items = cart["items"]
@@ -223,7 +429,7 @@ def update_qty(session, item_key: str, qty: int) -> None:
 
 
 def remove_item(session, item_key: str) -> None:
-    """刪除購物車單項。"""
+    """刪除單一購物車品項。"""
 
     cart = _read_active_cart(session)
     if item_key in cart["items"]:
@@ -232,21 +438,26 @@ def remove_item(session, item_key: str) -> None:
 
 
 def clear(session) -> None:
-    """清空目前有效 bucket 的購物車。"""
+    """清空目前有效 cart bucket。"""
 
     _write_active_cart(session, _default_cart())
 
 
 def clear_guest_cart(session) -> None:
-    """清空訪客 bucket 的購物車。"""
+    """清空訪客 bucket，不影響已登入使用者的持久化 cart。"""
 
     _sync_session_bucket(session, GUEST_BUCKET_KEY, _default_cart())
 
 
 def migrate_guest_cart(session, username: str) -> None:
-    """登入時把訪客 cart 合併到指定會員的持久化 cart。"""
+    """把訪客購物車併入登入會員的持久化 cart。
 
-    target_bucket = username.strip().lower()
+    常見於：
+    - 使用者先以訪客身分加商品
+    - 登入後希望保留先前加入的品項與折扣碼
+    """
+
+    target_bucket = str(username or "").strip().lower()
     if not target_bucket:
         return
 
@@ -259,6 +470,7 @@ def migrate_guest_cart(session, username: str) -> None:
         for item_key, guest_item in guest_items.items():
             if not isinstance(guest_item, dict):
                 continue
+            # 同 key 商品直接累加數量，避免 guest 與 member cart 各留一列重複項目。
             if item_key in target_items and isinstance(target_items[item_key], dict):
                 target_items[item_key]["qty"] = int(target_items[item_key].get("qty", 0)) + int(guest_item.get("qty", 0))
             else:
@@ -269,13 +481,18 @@ def migrate_guest_cart(session, username: str) -> None:
     else:
         target_cart.setdefault("coupon", None)
 
-    _save_persisted_user_cart(target_bucket, target_cart)
-    _sync_session_bucket(session, target_bucket, target_cart)
+    persisted = _save_persisted_user_cart(target_bucket, target_cart)
+    _sync_session_bucket(session, target_bucket, persisted)
     _sync_session_bucket(session, GUEST_BUCKET_KEY, _default_cart())
 
 
 def compute_totals(session) -> Dict[str, Decimal]:
-    """依 legacy coupon / shipping 規則計算購物車金額摘要。"""
+    """計算舊版 cart totals。
+
+    注意：
+    - 這不是 checkout 最終金額邏輯
+    - 主要保留給舊流程與簡化場景使用
+    """
 
     cart = _read_active_cart(session)
     subtotal = sum((Decimal(str(item["price"])) * item["qty"] for item in cart["items"].values()), Decimal("0.0"))
@@ -296,7 +513,12 @@ def compute_totals(session) -> Dict[str, Decimal]:
 
 
 def apply_coupon(session, code: Optional[str]) -> bool:
-    """套用或清除購物車折扣碼。"""
+    """套用或清除目前 cart 的折扣碼。
+
+    回傳值語意：
+    - `True`：成功套用有效折扣碼
+    - `False`：清除折扣碼，或輸入了無效代碼
+    """
 
     cart = _read_active_cart(session)
     if not code:
@@ -312,7 +534,7 @@ def apply_coupon(session, code: Optional[str]) -> bool:
 
 
 def count_items(session) -> int:
-    """計算目前有效購物車中的商品總件數。"""
+    """回傳所有 cart line 的總件數。"""
 
     cart = _read_active_cart(session)
     return sum(item["qty"] for item in cart["items"].values())

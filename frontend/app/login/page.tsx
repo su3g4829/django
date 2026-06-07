@@ -1,6 +1,15 @@
 'use client'
 
 /**
+ * 登入頁。
+ *
+ * 這頁只做最小功能：
+ * - 收集帳號密碼
+ * - 呼叫 session-based login API
+ * - 成功後回到首頁
+ */
+
+/**
  * 登入頁
  *
  * 功能：
@@ -16,6 +25,7 @@ import { FormEvent, useState } from 'react'
 import { apiFetch } from '@/lib/api'
 
 export default function LoginPage() {
+  // 登入表單刻意保持簡單，只需要帳號、密碼與送出狀態。
   /** 使用者輸入的登入帳號。 */
   const [username, setUsername] = useState('')
   /** 使用者輸入的登入密碼。 */
@@ -32,6 +42,7 @@ export default function LoginPage() {
    * - 瀏覽器原生 form submit 事件，需先 `preventDefault()` 以避免整頁重新整理。
    */
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    // 成功登入後直接整頁跳轉，讓伺服器 session 與前端狀態一起刷新。
     event.preventDefault()
     try {
       setSubmitting(true)

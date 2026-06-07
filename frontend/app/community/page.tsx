@@ -1,5 +1,31 @@
 'use client'
 
+/**
+ * `use client`
+ * 來源：Next.js App Router。
+ *
+ * 這頁需要：
+ * - 讀社群列表 API
+ * - 控制發文輸入窗開關
+ * - 維護富文字表單 state
+ *
+ * 因此必須在瀏覽器端執行。
+ */
+
+/**
+ * 社群列表頁。
+ *
+ * 主要責任：
+ * - 讀取討論串列表
+ * - 控制發文表單開關
+ * - 送出新文章後重新整理列表
+ *
+ * 來源：
+ * - `Link` 來自 Next.js
+ * - `FormEvent` / `useEffect` / `useState` 來自 React
+ * - `RichTextEditor` / `RichTextContent` 是本專案富文字輸入與顯示元件
+ */
+
 import Link from 'next/link'
 import { FormEvent, useEffect, useState } from 'react'
 
@@ -25,6 +51,13 @@ const EMPTY_FORM: CommunityPostFormState = {
 }
 
 export default function CommunityPage() {
+  /**
+   * 列表、表單與 API 狀態集中放在頁面層。
+   *
+   * 原因：
+   * - 發文成功後需要直接刷新整個列表
+   * - 如果把 composer 拆到更深層，狀態回傳路徑會比較繞
+   */
   const [posts, setPosts] = useState<CommunityPost[]>([])
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
@@ -33,6 +66,13 @@ export default function CommunityPage() {
   const [form, setForm] = useState<CommunityPostFormState>(EMPTY_FORM)
 
   async function loadPosts() {
+    /**
+     * 進頁與發文完成後都共用這支讀取函式。
+     *
+     * 這是典型 loader pattern：
+     * - 頁面初次載入用它
+     * - mutation 成功後 refresh 也用它
+     */
     setLoading(true)
     try {
       const payload = await apiFetch<CommunityPostListPayload>('/community/posts/')
@@ -50,6 +90,13 @@ export default function CommunityPage() {
   }, [])
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    /**
+     * 送出前先驗證標題與富文字內容，避免建立空白文章。
+     *
+     * `prepareRichTextForStorage`
+     * - 會把編輯器 HTML 清洗成適合送往後端的格式
+     * - 避免把純編輯器暫存標記直接存進資料庫
+     */
     event.preventDefault()
 
     if (!form.title.trim()) {

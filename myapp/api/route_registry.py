@@ -547,15 +547,6 @@ API_ROUTE_GROUPS = [
                 "status": "canonical",
                 "notes": "Mock NewebPay payment create/read endpoints used for PoC testing.",
             },
-            {
-                "name": "NewebPay Payment Callback",
-                "canonical": "/api/v1/integrations/newebpay/payment/callback/",
-                "legacy": "",
-                "view": "myapp.api.views.NewebpayPaymentCallbackApi",
-                "drf": True,
-                "status": "canonical",
-                "notes": "Mock payment callback/webhook endpoint for transaction status updates.",
-            },
         ],
     },
     {

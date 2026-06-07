@@ -1,5 +1,17 @@
 'use client'
 
+/**
+ * `use client`
+ * 來源：Next.js App Router。
+ *
+ * 管理端會員頁需要：
+ * - 本地篩選 state
+ * - 本地排序 state
+ * - 送出停權 / 啟用操作
+ *
+ * 因此必須用 Client Component。
+ */
+
 import { useEffect, useMemo, useState } from 'react'
 
 import { apiFetch, toQueryString } from '@/lib/api'
@@ -20,6 +32,17 @@ type UserListPayload = {
 
 type UserSortKey = 'created_desc' | 'created_asc' | 'username_asc' | 'username_desc'
 
+/**
+ * staff 使用者管理頁。
+ *
+ * 後端負責篩選，前端則負責：
+ * - 本地排序
+ * - 帳號狀態操作
+ *
+ * 來源：
+ * - `useEffect` / `useMemo` / `useState` 來自 React
+ * - `toQueryString` 來自專案 API helper，用來穩定組裝查詢字串
+ */
 export default function AdminUsersPage() {
   const [items, setItems] = useState<AdminUser[]>([])
   const [filters, setFilters] = useState({ q: '', role: '', account_status: '' })
@@ -28,6 +51,13 @@ export default function AdminUsersPage() {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
 
+  /**
+   * 依目前 filters 重新抓使用者列表。
+   *
+   * `nextFilters = filters`
+   * - 是 JavaScript 預設參數語法
+   * - 代表呼叫時若沒傳參數，就自動使用目前 state 裡的 filters
+   */
   async function loadUsers(nextFilters = filters) {
     setLoading(true)
     try {
@@ -45,6 +75,13 @@ export default function AdminUsersPage() {
     void loadUsers()
   }, [])
 
+  /**
+   * 排序留在前端切換，避免每次改排序都重打 API。
+   *
+   * `useMemo`
+   * - 用來把排序後陣列視為衍生值
+   * - 只有 `items` 或 `sortBy` 改變時才重算
+   */
   const sortedItems = useMemo(() => {
     const next = [...items]
     switch (sortBy) {
@@ -65,6 +102,12 @@ export default function AdminUsersPage() {
     return next
   }, [items, sortBy])
 
+  /**
+   * staff 目前只提供 active / suspended 兩種帳號狀態切換。
+   *
+   * 成功後不手動 patch 本地 `items`，
+   * 而是重新讀一次列表，讓畫面完全以後端最新狀態為準。
+   */
   async function updateStatus(username: string, accountStatus: 'active' | 'suspended') {
     try {
       setSubmitting(true)

@@ -1,12 +1,19 @@
 'use client'
 
 /**
- * 賣家商品列表頁
+ * `use client` 來自 Next.js App Router。
+ *
+ * 用法：
+ * - 讓本頁可以使用 React hook、瀏覽器事件與 `window` API。
+ */
+
+/**
+ * 賣家商品列表頁。
  *
  * 功能：
- * - 載入目前登入賣家可管理的商品
- * - 提供編輯、複製、封存、刪除操作
- * - 在登入狀態變化或視窗重新聚焦時自動重抓列表，避免看到其他帳號的舊資料
+ * - 載入自己名下商品
+ * - 提供複製、封存、刪除動作
+ * - 監聽 bootstrap refresh 事件與視窗 focus，讓多頁操作後可自動重抓最新資料
  */
 
 import { useEffect, useState } from 'react'
@@ -25,6 +32,16 @@ export default function SellerProductsPage() {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
 
+  /**
+   * `async function` 是 JavaScript 非同步函式語法。
+   *
+   * 來源：
+   * - ECMAScript Promise / async-await 規範
+   *
+   * 用法：
+   * - 內部可以用 `await` 等待 Promise 結果
+   * - 這裡把讀列表流程包成 helper，方便初次載入、事件刷新、操作完成後重抓共用同一套邏輯
+   */
   async function loadProducts() {
     setLoading(true)
     setItems([])
@@ -33,7 +50,7 @@ export default function SellerProductsPage() {
       setItems(payload.items)
       setError('')
     } catch (err) {
-      setError(err instanceof Error ? err.message : '載入商品列表失敗，請稍後再試。')
+      setError(err instanceof Error ? err.message : '載入商品列表失敗。')
     } finally {
       setLoading(false)
     }
@@ -42,10 +59,18 @@ export default function SellerProductsPage() {
   useEffect(() => {
     void loadProducts()
 
+    /**
+     * 自訂事件名稱來自 `@/lib/api`。
+     * 用途是其他頁面完成重要寫入後，可以通知 header 或同角色頁面重抓 bootstrap 類資料。
+     */
     const handleBootstrapRefresh = () => {
       void loadProducts()
     }
 
+    /**
+     * `focus` 事件來自瀏覽器 Window API。
+     * 切回分頁時重抓一次，避免另一個分頁已修改商品但此頁仍停留舊資料。
+     */
     const handleWindowFocus = () => {
       void loadProducts()
     }
@@ -65,7 +90,7 @@ export default function SellerProductsPage() {
       await apiFetch(`/me/products/${slug}/archive/`, { method: 'POST' })
       await loadProducts()
     } catch (err) {
-      setError(err instanceof Error ? err.message : '封存商品失敗，請稍後再試。')
+      setError(err instanceof Error ? err.message : '封存商品失敗。')
     } finally {
       setSubmitting(false)
     }
@@ -77,7 +102,7 @@ export default function SellerProductsPage() {
       await apiFetch(`/me/products/${slug}/duplicate/`, { method: 'POST' })
       await loadProducts()
     } catch (err) {
-      setError(err instanceof Error ? err.message : '複製商品失敗，請稍後再試。')
+      setError(err instanceof Error ? err.message : '複製商品失敗。')
     } finally {
       setSubmitting(false)
     }
@@ -91,10 +116,10 @@ export default function SellerProductsPage() {
       await loadProducts()
       setError('')
     } catch (err) {
-      const message = err instanceof Error ? err.message : '刪除商品失敗，請稍後再試。'
+      const message = err instanceof Error ? err.message : '刪除商品失敗。'
       if (message === 'Product not found.') {
         await loadProducts()
-        setError('商品不存在，或該商品不屬於目前登入的賣家；列表已重新整理。')
+        setError('商品可能已被其他操作移除，畫面已重新整理。')
       } else {
         setError(message)
       }
@@ -108,7 +133,7 @@ export default function SellerProductsPage() {
       <div className="row" style={{ justifyContent: 'space-between' }}>
         <div>
           <h1>我的商品</h1>
-          <p className="muted">這裡會透過 `/api/v1/me/products/` 取得目前賣家可管理的商品列表。</p>
+          <p className="muted">這頁會透過 `/api/v1/me/products/` 顯示賣家自己的商品列表。</p>
         </div>
         <a className="btn" href="/me/products/new">
           新增商品
@@ -118,9 +143,9 @@ export default function SellerProductsPage() {
       {error ? <div className="notice">{error}</div> : null}
 
       {loading ? (
-        <div className="muted">載入商品列表中…</div>
+        <div className="muted">載入商品列表中...</div>
       ) : !items.length ? (
-        <div className="muted">目前尚未建立任何商品。</div>
+        <div className="muted">目前還沒有建立任何商品。</div>
       ) : (
         <table className="table">
           <thead>
@@ -138,7 +163,7 @@ export default function SellerProductsPage() {
                 <td>
                   <strong>{item.name}</strong>
                   <div className="muted">
-                    {[item.brand, item.category].filter((value) => value && value !== 'none').join(' ｜ ') || '未分類'}
+                    {[item.brand, item.category].filter((value) => value && value !== 'none').join(' / ') || '未分類'}
                   </div>
                 </td>
                 <td>{item.status_label ?? item.status ?? '-'}</td>

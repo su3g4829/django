@@ -17,9 +17,15 @@ from rest_framework import serializers
 # 功能是替 API view 做輸入驗證與輸出結構約束。
 # ---------------------------------------------------------------------------
 class ProductListQuerySerializer(serializers.Serializer):
-    """ProductListQuerySerializer。
-    
-    負責驗證查詢參數，避免 view 直接處理未整理的 request.GET。
+    """商品列表 query string 驗證器。
+
+    主要供：
+    - 商品總覽頁
+    - 品牌頁 / 分類頁
+    - 關鍵字搜尋結果頁
+
+    用途是先把 `request.query_params` 轉成乾淨型別，
+    避免 view 直接處理未驗證的字串資料。
     """
     q = serializers.CharField(required=False, allow_blank=True)
     category = serializers.CharField(required=False, allow_blank=True)
@@ -34,18 +40,21 @@ class ProductListQuerySerializer(serializers.Serializer):
 
 
 class VariantAttributesSerializer(serializers.Serializer):
-    """VariantAttributesSerializer。
-    
-    DRF Serializer，用來驗證請求資料或整理 API 回應格式。
+    """商品變體的屬性欄位。
+
+    目前主要描述前端最常用的兩種規格：
+    - 顏色 `color`
+    - 尺寸 `size`
     """
     color = serializers.CharField(required=False, allow_blank=True)
     size = serializers.CharField(required=False, allow_blank=True)
 
 
 class VariantSerializer(serializers.Serializer):
-    """VariantSerializer。
-    
-    DRF Serializer，用來驗證請求資料或整理 API 回應格式。
+    """單一商品變體的回應格式。
+
+    這份結構會被商品詳情頁與賣家商品編輯頁共用，
+    用來描述變體價格、庫存、圖片與規格屬性。
     """
     id = serializers.CharField()
     name = serializers.CharField()
@@ -58,9 +67,10 @@ class VariantSerializer(serializers.Serializer):
 
 
 class ProductSerializer(serializers.Serializer):
-    """ProductSerializer。
-    
-    DRF Serializer，用來驗證請求資料或整理 API 回應格式。
+    """前台商品主回應格式。
+
+    這是商品列表、商品詳情、收藏、推薦、比較頁共用的核心 payload。
+    除了基本資料，也保留前端直接渲染會用到的衍生欄位。
     """
     # 商品主識別與基本展示欄位
     id = serializers.IntegerField()
@@ -81,6 +91,8 @@ class ProductSerializer(serializers.Serializer):
 
     # 商品狀態 / 擁有者 / 建立時間
     stock = serializers.IntegerField(required=False, allow_null=True)
+    price_compare_enabled = serializers.BooleanField(required=False)
+    price_compare_query = serializers.CharField(required=False, allow_blank=True)
     status = serializers.CharField(required=False)
     owner_user_id = serializers.IntegerField(required=False, allow_null=True)
     owner_username = serializers.CharField(required=False, allow_blank=True)
@@ -106,9 +118,9 @@ class ProductSerializer(serializers.Serializer):
 
 
 class PageMetaSerializer(serializers.Serializer):
-    """PageMetaSerializer。
-    
-    DRF Serializer，用來驗證請求資料或整理 API 回應格式。
+    """列表分頁資訊。
+
+    讓前端可以根據目前頁碼、總頁數與總筆數畫出 pagination UI。
     """
     page = serializers.IntegerField()
     total_pages = serializers.IntegerField()
@@ -116,9 +128,11 @@ class PageMetaSerializer(serializers.Serializer):
 
 
 class ProductListResponseSerializer(serializers.Serializer):
-    """ProductListResponseSerializer。
-    
-    負責定義 API 回應結構，讓前端可以穩定取得固定欄位。
+    """商品列表頁的完整回應格式。
+
+    內容除了 `items` 與分頁資訊，也包含：
+    - `facets`：可供篩選 UI 使用的統計資料
+    - `filters`：後端實際套用的條件回顯
     """
     items = ProductSerializer(many=True)
     meta = PageMetaSerializer()
@@ -153,7 +167,11 @@ class ProductCategoryCreateSerializer(serializers.Serializer):
 
 
 class ProductCompareResponseSerializer(serializers.Serializer):
-    """商品比較頁的回應結構。"""
+    """商品比較頁的回應格式。
+
+    `items` 是實際可比較的商品資料；
+    `slugs` 保留原始比較清單，方便前端知道哪些 slug 正在比較中。
+    """
 
     items = ProductSerializer(many=True)
     slugs = serializers.ListField(child=serializers.CharField())
@@ -163,9 +181,9 @@ class ProductCompareResponseSerializer(serializers.Serializer):
 # 商品評論 / 問答 / 推薦 / 比價
 # ---------------------------------------------------------------------------
 class ReviewSerializer(serializers.Serializer):
-    """ReviewSerializer。
-    
-    DRF Serializer，用來驗證請求資料或整理 API 回應格式。
+    """單筆商品評論格式。
+
+    供商品詳情頁評論區與會員中心評論摘要使用。
     """
     id = serializers.IntegerField()
     product_id = serializers.IntegerField()
@@ -180,9 +198,10 @@ class ReviewSerializer(serializers.Serializer):
 
 
 class ReviewCreateSerializer(serializers.Serializer):
-    """ReviewCreateSerializer。
-    
-    負責驗證建立資料時需要的輸入欄位。
+    """建立商品評論時的輸入格式。
+
+    這層只檢查基本結構與長度，
+    真正的商業規則仍交由 `review_service` 判斷。
     """
     rating = serializers.IntegerField(min_value=1, max_value=5)
     title = serializers.CharField(max_length=80)
@@ -190,17 +209,14 @@ class ReviewCreateSerializer(serializers.Serializer):
 
 
 class ReviewListResponseSerializer(serializers.Serializer):
-    """ReviewListResponseSerializer。
-    
-    負責定義 API 回應結構，讓前端可以穩定取得固定欄位。
-    """
+    """商品評論列表回應格式。"""
     items = ReviewSerializer(many=True)
 
 
 class QuestionAnswerSerializer(serializers.Serializer):
-    """QuestionAnswerSerializer。
-    
-    DRF Serializer，用來驗證請求資料或整理 API 回應格式。
+    """單筆問答回答格式。
+
+    會巢狀出現在 `QuestionSerializer.answers` 內。
     """
     id = serializers.IntegerField()
     author = serializers.CharField()
@@ -212,9 +228,10 @@ class QuestionAnswerSerializer(serializers.Serializer):
 
 
 class QuestionSerializer(serializers.Serializer):
-    """QuestionSerializer。
-    
-    DRF Serializer，用來驗證請求資料或整理 API 回應格式。
+    """單筆商品問題格式。
+
+    除了問題本身，也可帶上回答數量與巢狀回答清單，
+    方便商品詳情頁一次畫出完整 Q&A 區塊。
     """
     id = serializers.IntegerField()
     product_id = serializers.IntegerField()
@@ -230,34 +247,27 @@ class QuestionSerializer(serializers.Serializer):
 
 
 class QuestionCreateSerializer(serializers.Serializer):
-    """QuestionCreateSerializer。
-    
-    負責驗證建立資料時需要的輸入欄位。
-    """
+    """建立商品問題時的輸入格式。"""
     title = serializers.CharField(max_length=80)
     body = serializers.CharField()
 
 
 class AnswerCreateSerializer(serializers.Serializer):
-    """AnswerCreateSerializer。
-    
-    負責驗證建立資料時需要的輸入欄位。
-    """
+    """建立問題回答時的輸入格式。"""
     body = serializers.CharField()
 
 
 class QuestionListResponseSerializer(serializers.Serializer):
-    """QuestionListResponseSerializer。
-    
-    負責定義 API 回應結構，讓前端可以穩定取得固定欄位。
-    """
+    """商品問答列表回應格式。"""
     items = QuestionSerializer(many=True)
 
 
 class RecommendationGroupSerializer(serializers.Serializer):
-    """RecommendationGroupSerializer。
-    
-    DRF Serializer，用來驗證請求資料或整理 API 回應格式。
+    """商品推薦區塊格式。
+
+    目前固定分成：
+    - `similar`：相似商品
+    - `also_bought`：一起購買
     """
     similar = ProductSerializer(many=True)
     also_bought = ProductSerializer(many=True)
@@ -304,6 +314,7 @@ class PriceComparisonSerializer(serializers.Serializer):
     our_product_id = serializers.IntegerField()
     our_price = serializers.FloatField()
     currency = serializers.CharField()
+    query = serializers.CharField(required=False, allow_blank=True)
 
     # 比價來源摘要
     is_mock = serializers.BooleanField()
@@ -328,10 +339,7 @@ class PriceComparisonRefreshSerializer(serializers.Serializer):
 # 社群 / 論壇
 # ---------------------------------------------------------------------------
 class CommunityReplySerializer(serializers.Serializer):
-    """CommunityReplySerializer。
-    
-    DRF Serializer，用來驗證請求資料或整理 API 回應格式。
-    """
+    """單筆社群文章回覆格式。"""
     id = serializers.IntegerField()
     author = serializers.CharField()
     author_user_id = serializers.IntegerField(required=False, allow_null=True)
@@ -342,9 +350,12 @@ class CommunityReplySerializer(serializers.Serializer):
 
 
 class CommunityPostSerializer(serializers.Serializer):
-    """CommunityPostSerializer。
-    
-    DRF Serializer，用來驗證請求資料或整理 API 回應格式。
+    """社群文章主回應格式。
+
+    除了文章內容，也會帶上：
+    - 投票數
+    - 回覆數 / 回覆清單
+    - `can_edit` / `can_delete` 這類前端權限控制欄位
     """
     id = serializers.IntegerField()
     topic = serializers.CharField()
@@ -364,17 +375,14 @@ class CommunityPostSerializer(serializers.Serializer):
 
 
 class CommunityPostListResponseSerializer(serializers.Serializer):
-    """CommunityPostListResponseSerializer。
-    
-    負責定義 API 回應結構，讓前端可以穩定取得固定欄位。
-    """
+    """社群文章列表回應格式。"""
     items = CommunityPostSerializer(many=True)
 
 
 class CommunityPostCreateSerializer(serializers.Serializer):
-    """CommunityPostCreateSerializer。
-    
-    負責驗證建立資料時需要的輸入欄位。
+    """建立社群文章時的輸入格式。
+
+    `tags` 目前仍沿用字串輸入，交由 service 再拆解成標籤列表。
     """
     topic = serializers.CharField(required=False, allow_blank=True, default="general")
     title = serializers.CharField(max_length=120)
@@ -383,17 +391,14 @@ class CommunityPostCreateSerializer(serializers.Serializer):
 
 
 class CommunityPostUpdateSerializer(CommunityPostCreateSerializer):
-    """CommunityPostUpdateSerializer。
+    """編輯社群文章時的輸入格式。
 
-    負責驗證編輯文章時需要的輸入欄位。
+    欄位結構與建立文章相同，所以直接繼承 create serializer。
     """
 
 
 class CommunityReplyCreateSerializer(serializers.Serializer):
-    """CommunityReplyCreateSerializer。
-    
-    負責驗證建立資料時需要的輸入欄位。
-    """
+    """建立社群回覆時的輸入格式。"""
     body = serializers.CharField()
 
 
@@ -404,9 +409,9 @@ class CommunityImageUploadSerializer(serializers.Serializer):
 
 
 class VoteResponseSerializer(serializers.Serializer):
-    """VoteResponseSerializer。
-    
-    負責定義 API 回應結構，讓前端可以穩定取得固定欄位。
+    """文章投票後的最小回應格式。
+
+    前端只需要文章 id 與最新票數即可即時刷新 UI。
     """
     id = serializers.IntegerField()
     votes = serializers.IntegerField()
@@ -439,17 +444,19 @@ class DemoUserSerializer(serializers.Serializer):
 
 
 class MeResponseSerializer(serializers.Serializer):
-    """MeResponseSerializer。
-    
-    負責定義 API 回應結構，讓前端可以穩定取得固定欄位。
+    """目前登入會員資訊回應格式。
+
+    `user` 可為 `null`，表示尚未登入。
     """
     user = DemoUserSerializer(allow_null=True)
 
 
 class ToggleStateSerializer(serializers.Serializer):
-    """ToggleStateSerializer。
-    
-    DRF Serializer，用來驗證請求資料或整理 API 回應格式。
+    """收藏 / 比較切換後的通用回應格式。
+
+    不同 API 會視情況帶上：
+    - `removed_slug`：比較清單超上限時被擠掉的商品
+    - `compare_slugs`：最新比較清單
     """
     active = serializers.BooleanField()
     slug = serializers.CharField()
@@ -477,10 +484,7 @@ class AddressSerializer(serializers.Serializer):
 
 
 class AddressCreateSerializer(serializers.Serializer):
-    """AddressCreateSerializer。
-    
-    負責驗證建立資料時需要的輸入欄位。
-    """
+    """建立或新增地址時的輸入格式。"""
     label = serializers.CharField(max_length=50)
     recipient = serializers.CharField(max_length=50)
     phone = serializers.CharField(max_length=30)
@@ -491,10 +495,7 @@ class AddressCreateSerializer(serializers.Serializer):
 
 
 class AddressListResponseSerializer(serializers.Serializer):
-    """AddressListResponseSerializer。
-    
-    負責定義 API 回應結構，讓前端可以穩定取得固定欄位。
-    """
+    """地址簿列表回應格式。"""
     items = AddressSerializer(many=True)
 
 
@@ -508,10 +509,7 @@ class InvoiceProfileSerializer(serializers.Serializer):
 
 
 class InvoiceProfileUpdateSerializer(serializers.Serializer):
-    """InvoiceProfileUpdateSerializer。
-    
-    負責驗證更新資料時需要的輸入欄位。
-    """
+    """更新會員發票資料時的輸入格式。"""
     invoice_type = serializers.ChoiceField(choices=["personal", "company"])
     carrier_code = serializers.CharField(required=False, allow_blank=True)
     company_name = serializers.CharField(required=False, allow_blank=True)
@@ -535,10 +533,7 @@ class SellerShippingRulesSerializer(serializers.Serializer):
 # 訂單 / 付款 / 出貨
 # ---------------------------------------------------------------------------
 class OrderServiceRequestCreateSerializer(serializers.Serializer):
-    """OrderServiceRequestCreateSerializer。
-    
-    負責驗證建立資料時需要的輸入欄位。
-    """
+    """建立取消 / 退款申請時的輸入格式。"""
     reason = serializers.CharField()
 
 
@@ -721,15 +716,6 @@ class NewebpayPaymentRecordSerializer(serializers.Serializer):
     raw_payload = serializers.DictField(required=False)
 
 
-class NewebpayPaymentCallbackSerializer(serializers.Serializer):
-    """藍新支付 mock callback 請求。"""
-
-    trade_no = serializers.CharField()
-    status = serializers.ChoiceField(choices=["pending", "paid", "failed"])
-    paid_amount = serializers.CharField(required=False, allow_blank=True)
-    result_message = serializers.CharField(required=False, allow_blank=True)
-
-
 # ---------------------------------------------------------------------------
 # 平台報表 / 管理端查詢
 # ---------------------------------------------------------------------------
@@ -835,6 +821,13 @@ class AdminProductsQuerySerializer(serializers.Serializer):
     category = serializers.CharField(required=False, allow_blank=True)
     brand = serializers.CharField(required=False, allow_blank=True)
     owner = serializers.CharField(required=False, allow_blank=True)
+
+
+class ProductPriceCompareSettingsSerializer(serializers.Serializer):
+    """管理端商品比價開關與搜尋關鍵字。"""
+
+    enabled = serializers.BooleanField(required=False, default=False)
+    query = serializers.CharField(required=False, allow_blank=True, default="")
 
 
 class AdminReviewsQuerySerializer(serializers.Serializer):
@@ -1078,17 +1071,17 @@ class CartResponseSerializer(serializers.Serializer):
 
 
 class CartCouponSerializer(serializers.Serializer):
-    """CartCouponSerializer。
-    
-    DRF Serializer，用來驗證請求資料或整理 API 回應格式。
+    """套用或清除購物車折扣碼時的輸入格式。
+
+    `code` 可為空值，代表清除目前折扣碼。
     """
     code = serializers.CharField(required=False, allow_blank=True, allow_null=True)
 
 
 class CartAddSerializer(serializers.Serializer):
-    """CartAddSerializer。
-    
-    DRF Serializer，用來驗證請求資料或整理 API 回應格式。
+    """加入購物車時的輸入格式。
+
+    `variant_id` 為可選，表示這筆商品可能是單一規格商品。
     """
     slug = serializers.CharField()
     qty = serializers.IntegerField(required=False, min_value=1, default=1)
@@ -1096,9 +1089,9 @@ class CartAddSerializer(serializers.Serializer):
 
 
 class CartUpdateSerializer(serializers.Serializer):
-    """CartUpdateSerializer。
-    
-    負責驗證更新資料時需要的輸入欄位。
+    """更新購物車單項數量時的輸入格式。
+
+    `qty=0` 代表把該項目移除。
     """
     qty = serializers.IntegerField(min_value=0)
 
@@ -1135,7 +1128,13 @@ class CheckoutPreviewSerializer(serializers.Serializer):
 
 
 class CheckoutConfirmSerializer(serializers.Serializer):
-    """確認下單時提交的欄位。"""
+    """確認下單時提交的欄位。
+
+    這份 payload 同時涵蓋：
+    - 宅配地址結帳
+    - 超商取貨結帳
+    - 藍新付款必要欄位
+    """
 
     address_id = serializers.IntegerField(required=False, allow_null=True)
     shipping_method = serializers.ChoiceField(
@@ -1265,7 +1264,10 @@ class NewebpaySandboxPaymentCallbackSerializer(serializers.Serializer):
 
 
 class CheckoutStoreMapPrepareSerializer(serializers.Serializer):
-    """準備藍新超商選店所需的請求欄位。"""
+    """準備藍新超商選店 payload 時的輸入格式。
+
+    前端會先送這份資料到本站，再由後端組出實際送往藍新的表單欄位。
+    """
 
     pickup_store_brand = serializers.CharField()
     payment_method = serializers.CharField(required=False, allow_blank=True)
@@ -1273,7 +1275,11 @@ class CheckoutStoreMapPrepareSerializer(serializers.Serializer):
 
 
 class CheckoutStoreMapPreparedSerializer(serializers.Serializer):
-    """藍新 store-map 自動送出 payload 的回應格式。"""
+    """藍新 store-map 自動送出 payload 的回應格式。
+
+    這份資料主要給前端建立一個隱藏 form 並自動 submit。
+    除了送單欄位，也保留 debug 用的明文參數。
+    """
 
     # 基本識別資訊
     provider = serializers.CharField()
@@ -1298,7 +1304,10 @@ class CheckoutStoreMapPreparedSerializer(serializers.Serializer):
 
 
 class CheckoutStoreSelectionSerializer(serializers.Serializer):
-    """checkout 回填超商門市時使用的資料格式。"""
+    """checkout 回填超商門市時使用的資料格式。
+
+    checkout 頁會依 `is_ready` 判斷是否已拿到完整門市資訊。
+    """
 
     selection_token = serializers.CharField()
     status = serializers.CharField()

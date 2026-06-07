@@ -120,7 +120,6 @@ urlpatterns = [
         views.BuyerCheckoutStoreSelectionApi.as_view(),
         name="api-checkout-store-selection",
     ),
-    path("integrations/newebpay/payment/callback/", views.NewebpayPaymentCallbackApi.as_view(), name="api-newebpay-payment-callback"),
     path(
         "integrations/newebpay/logistics/store-map/callback/",
         views.NewebpayStoreMapCallbackApi.as_view(),
@@ -160,6 +159,11 @@ urlpatterns = [
     path("staff/orders/<int:order_id>/service-review/", views.AdminOrderServiceReviewApi.as_view(), name="api-admin-order-service-review"),
     path("staff/users/", views.AdminUsersApi.as_view(), name="api-admin-users"),
     path("staff/products/", views.AdminProductsApi.as_view(), name="api-admin-products"),
+    path(
+        "staff/products/<slug:slug>/price-compare-settings/",
+        views.AdminProductPriceCompareSettingsApi.as_view(),
+        name="api-admin-product-price-compare-settings",
+    ),
     path("staff/product-categories/", views.AdminProductCategoriesApi.as_view(), name="api-admin-product-categories"),
     path("staff/products/<slug:slug>/publish/", views.AdminProductPublishApi.as_view(), name="api-admin-product-publish"),
     path("staff/users/<slug:username>/status/", views.AdminUserStatusApi.as_view(), name="api-admin-user-status"),

@@ -1,6 +1,14 @@
 'use client'
 
 /**
+ * 管理端快速審核頁。
+ *
+ * 這頁聚合兩種常見處理：
+ * - 賣家申請審核
+ * - 商品快速下架
+ */
+
+/**
  * 管理者處理台頁
  *
  * 功能：
@@ -19,6 +27,7 @@ import { apiFetch } from '@/lib/api'
 import type { StaffReviewDashboard } from '@/lib/types'
 
 export default function StaffReviewsPage() {
+  // 這頁走 dashboard 型 payload，一次抓回待審賣家與待管理商品。
   /** 處理台資料，包含賣家申請與商品管理清單。 */
   const [data, setData] = useState<StaffReviewDashboard | null>(null)
   /** 初次載入審核台時的狀態。 */
@@ -30,6 +39,7 @@ export default function StaffReviewsPage() {
 
   /** 載入審核台資料。 */
   async function loadDashboard() {
+    // 每次審核或下架後都重新抓 dashboard，避免前端自行拼接結果。
     setLoading(true)
     try {
       const payload = await apiFetch<StaffReviewDashboard>('/staff/reviews/')
@@ -55,6 +65,7 @@ export default function StaffReviewsPage() {
    * - `true` 代表核准，`false` 代表駁回。
    */
   async function reviewSeller(username: string, approved: boolean) {
+    // 審核賣家後直接重整 dashboard，讓待審列表即時更新。
     try {
       setSubmitting(true)
       await apiFetch(`/staff/seller-requests/${username}/review/`, {
@@ -71,6 +82,7 @@ export default function StaffReviewsPage() {
 
   /** 管理者強制下架商品。 */
   async function archiveProduct(slug: string) {
+    // 這裡提供管理者快速下架入口，不需要跳到商品管理頁。
     try {
       setSubmitting(true)
       await apiFetch(`/staff/products/${slug}/archive/`, {

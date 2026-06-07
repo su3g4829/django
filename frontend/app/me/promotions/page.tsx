@@ -5,7 +5,7 @@ import { ChangeEvent, FormEvent, useEffect, useState } from 'react'
 import { apiFetch } from '@/lib/api'
 import { toBackendAssetUrl } from '@/lib/assets'
 import { bannerImageRules, type BannerImageInspection, validateBannerImageFile } from '@/lib/banner-image'
-import type { Banner, BannerListPayload } from '@/lib/types'
+import type { Banner, BannerListPayload, Product, ProductListPayload } from '@/lib/types'
 
 type PromotionFormState = {
   title: string
@@ -17,6 +17,8 @@ type PromotionFormState = {
   note: string
   image: File | null
 }
+
+type LinkMode = 'product' | 'manual'
 
 const POSITION_OPTIONS = [{ value: 'home_main', label: '首頁主 Banner' }]
 
@@ -46,9 +48,16 @@ function buildPromotionFormData(form: PromotionFormState) {
   return formData
 }
 
+function buildProductPath(slug: string) {
+  return slug ? `/products/${slug}` : ''
+}
+
 export default function PromotionApplicationsPage() {
   const [items, setItems] = useState<Banner[]>([])
+  const [products, setProducts] = useState<Product[]>([])
   const [form, setForm] = useState<PromotionFormState>(EMPTY_FORM)
+  const [linkMode, setLinkMode] = useState<LinkMode>('product')
+  const [selectedProductSlug, setSelectedProductSlug] = useState('')
   const [imageInspection, setImageInspection] = useState<BannerImageInspection | null>(null)
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
@@ -56,21 +65,50 @@ export default function PromotionApplicationsPage() {
   const [success, setSuccess] = useState('')
 
   async function loadApplications() {
-    setLoading(true)
-    try {
-      const payload = await apiFetch<BannerListPayload>('/me/banner-applications/')
-      setItems(payload.items)
-      setError('')
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '載入宣傳申請失敗。')
-    } finally {
-      setLoading(false)
+    const payload = await apiFetch<BannerListPayload>('/me/banner-applications/')
+    setItems(payload.items)
+  }
+
+  async function loadProducts() {
+    const payload = await apiFetch<ProductListPayload>('/me/products/')
+    const ownProducts = payload.items ?? []
+    setProducts(ownProducts)
+
+    if (!ownProducts.length) {
+      setLinkMode('manual')
+      setSelectedProductSlug('')
+      return
     }
+
+    setSelectedProductSlug((current) => current || ownProducts[0].slug)
   }
 
   useEffect(() => {
-    void loadApplications()
+    async function bootstrap() {
+      setLoading(true)
+      try {
+        await Promise.all([loadApplications(), loadProducts()])
+        setError('')
+      } catch (err) {
+        setError(err instanceof Error ? err.message : '載入 Banner 申請資料失敗。')
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    void bootstrap()
   }, [])
+
+  useEffect(() => {
+    if (linkMode !== 'product') {
+      return
+    }
+
+    setForm((current) => ({
+      ...current,
+      link_url: buildProductPath(selectedProductSlug),
+    }))
+  }, [linkMode, selectedProductSlug])
 
   async function handleImageChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0] ?? null
@@ -96,7 +134,12 @@ export default function PromotionApplicationsPage() {
     event.preventDefault()
 
     if (!form.image) {
-      setError('請上傳 Banner 圖片。')
+      setError('請選擇 Banner 圖片。')
+      return
+    }
+
+    if (!form.link_url.trim()) {
+      setError('請填寫活動連結。')
       return
     }
 
@@ -107,19 +150,24 @@ export default function PromotionApplicationsPage() {
         body: buildPromotionFormData(form),
       })
       setItems((current) => [created, ...current])
-      setForm(EMPTY_FORM)
+      setForm({
+        ...EMPTY_FORM,
+        link_url: linkMode === 'product' ? buildProductPath(selectedProductSlug) : '',
+      })
       setImageInspection(null)
-      setSuccess('宣傳申請已送出，等待管理者審核。')
+      setSuccess('Banner 申請已送出，等待管理員審核。')
       setError('')
     } catch (err) {
-      setError(err instanceof Error ? err.message : '送出宣傳申請失敗。')
+      setError(err instanceof Error ? err.message : '送出 Banner 申請失敗。')
     } finally {
       setSubmitting(false)
     }
   }
 
+  const resolvedProductPath = buildProductPath(selectedProductSlug)
+
   if (loading) {
-    return <section className="card">載入宣傳申請資料中...</section>
+    return <section className="card">載入 Banner 申請資料中...</section>
   }
 
   return (
@@ -157,19 +205,67 @@ export default function PromotionApplicationsPage() {
       <section className="card stack">
         <h2>填寫申請表</h2>
         <form className="stack" onSubmit={handleSubmit}>
-          <div className="grid grid-2">
-            <label className="field">
-              <span>宣傳標題</span>
-              <input value={form.title} onChange={(event) => setForm((current) => ({ ...current, title: event.target.value }))} />
-            </label>
-            <label className="field">
-              <span>活動連結</span>
-              <input
-                placeholder="/products/category/t-shirt"
-                value={form.link_url}
-                onChange={(event) => setForm((current) => ({ ...current, link_url: event.target.value }))}
-              />
-            </label>
+          <label className="field">
+            <span>宣傳標題</span>
+            <input value={form.title} onChange={(event) => setForm((current) => ({ ...current, title: event.target.value }))} />
+          </label>
+
+          <div className="field">
+            <span>活動連結</span>
+              <div className="stack">
+                <div className="promotion-link-mode">
+                  <label className={`promotion-link-mode__option${linkMode === 'product' ? ' is-active' : ''}${!products.length ? ' is-disabled' : ''}`}>
+                    <input
+                    checked={linkMode === 'product'}
+                    disabled={!products.length}
+                    name="link_mode"
+                    onChange={() => setLinkMode('product')}
+                    type="radio"
+                    value="product"
+                    />
+                    <div className="stack" style={{ gap: 4 }}>
+                      <strong>從我的商品選擇</strong>
+                      <span className="muted">直接挑選自己的商品，自動帶入商品頁路徑。</span>
+                    </div>
+                  </label>
+
+                  <label className={`promotion-link-mode__option${linkMode === 'manual' ? ' is-active' : ''}`}>
+                    <input checked={linkMode === 'manual'} name="link_mode" onChange={() => setLinkMode('manual')} type="radio" value="manual" />
+                    <div className="stack" style={{ gap: 4 }}>
+                      <strong>手動輸入</strong>
+                      <span className="muted">可填其他站內頁面或自訂活動連結。</span>
+                    </div>
+                  </label>
+                </div>
+
+              {linkMode === 'product' ? (
+                <div className="stack">
+                  <select
+                    disabled={!products.length}
+                    value={selectedProductSlug}
+                    onChange={(event) => setSelectedProductSlug(event.target.value)}
+                  >
+                    {products.length ? null : <option value="">目前沒有可選商品</option>}
+                    {products.map((product) => (
+                      <option key={product.id} value={product.slug}>
+                        {product.name} ({product.slug})
+                      </option>
+                    ))}
+                  </select>
+
+                  <label className="field promotion-link-path">
+                    <span className="muted">將套用的活動路徑</span>
+                    <input disabled value={resolvedProductPath} />
+                  </label>
+                </div>
+              ) : (
+                <input
+                  placeholder="/products/category/t-shirt"
+                  value={form.link_url}
+                  onChange={(event) => setForm((current) => ({ ...current, link_url: event.target.value }))}
+                />
+              )}
+            </div>
           </div>
 
           <label className="field">
@@ -209,17 +305,17 @@ export default function PromotionApplicationsPage() {
           </label>
 
           <div className="notice">
-            建議使用接近 2240 x 840 的橫幅比例。
+            建議上傳至少 2240 x 840 的圖片。
             <br />
-            若圖片比例不符，前台顯示時可能出現裁切或變形。
+            圖片內容請避免過多文字，以免首頁縮圖後影響閱讀。
             <br />
-            若比例偏差過大或影響宣傳品質，管理者可能拒絕申請。
+            日期區間會影響 Banner 顯示時段，請確認後再送出申請。
           </div>
 
           {imageInspection ? (
             <div className={imageInspection.isRecommendedRatio ? 'notice success' : 'notice'}>
               目前圖片尺寸：{imageInspection.width} x {imageInspection.height} px。
-              {imageInspection.isRecommendedRatio ? ' 比例符合建議。' : ' 比例與建議橫幅不一致，可能導致顯示變形。'}
+              {imageInspection.isRecommendedRatio ? ' 比例符合建議。' : ' 比例與建議不同，前台顯示時可能會裁切。'}
             </div>
           ) : null}
 
@@ -233,7 +329,7 @@ export default function PromotionApplicationsPage() {
 
       <section className="card stack">
         <h2>我的申請紀錄</h2>
-        {!items.length ? <div className="muted">目前還沒有宣傳申請。</div> : null}
+        {!items.length ? <div className="muted">目前還沒有 Banner 申請紀錄。</div> : null}
         {items.map((item) => (
           <article className="card stack" key={item.id}>
             <div className="promotion-application-card">
@@ -247,12 +343,12 @@ export default function PromotionApplicationsPage() {
                 </div>
                 {item.copy_text ? <div>{item.copy_text}</div> : null}
                 <div className="muted">
-                  檔期：{item.starts_at} 至 {item.ends_at}
+                  時間：{item.starts_at} 到 {item.ends_at}
                 </div>
                 <div className="muted">位置：{item.position_label || item.position}</div>
                 {item.link_url ? <div className="muted">連結：{item.link_url}</div> : null}
                 {item.note ? <div className="muted">備註：{item.note}</div> : null}
-                {item.rejection_reason ? <div className="notice">拒絕原因：{item.rejection_reason}</div> : null}
+                {item.rejection_reason ? <div className="notice">退回原因：{item.rejection_reason}</div> : null}
               </div>
             </div>
           </article>

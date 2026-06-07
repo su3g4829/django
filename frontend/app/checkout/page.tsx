@@ -1,5 +1,18 @@
 'use client'
 
+/**
+ * `use client`
+ * 來源：Next.js App Router。
+ *
+ * checkout 頁需要：
+ * - 表單 state
+ * - router 跳轉
+ * - effect 抓 preview
+ * - 事件處理與按鈕提交
+ *
+ * 所以必須在瀏覽器端執行。
+ */
+
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 
@@ -7,6 +20,15 @@ import { apiFetch, dispatchAppBootstrapRefresh, toQueryString } from '@/lib/api'
 import { clearSessionDraft, getSessionDraft, setSessionDraft } from '@/lib/session-drafts'
 import type { CheckoutPreviewPayload, Order } from '@/lib/types'
 
+/**
+ * checkout 表單真正送往後端時的最小欄位。
+ * 其餘展示資訊都來自 preview payload，不另外在前端重組。
+ *
+ * 設計意義：
+ * - 前端只保存必要的可編輯欄位
+ * - 金額、賣家群組、發票摘要都依賴後端 preview
+ * - 避免前端自己重算，造成與後端規則不一致
+ */
 type CheckoutFormState = {
   address_id: number
   shipping_method: string
@@ -14,6 +36,7 @@ type CheckoutFormState = {
   buyer_note: string
 }
 
+// 第一次進入 checkout，若沒有草稿就先用這組預設值。
 const INITIAL_FORM: CheckoutFormState = {
   address_id: 0,
   shipping_method: 'home_delivery',
@@ -21,21 +44,53 @@ const INITIAL_FORM: CheckoutFormState = {
   buyer_note: '',
 }
 
+// cart 頁與 checkout 頁共用同一份草稿 key，方便跨頁延續配送方式。
 const CHECKOUT_DRAFT_KEY = 'checkout-form'
 
+/**
+ * checkout 頁負責：
+ * 1. 抓 preview payload 顯示購物車摘要
+ * 2. 管理地址 / 配送 / 付款方式表單
+ * 3. 送出 `/checkout/confirm/` 建立正式訂單
+ *
+ * 來源：
+ * - `useRouter` 來自 `next/navigation`
+ * - `useEffect` / `useMemo` / `useState` 來自 React
+ * - 草稿暫存透過 `session-drafts` 封裝瀏覽器 `sessionStorage`
+ */
 export default function CheckoutPage() {
   const router = useRouter()
+  // preview 來自後端聚合資料，是整個 checkout 頁面的單一資料來源。
   const [preview, setPreview] = useState<CheckoutPreviewPayload | null>(null)
   const [form, setForm] = useState<CheckoutFormState>(() => getSessionDraft<CheckoutFormState>(CHECKOUT_DRAFT_KEY) ?? INITIAL_FORM)
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
+  // 避免初次載入前就因 watch shipping_method 再觸發一次 preview API。
   const [previewReady, setPreviewReady] = useState(false)
 
+  /**
+   * 任何表單變動都先寫回草稿。
+   *
+   * `useEffect` 依賴 `form`：
+   * - 代表每次 form 任何欄位變動後都會執行一次
+   * - 適合做這種「跟 state 同步到瀏覽器儲存」的副作用
+   */
   useEffect(() => {
     setSessionDraft(CHECKOUT_DRAFT_KEY, form)
   }, [form])
 
+  /**
+   * 重新抓 checkout preview。
+   * 這裡會同時負責：
+   * - 以後端回傳的合法選項修正表單
+   * - 決定預設地址與付款方式
+   * - 保留仍然有效的草稿值
+   *
+   * 程式語法：
+   * - `await apiFetch<CheckoutPreviewPayload>(...)` 會先等後端回傳 preview
+   * - 然後再依 preview 與 draft 合成最終要放進表單的 state
+   */
   async function loadPreview(preferredShippingMethod?: string) {
     setLoading(true)
     try {
@@ -72,6 +127,14 @@ export default function CheckoutPage() {
     void loadPreview(form.shipping_method)
   }, [])
 
+  /**
+   * 配送方式一改變，就要求後端重新計算 preview。
+   *
+   * 原因：
+   * - 運費可能跟配送方式綁定
+   * - 賣家群組可用配送方式也可能不同
+   * - 所以前端不自己重算，統一回後端取最新 canonical preview
+   */
   useEffect(() => {
     if (!previewReady || !preview) {
       return
@@ -82,10 +145,25 @@ export default function CheckoutPage() {
     void loadPreview(form.shipping_method)
   }, [form.shipping_method, preview, previewReady])
 
+  /**
+   * 小型 helper，統一處理欄位更新。
+   *
+   * `K extends keyof CheckoutFormState`
+   * - 來源：TypeScript generic constraint
+   * - 意思是 `field` 只能是 `CheckoutFormState` 的合法欄位名
+   * - 這樣 `value` 也會自動跟著推斷成正確欄位型別
+   */
   function updateForm<K extends keyof CheckoutFormState>(field: K, value: CheckoutFormState[K]) {
     setForm((current) => ({ ...current, [field]: value }))
   }
 
+  /**
+   * 真正建立訂單。
+   * 成功後會：
+   * 1. 清掉 checkout 草稿
+   * 2. 刷新 header 的 cart count
+   * 3. 導去訂單詳情頁
+   */
   async function confirmCheckout() {
     try {
       setSubmitting(true)
@@ -104,6 +182,14 @@ export default function CheckoutPage() {
     }
   }
 
+  /**
+   * 這三個 `useMemo` 都是在做「從選中的 id / value 反查完整物件」。
+   *
+   * 用途：
+   * - JSX 顯示時不必每次內嵌 `find(...)`
+   * - 讓畫面上的摘要欄位更好讀
+   * - 把衍生值與原始 state 分開
+   */
   const selectedAddress = useMemo(
     () => preview?.addresses.find((address) => address.id === form.address_id) ?? null,
     [form.address_id, preview?.addresses],

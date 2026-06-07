@@ -1,17 +1,23 @@
 'use client'
 
 /**
- * 商品目錄瀏覽元件
+ * 商品總覽共用瀏覽器。
  *
- * 功能：
- * - 呼叫 Django DRF 的 `/api/v1/products/` 取得商品列表
- * - 提供搜尋、分類、品牌、顏色、尺寸等篩選
- * - 控制分頁切換
+ * 這個元件會被多個頁面重用，例如：
+ * - 全商品列表 `/products`
+ * - 品牌頁
+ * - 分類頁
  *
- * 使用位置：
- * - 首頁精選商品頁
- * - 商品總覽頁
- * - 品牌頁 / 分類頁
+ * 它是 Client Component，因為會用到：
+ * - `useState`
+ * - `useEffect`
+ * - `useMemo`
+ * - `window.history.replaceState`
+ *
+ * 來源模組：
+ * - React hooks 來自 `react`
+ * - `apiFetch` / `toQueryString` 來自專案自己的 `frontend/lib/api.ts`
+ * - `ProductCard` 來自共用展示元件
  */
 import { useEffect, useMemo, useState } from 'react'
 
@@ -20,17 +26,10 @@ import { apiFetch, toQueryString } from '@/lib/api'
 import type { ProductCategoryOption, ProductListPayload } from '@/lib/types'
 
 /**
- * 傳入目錄元件的外部參數。
+ * CatalogBrowser 的外部輸入。
  *
- * title:
- * - 頁面主標題，例如「全部商品」或「ACME 品牌商品」
- *
- * intro:
- * - 頁面簡介文字，說明此列表的用途或篩選範圍
- *
- * initialFilters:
- * - 初始篩選條件
- * - 可用於品牌頁、分類頁預先帶入對應參數
+ * `initialFilters` 是可選的，代表不同頁面可以預先帶入不同查詢條件。
+ * 例如品牌頁會先帶 `brand`，分類頁會先帶 `category`。
  */
 type CatalogBrowserProps = {
   title: string
@@ -46,14 +45,12 @@ type CatalogBrowserProps = {
   syncUrl?: boolean
 }
 
-/**
- * 商品列表主要互動畫面。
- */
 export function CatalogBrowser({ title, intro, initialFilters, syncUrl = false }: CatalogBrowserProps) {
   /**
-   * query:
-   * - 目前列表查詢條件
-   * - 內容會轉成 query string，送到 Django DRF `/products/`
+   * `query` 保存目前的查詢條件。
+   *
+   * 這裡用 `useState({...})` 而不是把每個欄位拆開，是因為它們會一起組成
+   * `/products/?q=...&brand=...` 這種 API request。
    */
   const [query, setQuery] = useState({
     q: initialFilters?.q ?? '',
@@ -65,25 +62,39 @@ export function CatalogBrowser({ title, intro, initialFilters, syncUrl = false }
   })
 
   /**
-   * data:
-   * - 後端回傳的商品列表 payload
-   * - 包含 items、facets、meta 等資訊
+   * `data` 保存後端回來的完整 payload。
+   *
+   * 它不是只有商品陣列，還包含：
+   * - `items`
+   * - `facets`
+   * - `meta`
+   *
+   * 因為第一次 render 尚未載入完成，所以型別是 `ProductListPayload | null`。
    */
   const [data, setData] = useState<ProductListPayload | null>(null)
 
-  /** loading: 是否正在向後端讀取資料。 */
+  /**
+   * `loading` 與 `error` 是典型的資料抓取狀態。
+   * 這種寫法來自常見 React data-fetching pattern。
+   */
   const [loading, setLoading] = useState(true)
-
-  /** error: API 呼叫失敗時顯示的錯誤訊息。 */
   const [error, setError] = useState('')
 
   /**
-   * requestPath:
-   * - 將目前的 query 狀態組成 API 路徑
-   * - 例如 `/products/?brand=ACME&page=2`
+   * `requestPath` 是送往 `/api/v1/products/` 的相對路徑。
+   *
+   * `useMemo` 來自 React。
+   * 用途是：只有當 `query` 改變時，才重新計算 query string。
    */
   const requestPath = useMemo(() => `/products/${toQueryString(query)}`, [query])
 
+  /**
+   * 抓商品列表。
+   *
+   * `useEffect` 來自 React，專門處理 render 後的副作用。
+   * 這裡不能直接在 render 階段呼叫 `apiFetch(...)`，
+   * 否則每次 render 都會重複打 API。
+   */
   useEffect(() => {
     setLoading(true)
     apiFetch<ProductListPayload>(requestPath)
@@ -95,6 +106,13 @@ export function CatalogBrowser({ title, intro, initialFilters, syncUrl = false }
       .finally(() => setLoading(false))
   }, [requestPath])
 
+  /**
+   * 可選擇把目前篩選條件同步回網址列。
+   *
+   * `window.history.replaceState` 來自瀏覽器 History API。
+   * 這裡用 `replaceState` 而不是 `pushState`，是因為每次切 filter 都只是更新目前畫面狀態，
+   * 不想把每次小變更都塞成新的瀏覽紀錄。
+   */
   useEffect(() => {
     if (!syncUrl || typeof window === 'undefined') {
       return
@@ -108,17 +126,15 @@ export function CatalogBrowser({ title, intro, initialFilters, syncUrl = false }
 
   return (
     <div className="stack">
-      {/* 頁首說明區：顯示目前頁面標題與簡介。 */}
       <section className="hero">
         <h1>{title}</h1>
         <p className="muted">{intro}</p>
       </section>
 
-      {/* 篩選表單：控制搜尋與各種 facet 條件。 */}
       <section className="card stack">
         <div className="grid catalog-grid">
           <label className="field">
-            <span>搜尋關鍵字</span>
+            <span>關鍵字搜尋</span>
             <input
               value={query.q}
               onChange={(event) => setQuery((prev) => ({ ...prev, q: event.target.value, page: 1 }))}
@@ -187,44 +203,46 @@ export function CatalogBrowser({ title, intro, initialFilters, syncUrl = false }
         </div>
       </section>
 
-      {/* 錯誤訊息區：API 失敗時提示使用者。 */}
       {error ? <div className="notice">{error}</div> : null}
 
       {loading ? (
-        <section className="card">正在載入商品資料…</section>
+        <section className="card">商品載入中...</section>
       ) : (
         <>
-          {/* 商品卡片列表：逐筆渲染後端回傳的商品。 */}
           <section className="grid product-list-grid">
             {data?.items?.map((product) => (
               <ProductCard key={product.id} product={product} />
             ))}
           </section>
 
-          {/* 分頁控制區：顯示目前頁碼與前後頁按鈕。 */}
-          <section className="row" style={{ justifyContent: 'space-between' }}>
-            <span className="muted">
-              第 {data?.meta.page ?? 1} / {data?.meta.total_pages ?? 1} 頁，共 {data?.meta.total_items ?? 0} 筆
-            </span>
-            <div className="row">
+          {data?.meta?.total_pages && data.meta.total_pages > 1 ? (
+            <section className="row" style={{ justifyContent: 'center' }}>
               <button
                 className="btn btn-secondary"
-                disabled={(data?.meta.page ?? 1) <= 1}
-                onClick={() => setQuery((prev) => ({ ...prev, page: prev.page - 1 }))}
+                disabled={query.page <= 1}
+                onClick={() => setQuery((prev) => ({ ...prev, page: Math.max(1, prev.page - 1) }))}
                 type="button"
               >
                 上一頁
               </button>
+              <span className="muted">
+                第 {data.meta.page} / {data.meta.total_pages} 頁
+              </span>
               <button
                 className="btn btn-secondary"
-                disabled={!data || data.meta.page >= data.meta.total_pages}
-                onClick={() => setQuery((prev) => ({ ...prev, page: prev.page + 1 }))}
+                disabled={query.page >= data.meta.total_pages}
+                onClick={() =>
+                  setQuery((prev) => ({
+                    ...prev,
+                    page: Math.min(data.meta.total_pages ?? prev.page, prev.page + 1),
+                  }))
+                }
                 type="button"
               >
                 下一頁
               </button>
-            </div>
-          </section>
+            </section>
+          ) : null}
         </>
       )}
     </div>

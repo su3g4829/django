@@ -1,6 +1,12 @@
 'use client'
 
 /**
+ * 註冊頁。
+ *
+ * 提供 demo 會員註冊流程，並用 session draft 保留尚未送出的表單內容。
+ */
+
+/**
  * 註冊頁
  *
  * 功能：
@@ -20,6 +26,7 @@ const MIN_PASSWORD_LENGTH = 6
 const REGISTER_DRAFT_KEY = 'register-form'
 
 export default function RegisterPage() {
+  // 表單初始化時先嘗試讀 session draft，避免使用者刷新後內容消失。
   /** 註冊表單內容。 */
   const [form, setForm] = useState(
     () =>
@@ -45,6 +52,7 @@ export default function RegisterPage() {
   const [error, setError] = useState('')
 
   useEffect(() => {
+    // 表單任一欄位變動時就寫回 session draft，讓填寫過程可恢復。
     setSessionDraft(REGISTER_DRAFT_KEY, form)
   }, [form])
 
@@ -55,6 +63,7 @@ export default function RegisterPage() {
    * - 表單 submit 事件
    */
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    // 送出前先做最基本的密碼長度與確認欄位比對。
     event.preventDefault()
 
     if (form.password.length < MIN_PASSWORD_LENGTH) {

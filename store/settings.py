@@ -94,6 +94,7 @@ INSTALLED_APPS = [
 # Request 進入 view 前會依序經過這些 middleware。
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "myapp.middleware.RequestContextMiddleware",
@@ -126,15 +127,32 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = "store.wsgi.application"
-
+AUTH_USER_MODEL = "myapp.AppUser"
 
 # 目前業務資料主要不走資料庫，但仍保留 Django 內建元件可用的 SQLite。
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
+DB_BACKEND  = os.getenv("STORE_DB_BACKEND", "sqlite").strip().lower()
+
+if DB_BACKEND == "mysql":
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.mysql",
+            "NAME": os.getenv("MYSQL_DATABASE", "store_db"),
+            "USER": os.getenv("MYSQL_USER", "store_user"),
+            "PASSWORD": os.getenv("MYSQL_PASSWORD", ""),
+            "HOST": os.getenv("MYSQL_HOST", "127.0.0.1"),
+            "PORT": os.getenv("MYSQL_PORT", "3306"),
+            "OPTIONS": {
+                "charset": "utf8mb4",
+            },
+        }
     }
-}
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "db.sqlite3",
+        }
+    }
 
 
 # 這些驗證器主要對 Django 內建 auth 生效；
@@ -154,11 +172,19 @@ USE_TZ = True
 
 
 # 靜態檔 / 媒體檔 / 運維資料夾設定。
-STATIC_URL = "static/"
+STATIC_URL = "/static/"
 STATICFILES_DIRS = [BASE_DIR / "static"]
 STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
+STORAGES = {
+    "default": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+    },
+}
 
 OPS_DIR = BASE_DIR / "var"
 CACHE_DIR = OPS_DIR / "cache"
@@ -189,6 +215,7 @@ X_FRAME_OPTIONS = os.getenv("X_FRAME_OPTIONS", "DENY")
 USE_X_FORWARDED_HOST = _env_bool("USE_X_FORWARDED_HOST", False)
 if _env_bool("TRUST_X_FORWARDED_PROTO", False):
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+WHITENOISE_MAX_AGE = int(os.getenv("WHITENOISE_MAX_AGE", "31536000" if not DEBUG else "0"))
 
 # 上傳檔大小限制，避免單次請求佔用過多記憶體。
 DATA_UPLOAD_MAX_MEMORY_SIZE = int(os.getenv("DATA_UPLOAD_MAX_MEMORY_SIZE", str(5 * 1024 * 1024)))

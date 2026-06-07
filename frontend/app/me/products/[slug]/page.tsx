@@ -1,5 +1,12 @@
 'use client'
 
+/**
+ * `use client` 來自 Next.js App Router。
+ *
+ * 本頁要使用 React hook、路由參數、query string、檔案上傳與 session 草稿，
+ * 因此必須在瀏覽器端執行。
+ */
+
 import { FormEvent, useEffect, useMemo, useState } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
 
@@ -24,6 +31,20 @@ type EditableProduct = Product & {
   specs_text?: string
 }
 
+type ProductEditDraft = {
+  form: ProductEditForm
+  sourceUpdatedAt: string
+}
+
+/**
+ * 賣家商品編輯頁的表單結構。
+ *
+ * 設計上刻意與建立頁相近，讓：
+ * - 顏色群組
+ * - 尺寸庫存
+ * - 運費覆寫
+ * 可以共享相同的資料轉換思路。
+ */
 type ProductEditForm = {
   name: string
   price: string
@@ -62,6 +83,15 @@ const EMPTY_FORM: ProductEditForm = {
   overrideConvenienceStoreFee: '',
 }
 
+function isProductEditDraft(value: unknown): value is ProductEditDraft {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+  const candidate = value as Partial<ProductEditDraft>
+  return Boolean(candidate.form && typeof candidate.sourceUpdatedAt === 'string')
+}
+
+// 以下 helper 與建立頁同型，主要是把複雜的變體編輯邏輯局部化。
 function createEmptyColorGroup(index: number, sizeRows: SizeStockRow[] = []): ColorVariantGroup {
   return {
     key: `color-group-${Date.now()}-${index}`,
@@ -110,6 +140,10 @@ function buildFormFromProduct(product: EditableProduct): ProductEditForm {
   }
 }
 
+/**
+ * 編輯頁的尺寸庫存子編輯器。
+ * 與建立頁維持一致，讓賣家不需要學兩套不同互動。
+ */
 function SizeStockEditor({
   rows,
   onAdd,
@@ -184,10 +218,19 @@ function SizeStockEditor({
 }
 
 export default function SellerProductEditPage() {
+  /**
+   * `useParams` / `useSearchParams` 來自 `next/navigation`。
+   *
+   * 用法：
+   * - `useParams()` 讀取動態路由 `[slug]`
+   * - `useSearchParams()` 讀取 query string，例如返回列表頁的 `returnTo`
+   */
   const params = useParams<{ slug: string }>()
   const searchParams = useSearchParams()
+  // slug 決定要編輯哪一筆商品，returnTo 則控制儲存後返回哪裡。
   const slug = useMemo(() => params.slug, [params.slug])
   const returnTo = useMemo(() => searchParams.get('returnTo') || '/me/products', [searchParams])
+  // 每筆商品使用獨立 draft key，避免不同商品編輯草稿互相覆蓋。
   const draftKey = useMemo(() => `seller-product-edit-${params.slug}`, [params.slug])
 
   const [mounted, setMounted] = useState(false)
@@ -201,6 +244,7 @@ export default function SellerProductEditPage() {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
+  // draftReady 避免尚未讀出草稿前，就先把空編輯表單覆蓋回 sessionStorage。
   const [draftReady, setDraftReady] = useState(false)
 
   useEffect(() => {
@@ -208,17 +252,25 @@ export default function SellerProductEditPage() {
   }, [])
 
   useEffect(() => {
+    // 只有在資料真正載完後才開始同步 draft，避免空狀態覆蓋既有草稿。
     if (!draftReady) {
       return
     }
-    setSessionDraft(draftKey, form)
-  }, [draftKey, draftReady, form])
+    if (!product) {
+      return
+    }
+    setSessionDraft<ProductEditDraft>(draftKey, {
+      form,
+      sourceUpdatedAt: product.updated_at ?? '',
+    })
+  }, [draftKey, draftReady, form, product])
 
   useEffect(() => {
     if (!mounted) {
       return
     }
 
+    // 先抓商品本體，再轉換成可編輯表單。
     async function loadProduct() {
       try {
         setLoading(true)
@@ -227,13 +279,24 @@ export default function SellerProductEditPage() {
 
         const payload = await apiFetch<EditableProduct>(`/me/products/${slug}`)
         const baseForm = buildFormFromProduct(payload)
-        const draft = getSessionDraft<ProductEditForm>(draftKey)
+        const storedDraft = getSessionDraft<ProductEditDraft | ProductEditForm>(draftKey)
+        let nextForm = baseForm
+
+        if (isProductEditDraft(storedDraft)) {
+          if (storedDraft.sourceUpdatedAt === (payload.updated_at ?? '')) {
+            nextForm = { ...baseForm, ...storedDraft.form }
+          } else {
+            clearSessionDraft(draftKey)
+          }
+        } else if (storedDraft) {
+          clearSessionDraft(draftKey)
+        }
 
         setProduct(payload)
         setExistingImages(payload.images ?? [])
         setRemovedImages([])
         setFiles(null)
-        setForm(draft ? { ...baseForm, ...draft } : baseForm)
+        setForm(nextForm)
       } catch (err) {
         setError(err instanceof Error ? err.message : '讀取商品資料失敗。')
       } finally {
@@ -250,6 +313,7 @@ export default function SellerProductEditPage() {
       return
     }
 
+    // 分類主表另外抓，確保編輯頁下拉選單與主資料一致。
     async function loadCategories() {
       try {
         const payload = await apiFetch<{ items: ProductCategoryOption[] }>('/product-categories/')
@@ -263,12 +327,14 @@ export default function SellerProductEditPage() {
   }, [mounted])
 
   useEffect(() => {
+    // 若商品資料未帶分類但主表已有資料，補上一個安全預設。
     if (!categories.length || form.category) {
       return
     }
     setForm((current) => ({ ...current, category: categories[0]?.slug ?? '' }))
   }, [categories, form.category])
 
+  // 這些 memo 都是編輯頁常用的衍生資料，避免 JSX 內重複運算。
   const normalizedDefaultSizeRows = useMemo(() => sanitizeSizeRows(form.defaultSizeRows), [form.defaultSizeRows])
   const normalizedColorGroups = useMemo(() => sanitizeColorVariantGroups(form.colorGroups), [form.colorGroups])
   const remainingExistingImages = useMemo(
@@ -289,6 +355,7 @@ export default function SellerProductEditPage() {
     return form.stock
   }, [form.stock, normalizedColorGroups, normalizedDefaultSizeRows])
 
+  // 以下 helper 專門處理表單局部更新，讓 JSX 不必自己展開複雜狀態。
   function addDefaultSize(size: string) {
     if (!size) {
       return
@@ -379,14 +446,17 @@ export default function SellerProductEditPage() {
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    // `FormEvent<HTMLFormElement>` 來自 React 型別，表示這是 form submit 事件。
     event.preventDefault()
     try {
       setSubmitting(true)
       setError('')
       setMessage('')
 
+      // 讀取原生 `SubmitEvent.submitter`，辨識是按下「存草稿」還是「直接上架」。
       const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null
       const targetStatus = submitter?.value === 'active' ? 'active' : 'draft'
+      // `FormData` 來自瀏覽器 Web API，可同時提交文字欄位與圖片檔案。
       const payload = new FormData()
 
       if (normalizedColorGroups.some((group) => !group.color.trim())) {

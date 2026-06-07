@@ -1,5 +1,16 @@
 'use client'
 
+/**
+ * 商品卡片元件。
+ *
+ * 這個元件專門負責「單一商品摘要」的顯示，不處理列表查詢或資料抓取。
+ * 來源上會被：
+ * - 商品列表
+ * - 品牌頁
+ * - 分類頁
+ * 等多個頁面重用。
+ */
+
 import Link from 'next/link'
 
 import { toBackendAssetUrl } from '@/lib/assets'
@@ -11,10 +22,28 @@ type ProductCardProps = {
 }
 
 export function ProductCard({ product }: ProductCardProps) {
+  /**
+   * `Boolean(...)` 是 JavaScript 內建轉型寫法。
+   * 這裡用來把品牌是否存在收斂成單純的 `true/false`。
+   */
   const hasBrand = Boolean(product.brand && product.brand.toLowerCase() !== 'none')
+
   const hasColors = Boolean(product.color_options?.length)
   const hasSizes = Boolean(product.size_options?.length)
+
+  /**
+   * 尺寸顯示不直接用原始順序，而是經過 helper 正規化排序。
+   * 這樣像 `S / M / L / XL` 才不會變成字串排序的混亂順序。
+   */
   const orderedSizes = hasSizes ? sortSizeValues(product.size_options ?? []) : []
+
+  /**
+   * 賣家顯示名稱優先順序：
+   * 1. `owner_display_name`
+   * 2. `owner_username`
+   *
+   * 如果兩者都存在，會組成 `顯示名稱 (@username)`，方便辨識。
+   */
   const sellerLabel =
     product.owner_display_name || product.owner_username
       ? `${product.owner_display_name || product.owner_username}${product.owner_username ? ` (@${product.owner_username})` : ''}`

@@ -1,5 +1,15 @@
 'use client'
 
+/**
+ * 管理端 Banner 管理頁。
+ *
+ * 這頁同時處理：
+ * - 建立 Banner
+ * - 審核待審 Banner
+ * - 編輯已上架 / 已拒絕 Banner
+ * - 調整顯示排序
+ */
+
 import { type ChangeEvent, useEffect, useMemo, useState } from 'react'
 
 import { apiFetch } from '@/lib/api'
@@ -40,6 +50,7 @@ const EMPTY_CREATE_FORM: AdminCreateFormState = {
 }
 
 function toEditor(item: Banner): BannerEditor {
+  // 額外補一個 replacementImage 欄位，讓編輯中的新檔案不污染原始資料。
   return { ...item, replacementImage: null }
 }
 
@@ -55,6 +66,7 @@ function isBannerNotFoundError(message: string) {
 }
 
 function buildAdminCreateFormData(form: AdminCreateFormState) {
+  // 建立 Banner 與上傳圖片一起走 multipart/form-data。
   const formData = new FormData()
   formData.set('title', form.title)
   formData.set('copy_text', form.copy_text)
@@ -71,6 +83,7 @@ function buildAdminCreateFormData(form: AdminCreateFormState) {
 }
 
 function buildAdminUpdateFormData(item: BannerEditor) {
+  // 更新時沿用同一份 FormData 結構，便於後端共用驗證邏輯。
   const formData = new FormData()
   formData.set('title', item.title ?? '')
   formData.set('copy_text', item.copy_text ?? '')
@@ -118,6 +131,7 @@ function isExpiredBanner(item: Banner) {
 }
 
 export default function AdminBannersPage() {
+  // Banner 管理頁狀態較多，拆成建立表單、審核草稿與列表展開控制。
   const [items, setItems] = useState<BannerEditor[]>([])
   const [createForm, setCreateForm] = useState<AdminCreateFormState>(EMPTY_CREATE_FORM)
   const [reviewDrafts, setReviewDrafts] = useState<Record<number, string>>({})
@@ -162,6 +176,7 @@ export default function AdminBannersPage() {
   }, [approvedActiveItems, approvedExpiredItems, approvedFilter, approvedItems])
 
   async function loadBanners(showLoading = true) {
+    // 大多數操作完成後都重抓 Banner 清單，確保排序與審核狀態一致。
     if (showLoading) {
       setLoading(true)
     }
@@ -183,10 +198,12 @@ export default function AdminBannersPage() {
   }, [])
 
   function updateItem(id: number, patch: Partial<BannerEditor>) {
+    // 編輯單筆 Banner 時只更新本地對應列，避免整表單重建。
     setItems((current) => current.map((item) => (item.id === id ? { ...item, ...patch } : item)))
   }
 
   function moveReviewedItem(id: number, direction: -1 | 1) {
+    // 已審核項目的排序只在前端暫存，送出 saveOrder 時才真正持久化。
     setItems((current) => {
       const pending = current.filter((item) => item.status === 'pending')
       const rejected = current.filter((item) => item.status === 'rejected')

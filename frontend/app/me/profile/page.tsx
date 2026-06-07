@@ -1,6 +1,18 @@
 'use client'
 
 /**
+ * `use client`
+ * 來源：Next.js App Router。
+ *
+ * 這頁需要：
+ * - 讀取會員 API
+ * - 維護表單 state
+ * - 送出更新與賣家申請
+ *
+ * 所以必須是 Client Component。
+ */
+
+/**
  * 會員資料頁
  *
  * 功能：
@@ -13,6 +25,10 @@
  * - GET `/api/v1/me/profile/`
  * - POST `/api/v1/me/profile/`
  * - POST `/api/v1/me/seller-request/`
+ *
+ * 來源：
+ * - `FormEvent`、`useEffect`、`useState` 來自 React
+ * - `apiFetch` 來自專案 API helper
  */
 
 import { FormEvent, useEffect, useState } from 'react'
@@ -38,6 +54,11 @@ const EMPTY_FORM: ProfileFormState = {
   confirm_password: '',
 }
 
+/**
+ * 將 seller request 與 role 狀態轉成頁面文案。
+ *
+ * 這種純轉換邏輯獨立成 helper，讓 JSX 不用塞一長串 if/switch。
+ */
 function getSellerRequestStatusLabel(user: DemoUser | null) {
   if (!user) return ''
   if (user.role === 'seller' || user.role === 'admin') return '已具備賣家權限'
@@ -53,6 +74,19 @@ function getSellerRequestStatusLabel(user: DemoUser | null) {
   }
 }
 
+/**
+ * 會員資料頁。
+ *
+ * 這裡同時處理：
+ * - 基本資料更新
+ * - 密碼更新
+ * - 賣家申請與狀態顯示
+ *
+ * 設計方式：
+ * - `user` 保存後端回傳的 canonical 使用者快照
+ * - `form` 保存畫面上可編輯欄位
+ * - 兩者拆開可避免每次輸入都直接污染原始使用者資料
+ */
 export default function MeProfilePage() {
   /** 表單欄位。 */
   const [form, setForm] = useState<ProfileFormState>(EMPTY_FORM)
@@ -76,6 +110,13 @@ export default function MeProfilePage() {
   const [message, setMessage] = useState('')
 
   useEffect(() => {
+    /**
+     * 初始化會員資料，並同步成表單預設值。
+     *
+     * `useEffect(() => {}, [])`
+     * - 代表只在 mount 後執行一次
+     * - 適合頁面初次抓資料
+     */
     setLoading(true)
     apiFetch<MePayload>('/me/profile/')
       .then((payload) => {
@@ -95,6 +136,13 @@ export default function MeProfilePage() {
 
   /**
    * 更新會員資料。
+   *
+   * `event.preventDefault()`
+   * 來源：DOM form submit 規範。
+   *
+   * 用途：
+   * - 阻止瀏覽器原生 form submit 直接整頁刷新
+   * - 讓 React 可以留在單頁應用流程中自行呼叫 API
    */
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -123,6 +171,9 @@ export default function MeProfilePage() {
 
   /**
    * 送出賣家申請。
+   *
+   * 成功後直接用後端回傳的 `user` 覆蓋 state，
+   * 讓角色/申請狀態文字立即更新。
    */
   async function handleSellerRequest() {
     try {

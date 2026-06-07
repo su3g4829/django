@@ -1,5 +1,14 @@
 'use client'
 
+/**
+ * 管理端評論管理頁。
+ *
+ * 主要用途：
+ * - 依關鍵字與星等篩選評論
+ * - 調整列表排序
+ * - 刪除違規或不保留的評論
+ */
+
 import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 
@@ -23,6 +32,7 @@ type ReviewListPayload = {
 type ReviewSortKey = 'created_desc' | 'created_asc' | 'rating_desc' | 'rating_asc' | 'title_asc'
 
 export default function AdminReviewManagementPage() {
+  // 評論資料與篩選條件分開保存，方便切換排序不污染原始列表。
   const [items, setItems] = useState<AdminReview[]>([])
   const [filters, setFilters] = useState({ q: '', rating: '' })
   const [sortBy, setSortBy] = useState<ReviewSortKey>('created_desc')
@@ -31,6 +41,7 @@ export default function AdminReviewManagementPage() {
   const [error, setError] = useState('')
 
   async function loadItems(nextFilters = filters) {
+    // 列表查詢由後端回傳，前端再做視圖層排序。
     setLoading(true)
     try {
       const payload = await apiFetch<ReviewListPayload>(`/staff/content/reviews/${toQueryString(nextFilters)}`)
@@ -71,6 +82,7 @@ export default function AdminReviewManagementPage() {
   }, [items, sortBy])
 
   async function deleteItem(reviewId: number) {
+    // 刪除評論前保留確認步驟，避免誤操作。
     if (!window.confirm('確定要刪除這筆評論嗎？')) {
       return
     }

@@ -1,6 +1,18 @@
 'use client'
 
 /**
+ * `use client`
+ * 來源：Next.js App Router。
+ *
+ * 這頁需要：
+ * - 讀寫地址 API
+ * - 維護表單 state
+ * - 使用 `sessionStorage` 草稿
+ *
+ * 因此必須在瀏覽器端執行。
+ */
+
+/**
  * 地址簿頁
  *
  * 功能：
@@ -13,6 +25,10 @@
  * - GET/POST `/api/v1/me/addresses/`
  * - POST `/api/v1/me/addresses/:id/default/`
  * - DELETE `/api/v1/me/addresses/:id/`
+ *
+ * 來源：
+ * - `FormEvent` / `useEffect` / `useState` 來自 React
+ * - 草稿暫存透過 `session-drafts` 封裝瀏覽器 `sessionStorage`
  */
 
 import { FormEvent, useEffect, useState } from 'react'
@@ -36,6 +52,20 @@ const EMPTY_FORM = {
 }
 const ADDRESS_DRAFT_KEY = 'me-address-form'
 
+/**
+ * 會員地址管理頁。
+ *
+ * 主要操作：
+ * - 讀取地址清單
+ * - 新增地址
+ * - 設成預設地址
+ * - 刪除地址
+ *
+ * 設計方式：
+ * - `items` 儲存後端地址列表
+ * - `form` 儲存右側新增地址表單
+ * - 兩者分離，避免列表刷新時覆蓋正在輸入的表單內容
+ */
 export default function MeAddressesPage() {
   /** 地址列表。 */
   const [items, setItems] = useState<Address[]>([])
@@ -48,11 +78,25 @@ export default function MeAddressesPage() {
   /** 錯誤訊息。 */
   const [error, setError] = useState('')
 
+  /**
+   * 表單尚未送出前先存到 session draft。
+   *
+   * 來源：
+   * - `sessionStorage` 是瀏覽器 Web Storage API
+   * - 專案用 `setSessionDraft` 包裝 key 命名與 JSON 序列化
+   */
   useEffect(() => {
     setSessionDraft(ADDRESS_DRAFT_KEY, form)
   }, [form])
 
   /** 載入地址列表。 */
+  /**
+   * 所有地址清單刷新都走同一個 loader。
+   *
+   * 好處：
+   * - 新增、刪除、設預設後都只要呼叫同一支函式
+   * - loading / error 邏輯集中，避免每個 action 重寫一次
+   */
   async function loadAddresses() {
     setLoading(true)
     try {
@@ -73,8 +117,9 @@ export default function MeAddressesPage() {
   /**
    * 提交新增地址表單。
    *
-   * event:
-   * - form submit 事件，需先阻止預設送出行為。
+   * `FormEvent<HTMLFormElement>`
+   * - 來源：React 對原生 DOM 事件的型別包裝
+   * - 代表這個事件來自 `<form>`
    */
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -101,6 +146,12 @@ export default function MeAddressesPage() {
    * addressId:
    * - 要設成預設的地址 id。
    */
+  /**
+   * 指定某一筆地址為預設值。
+   *
+   * 這裡送出 `POST` 而不是 `PATCH`，
+   * 是因為後端把「設成預設地址」視為一個動作型 endpoint。
+   */
   async function setDefault(addressId: number) {
     try {
       setSubmitting(true)
@@ -118,6 +169,12 @@ export default function MeAddressesPage() {
    *
    * addressId:
    * - 要刪除的地址 id。
+   */
+  /**
+   * 刪除後重新抓地址清單。
+   *
+   * 不在前端手動 splice 本地陣列，
+   * 而是直接依後端最新結果為準，可避免預設地址等衍生狀態不同步。
    */
   async function removeAddress(addressId: number) {
     try {

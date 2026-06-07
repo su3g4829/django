@@ -1,0 +1,68 @@
+services:
+  - type: web
+    name: store-django
+    runtime: python
+    plan: free
+    buildCommand: |
+      pip install -r requirements.txt
+      python manage.py collectstatic --noinput
+      python manage.py migrate
+    startCommand: gunicorn store.wsgi:application --bind 0.0.0.0:$PORT
+    autoDeploy: true
+    envVars:
+      - key: STORE_ENV
+        value: production
+      - key: DJANGO_DEBUG
+        value: "false"
+      - key: DJANGO_SECRET_KEY
+        generateValue: true
+      - key: DJANGO_ALLOWED_HOSTS
+        value: store-django.onrender.com
+      - key: DJANGO_CSRF_TRUSTED_ORIGINS
+        value: https://store-frontend.onrender.com
+      - key: STORE_FRONTEND_ORIGIN
+        value: https://store-frontend.onrender.com
+      - key: STORE_DB_BACKEND
+        value: mysql
+      - key: TRUST_X_FORWARDED_PROTO
+        value: "true"
+      - key: GCS_PROJECT_ID
+        sync: false
+      - key: GCS_BUCKET_NAME
+        sync: false
+      - key: GCS_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: MYSQL_DATABASE
+        sync: false
+      - key: MYSQL_USER
+        sync: false
+      - key: MYSQL_PASSWORD
+        sync: false
+      - key: MYSQL_HOST
+        sync: false
+      - key: MYSQL_PORT
+        sync: false
+      - key: NEWEBPAY_MERCHANT_ID
+        sync: false
+      - key: NEWEBPAY_HASH_KEY
+        sync: false
+      - key: NEWEBPAY_HASH_IV
+        sync: false
+      - key: NEWEBPAY_PAYMENT_NOTIFY_URL
+        sync: false
+      - key: NEWEBPAY_PAYMENT_RETURN_URL
+        sync: false
+      - key: NEWEBPAY_PAYMENT_CLIENT_BACK_URL
+        sync: false
+
+  - type: web
+    name: store-frontend
+    runtime: node
+    rootDir: frontend
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm run start -- --hostname 0.0.0.0 --port $PORT
+    autoDeploy: true
+    envVars:
+      - key: DJANGO_API_ORIGIN
+        value: https://store-django.onrender.com

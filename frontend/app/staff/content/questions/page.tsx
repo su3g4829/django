@@ -1,5 +1,12 @@
 'use client'
 
+/**
+ * 管理端商品問答管理頁。
+ *
+ * 讓管理者依關鍵字與回答狀態篩選，
+ * 並清理不適合保留的提問。
+ */
+
 import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 
@@ -24,6 +31,7 @@ type QuestionListPayload = {
 type QuestionSortKey = 'created_desc' | 'created_asc' | 'answers_desc' | 'answers_asc' | 'title_asc'
 
 export default function AdminQuestionManagementPage() {
+  // 問答列表、篩選條件與排序條件拆開保存，方便重查與重排。
   const [items, setItems] = useState<AdminQuestion[]>([])
   const [filters, setFilters] = useState({ q: '', answered: '' })
   const [sortBy, setSortBy] = useState<QuestionSortKey>('created_desc')
@@ -32,6 +40,7 @@ export default function AdminQuestionManagementPage() {
   const [error, setError] = useState('')
 
   async function loadItems(nextFilters = filters) {
+    // 列表查詢交給後端，前端只做展示排序與過濾條件輸入。
     setLoading(true)
     try {
       const payload = await apiFetch<QuestionListPayload>(`/staff/content/questions/${toQueryString(nextFilters)}`)
@@ -72,6 +81,7 @@ export default function AdminQuestionManagementPage() {
   }, [items, sortBy])
 
   async function deleteItem(questionId: number) {
+    // 刪除提問後重抓列表，讓回答數與已回答狀態保持同步。
     if (!window.confirm('確定要刪除這筆提問嗎？')) {
       return
     }

@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 
 import { apiFetch, toQueryString } from '@/lib/api'
+import { toBackendAssetUrl } from '@/lib/assets'
 import type { ProductCategoryOption } from '@/lib/types'
 
 type AdminProduct = {
@@ -22,12 +23,20 @@ type AdminProduct = {
   owner_username?: string
   owner_display_name?: string
   primary_image?: string
+  price_compare_enabled?: boolean
+  price_compare_query?: string
   created_at_display?: string
   updated_at_display?: string
 }
 
 type ProductListPayload = {
   items: AdminProduct[]
+}
+
+type PriceCompareSettingForm = {
+  enabled: boolean
+  query: string
+  saving?: boolean
 }
 
 const EMPTY_FILTERS = {
@@ -63,15 +72,27 @@ export default function AdminProductsPage() {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
+  const [priceCompareForms, setPriceCompareForms] = useState<Record<string, PriceCompareSettingForm>>({})
 
   async function loadProducts(nextFilters = filters) {
     setLoading(true)
     try {
       const payload = await apiFetch<ProductListPayload>(`/staff/products/${toQueryString(nextFilters)}`)
       setItems(payload.items)
+      setPriceCompareForms((current) => {
+        const next: Record<string, PriceCompareSettingForm> = {}
+        for (const item of payload.items) {
+          next[item.slug] = {
+            enabled: Boolean(item.price_compare_enabled),
+            query: item.price_compare_query ?? '',
+            saving: current[item.slug]?.saving ?? false,
+          }
+        }
+        return next
+      })
       setError('')
     } catch (err) {
-      setError(err instanceof Error ? err.message : '無法載入商品列表。')
+      setError(err instanceof Error ? err.message : '載入商品管理列表失敗。')
     } finally {
       setLoading(false)
     }
@@ -83,7 +104,7 @@ export default function AdminProductsPage() {
       setCategories(payload.items)
       setError('')
     } catch (err) {
-      setError(err instanceof Error ? err.message : '無法載入商品分類。')
+      setError(err instanceof Error ? err.message : '載入商品分類失敗。')
     }
   }
 
@@ -130,13 +151,13 @@ export default function AdminProductsPage() {
   async function handleStaleProduct() {
     await loadProducts(filters)
     setError('')
-    setMessage('商品列表已重新整理。')
+    setMessage('商品管理列表已重新整理。')
   }
 
   async function createCategory() {
     const name = categoryForm.name.trim()
     if (!name) {
-      setError('請輸入分類名稱。')
+      setError('商品分類名稱不能為空。')
       return
     }
     try {
@@ -170,7 +191,7 @@ export default function AdminProductsPage() {
       await loadProducts(filters)
       setMessage('商品已下架。')
     } catch (err) {
-      const detail = err instanceof Error ? err.message : '下架商品失敗。'
+      const detail = err instanceof Error ? err.message : '商品下架失敗。'
       if (detail.toLowerCase().includes('not found')) {
         await handleStaleProduct()
       } else {
@@ -192,7 +213,7 @@ export default function AdminProductsPage() {
       await loadProducts(filters)
       setMessage('商品已上架。')
     } catch (err) {
-      const detail = err instanceof Error ? err.message : '上架商品失敗。'
+      const detail = err instanceof Error ? err.message : '商品上架失敗。'
       if (detail.toLowerCase().includes('not found')) {
         await handleStaleProduct()
       } else {
@@ -204,7 +225,7 @@ export default function AdminProductsPage() {
   }
 
   async function deleteProduct(slug: string) {
-    if (!window.confirm('確定要刪除此商品嗎？這個動作無法復原。')) {
+    if (!window.confirm('確定要永久刪除這個商品嗎？')) {
       return
     }
     try {
@@ -225,17 +246,50 @@ export default function AdminProductsPage() {
     }
   }
 
+  function updatePriceCompareForm(slug: string, patch: Partial<PriceCompareSettingForm>) {
+    setPriceCompareForms((current) => ({
+      ...current,
+      [slug]: {
+        enabled: current[slug]?.enabled ?? false,
+        query: current[slug]?.query ?? '',
+        saving: current[slug]?.saving ?? false,
+        ...patch,
+      },
+    }))
+  }
+
+  async function savePriceCompareSettings(slug: string) {
+    const form = priceCompareForms[slug] ?? { enabled: false, query: '' }
+    try {
+      updatePriceCompareForm(slug, { saving: true })
+      setMessage('')
+      await apiFetch(`/staff/products/${slug}/price-compare-settings/`, {
+        method: 'POST',
+        body: JSON.stringify({
+          enabled: form.enabled,
+          query: form.query,
+        }),
+      })
+      await loadProducts(filters)
+      setMessage('商品比價設定已更新。')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '更新商品比價設定失敗。')
+    } finally {
+      updatePriceCompareForm(slug, { saving: false })
+    }
+  }
+
   return (
     <section className="card stack">
       <div className="stack" style={{ gap: '0.25rem' }}>
         <h1>商品管理</h1>
-        <p className="muted">管理者可在此檢視商品、建立商品分類，並對商品執行上架、下架或刪除。</p>
+        <p className="muted">管理全站商品、分類與指定商品的外站自動比價設定。</p>
       </div>
 
       <section className="card stack">
         <div className="stack" style={{ gap: '0.25rem' }}>
-          <h2>商品分類主表</h2>
-          <p className="muted">賣家新增或編輯商品時，分類選單與前台商品篩選都會讀這份主表。</p>
+          <h2>商品分類管理</h2>
+          <p className="muted">建立正式分類，讓賣家與管理端在商品表單中重用。</p>
         </div>
 
         <div className="grid grid-3">
@@ -252,7 +306,7 @@ export default function AdminProductsPage() {
             <input
               value={categoryForm.slug}
               onChange={(event) => setCategoryForm((current) => ({ ...current, slug: event.target.value }))}
-              placeholder="可留空，自動產生"
+              placeholder="可留空自動產生"
             />
           </label>
           <div className="field" style={{ alignSelf: 'end' }}>
@@ -277,7 +331,7 @@ export default function AdminProductsPage() {
           <input
             value={filters.q}
             onChange={(event) => setFilters((prev) => ({ ...prev, q: event.target.value }))}
-            placeholder="商品名稱、slug、品牌或賣家"
+            placeholder="商品名、slug、賣家"
           />
         </label>
         <label className="field">
@@ -311,15 +365,15 @@ export default function AdminProductsPage() {
         <label className="field">
           <span>排序</span>
           <select value={sortBy} onChange={(event) => setSortBy(event.target.value as ProductSortKey)}>
-            <option value="updated_desc">更新時間：新到舊</option>
-            <option value="updated_asc">更新時間：舊到新</option>
-            <option value="created_desc">建立時間：新到舊</option>
-            <option value="created_asc">建立時間：舊到新</option>
-            <option value="price_desc">價格：高到低</option>
-            <option value="price_asc">價格：低到高</option>
-            <option value="stock_desc">庫存：高到低</option>
-            <option value="stock_asc">庫存：低到高</option>
-            <option value="name_asc">名稱：A 到 Z</option>
+            <option value="updated_desc">更新時間新到舊</option>
+            <option value="updated_asc">更新時間舊到新</option>
+            <option value="created_desc">建立時間新到舊</option>
+            <option value="created_asc">建立時間舊到新</option>
+            <option value="price_desc">售價高到低</option>
+            <option value="price_asc">售價低到高</option>
+            <option value="stock_desc">庫存高到低</option>
+            <option value="stock_asc">庫存低到高</option>
+            <option value="name_asc">商品名稱 A-Z</option>
           </select>
         </label>
       </div>
@@ -370,7 +424,7 @@ export default function AdminProductsPage() {
                 <tr key={item.slug}>
                   <td>
                     {item.primary_image ? (
-                      <img alt={item.name} className="management-thumbnail" src={item.primary_image} />
+                      <img alt={item.name} className="management-thumbnail" src={toBackendAssetUrl(item.primary_image)} />
                     ) : (
                       <div className="muted">無圖片</div>
                     )}
@@ -391,11 +445,35 @@ export default function AdminProductsPage() {
                   </td>
                   <td>{item.created_at_display || '-'}</td>
                   <td>
-                    <div className="stack" style={{ gap: '0.5rem' }}>
+                    <div className="stack" style={{ gap: '0.5rem', minWidth: '15rem' }}>
+                      <div className="stack" style={{ gap: '0.5rem' }}>
+                        <label className="row" style={{ gap: '0.5rem', alignItems: 'center' }}>
+                          <input
+                            checked={priceCompareForms[item.slug]?.enabled ?? false}
+                            onChange={(event) => updatePriceCompareForm(item.slug, { enabled: event.target.checked })}
+                            type="checkbox"
+                          />
+                          <span>啟用比價</span>
+                        </label>
+                        <input
+                          placeholder="momo / PChome search keyword"
+                          value={priceCompareForms[item.slug]?.query ?? ''}
+                          onChange={(event) => updatePriceCompareForm(item.slug, { query: event.target.value })}
+                        />
+                        <button
+                          className="btn btn-secondary"
+                          disabled={Boolean(priceCompareForms[item.slug]?.saving) || submitting}
+                          onClick={() => void savePriceCompareSettings(item.slug)}
+                          type="button"
+                        >
+                          {priceCompareForms[item.slug]?.saving ? '儲存中...' : '儲存比價設定'}
+                        </button>
+                      </div>
+
                       {item.status === 'active' ? (
                         <Link href={`/products/${item.slug}`}>查看前台</Link>
                       ) : (
-                        <span className="muted">尚未公開</span>
+                        <span className="muted">未公開前台</span>
                       )}
                       <Link href={`/me/products/${item.slug}?returnTo=/staff/products`}>編輯商品</Link>
                       {item.status === 'active' ? (

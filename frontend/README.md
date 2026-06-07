@@ -84,7 +84,7 @@ DJANGO_API_ORIGIN=http://127.0.0.1:8080
 在專案根目錄：
 
 ```bash
-.\.venv\Scripts\python.exe manage.py runserver
+..\Scripts\python.exe manage.py runserver
 ```
 
 ### 2. 再啟動 Next.js 前端

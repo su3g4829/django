@@ -1,6 +1,14 @@
 'use client'
 
 /**
+ * 買家訂單列表頁。
+ *
+ * 這頁負責：
+ * - 讀取目前登入會員的訂單列表
+ * - 提供進入單筆訂單詳情的入口
+ */
+
+/**
  * 買家訂單列表頁
  *
  * 功能：
@@ -21,6 +29,7 @@ type OrderListPayload = {
 }
 
 export default function OrdersPage() {
+  // 訂單列表頁只需要列表資料與最基本的 loading / error 狀態。
   /** 目前登入者的訂單列表。 */
   const [orders, setOrders] = useState<Order[]>([])
   /** API 錯誤訊息。 */
@@ -29,6 +38,7 @@ export default function OrdersPage() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
+    // 首次進頁後就抓一次訂單列表，不在前端做額外查詢條件控制。
     /** 進頁後即載入訂單列表。 */
     setLoading(true)
     apiFetch<OrderListPayload>('/me/orders/')

@@ -1,11 +1,17 @@
 'use client'
 
 /**
- * 商品比較頁
+ * 商品比較頁。
  *
  * 功能：
- * - 顯示目前加入比較清單的商品
- * - 提供移除比較項目的操作
+ * - 讀取目前加入比較清單的商品
+ * - 顯示品牌、分類、價格、顏色、尺寸等欄位
+ * - 支援把單一商品從比較清單移除
+ *
+ * 來源：
+ * - `useEffect` / `useState` 來自 React
+ * - API 呼叫透過 `@/lib/api` 的 `apiFetch`
+ * - 型別 `CompareListPayload` 來自 `@/lib/types`
  *
  * 主要 API：
  * - GET `/api/v1/products/compare/`
@@ -18,16 +24,22 @@ import { apiFetch } from '@/lib/api'
 import type { CompareListPayload } from '@/lib/types'
 
 export default function ProductComparePage() {
-  /** 比較清單資料。 */
+  /** 比較清單主資料，直接對應後端 compare payload。 */
   const [data, setData] = useState<CompareListPayload | null>(null)
-  /** 首次載入比較清單時的狀態。 */
+  /** 首次載入比較清單時顯示 skeleton / loading 文案。 */
   const [loading, setLoading] = useState(true)
-  /** 畫面上的錯誤訊息。 */
+  /** 任何 API 失敗都統一落在這個錯誤訊息欄位。 */
   const [error, setError] = useState('')
-  /** 移除比較項目時的提交狀態。 */
+  /** 移除比較商品時避免重複點擊。 */
   const [submitting, setSubmitting] = useState(false)
 
-  /** 載入目前比較清單。 */
+  /**
+   * 載入目前比較清單。
+   *
+   * 程式語法：
+   * - `async` 讓函式內可使用 `await apiFetch(...)`
+   * - `try / catch / finally` 分別處理成功、失敗與收尾 loading 狀態
+   */
   async function loadCompare() {
     setLoading(true)
     try {
@@ -41,15 +53,22 @@ export default function ProductComparePage() {
     }
   }
 
+  /**
+   * `useEffect` 是 React 的副作用 hook。
+   *
+   * 這裡代表頁面第一次 mount 後再向後端抓比較資料，
+   * 而不是在 render 階段直接發請求。
+   */
   useEffect(() => {
-    loadCompare()
+    void loadCompare()
   }, [])
 
   /**
-   * 從比較清單移除商品。
+   * 將單一商品從比較清單移除。
    *
-   * slug:
-   * - 商品 slug，用來指定要移除哪一個比較項目。
+   * 用法：
+   * - compare API 目前使用 POST 作為 toggle 行為
+   * - 移除後再重新抓一次比較清單，保持表格內容同步
    */
   async function removeFromCompare(slug: string) {
     try {
@@ -64,15 +83,15 @@ export default function ProductComparePage() {
   }
 
   if (loading) {
-    return <section className="card">載入商品比較資料中…</section>
+    return <section className="card">載入商品比較資料中...</section>
   }
 
   return (
     <div className="stack">
-      {/* 頁首說明：交代這裡是商品比較頁。 */}
+      {/* 頁首說明本頁用途，讓使用者知道這裡在比較哪些欄位。 */}
       <section className="hero">
         <h1>商品比較</h1>
-        <p className="muted">這裡會顯示目前加入比較清單的商品，資料由 Django DRF compare API 提供。</p>
+        <p className="muted">這一頁會整理你加入比較清單的商品，並列出主要規格與價格差異。</p>
       </section>
 
       {error ? <div className="notice">{error}</div> : null}
@@ -81,7 +100,7 @@ export default function ProductComparePage() {
         <section className="card muted">目前沒有加入任何比較商品。</section>
       ) : (
         <section className="card stack">
-          {/* 比較表格：橫向對照品牌、分類、價格、顏色與尺寸。 */}
+          {/* 表格欄位固定，方便直接橫向比對商品資訊。 */}
           <table className="table">
             <thead>
               <tr>
@@ -95,7 +114,6 @@ export default function ProductComparePage() {
               </tr>
             </thead>
             <tbody>
-              {/* 每列是一個加入比較清單的商品。 */}
               {data.items.map((item) => (
                 <tr key={item.slug}>
                   <td>
@@ -104,8 +122,8 @@ export default function ProductComparePage() {
                   <td>{item.brand}</td>
                   <td>{item.category}</td>
                   <td>{item.price_range_label ?? `$${item.price.toFixed(2)}`}</td>
-                  <td>{item.color_options?.join(', ') || '無'}</td>
-                  <td>{item.size_options?.join(', ') || '無'}</td>
+                  <td>{item.color_options?.join(', ') || '-'}</td>
+                  <td>{item.size_options?.join(', ') || '-'}</td>
                   <td>
                     <button className="btn btn-secondary" disabled={submitting} onClick={() => removeFromCompare(item.slug)} type="button">
                       移除

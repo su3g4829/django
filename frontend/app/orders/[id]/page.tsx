@@ -1,11 +1,29 @@
 'use client'
 
+/**
+ * `use client`
+ * 來源：Next.js App Router。
+ *
+ * 理由：
+ * - 這頁需要抓 client-side API
+ * - 需要讀取 query string 回傳參數
+ * - 需要在按鈕點擊後直接重新整理頁面 state
+ */
+
 import { useEffect, useMemo, useState } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
 
 import { apiFetch } from '@/lib/api'
 import type { NewebpayPaymentRecord, NewebpaySandboxPaymentPrepared, Order } from '@/lib/types'
 
+/**
+ * 藍新付款採外部表單提交，因此這裡用原生 form 動態建立後送出。
+ * 這樣可以保留 gateway 規定的 method 與 hidden fields 結構。
+ *
+ * 來源：
+ * - `document.createElement` 來自瀏覽器 DOM API
+ * - 這不是 React controlled form，而是為了配合第三方金流規範做的一次性原生表單提交
+ */
 function submitExternalForm(actionUrl: string, method: string, fields: Record<string, string | number>) {
   const form = document.createElement('form')
   form.action = actionUrl
@@ -24,11 +42,36 @@ function submitExternalForm(actionUrl: string, method: string, fields: Record<st
   form.submit()
 }
 
+/**
+ * 訂單詳情頁同時處理三件事：
+ * 1. 顯示訂單、配送、出貨分組資訊
+ * 2. 顯示最新付款紀錄
+ * 3. 在可付款/可完成時提供下一步操作
+ */
 export default function OrderDetailPage() {
   const params = useParams<{ id: string }>()
   const searchParams = useSearchParams()
+  /**
+   * `useMemo`
+   * 來源：React。
+   *
+   * 用途：
+   * - 把 `params.id` 包成穩定值
+   * - 讓後面 effect 依賴更清楚
+   *
+   * 雖然這裡只是單純回傳 `params.id`，
+   * 但用 memo 可以明確表達「後續流程都以這個 route id 為核心依賴」。
+   */
   const orderId = useMemo(() => params.id, [params.id])
 
+  /**
+   * `order` 與 `paymentRecord` 刻意拆開兩份 state。
+   *
+   * 原因：
+   * - 訂單資料與付款紀錄來自兩支不同 API
+   * - 付款 API 失敗時，不應連帶讓整個訂單頁壞掉
+   * - 某些互動只需要局部刷新 payment record，不一定要整份 order 一起重抓
+   */
   const [order, setOrder] = useState<Order | null>(null)
   const [paymentRecord, setPaymentRecord] = useState<NewebpayPaymentRecord | null>(null)
   const [loading, setLoading] = useState(true)
@@ -39,6 +82,7 @@ export default function OrderDetailPage() {
   const [completeMessage, setCompleteMessage] = useState('')
   const [completeMessageType, setCompleteMessageType] = useState<'success' | 'error'>('success')
 
+  // 訂單主體資料。
   async function loadOrder() {
     setLoading(true)
     try {
@@ -52,6 +96,7 @@ export default function OrderDetailPage() {
     }
   }
 
+  // 付款紀錄獨立抓取，讓頁面可以在訂單資料正常時容忍 payment API 失敗。
   async function loadPaymentRecord() {
     try {
       const payload = await apiFetch<NewebpayPaymentRecord>(`/me/orders/${orderId}/newebpay-payment/`)
@@ -66,6 +111,15 @@ export default function OrderDetailPage() {
     void loadPaymentRecord()
   }, [orderId])
 
+  /**
+   * 重新前往藍新付款。
+   * 這裡不直接導向 URL，而是先向後端取得已簽章好的 gateway 表單資料。
+   *
+   * 程式語法：
+   * - `await apiFetch<NewebpaySandboxPaymentPrepared>(...)`
+   * - 代表先等後端回傳完整 payment payload
+   * - 再呼叫 `submitExternalForm(...)`
+   */
   async function handlePreparePayment() {
     try {
       setPaymentSubmitting(true)
@@ -82,6 +136,12 @@ export default function OrderDetailPage() {
     }
   }
 
+  /**
+   * 買家確認完成訂單。
+   *
+   * 這條流程只更新履約狀態，
+   * 不會重新建立付款單，也不會重新導向金流。
+   */
   async function handleCompleteOrder() {
     setCompleteSubmitting(true)
     setCompleteMessage('')
@@ -98,10 +158,31 @@ export default function OrderDetailPage() {
     }
   }
 
+  /**
+   * 從 query string 讀付款回傳結果。
+   *
+   * 來源：
+   * - `useSearchParams` 來自 `next/navigation`
+   * - 底層對應瀏覽器 URLSearchParams 概念
+   *
+   * 用途：
+   * - 讓開發或測試時能直接在頁面上看到 callback / return 是否有進來
+   */
   const paymentCallbackStatus = searchParams.get('payment_callback')
   const paymentTradeStatus = searchParams.get('trade_status')
   const paymentMerchantOrderNo = searchParams.get('merchant_order_no')
 
+  /**
+   * 是否允許再發起付款。
+   * 主要擋掉：
+   * - 已取消/退款
+   * - 已付清
+   * - 已全部完成履約
+   *
+   * `useMemo`
+   * - 用來把這段條件判斷整理成可重用的衍生值
+   * - 不是為了提速到極致，而是讓 JSX 內不要塞太多條件式
+   */
   const canStartPayment = useMemo(() => {
     if (!order) {
       return false

@@ -1,5 +1,15 @@
 'use client'
 
+/**
+ * 管理端儀表板首頁。
+ *
+ * 用單一 API 聚合：
+ * - 會員摘要
+ * - 商品摘要
+ * - 訂單摘要
+ * - 最近內容項目
+ */
+
 import Link from 'next/link'
 import { type ReactNode, useEffect, useState } from 'react'
 
@@ -61,6 +71,7 @@ function MetricCard({
   value: string
   detail: string
 }) {
+  // 儀表板數字卡片共用元件，避免重複 JSX。
   return (
     <Link className="card stack summary-card" href={href}>
       <span className="muted">{label}</span>
@@ -75,11 +86,13 @@ function EmptyState({ children }: { children: ReactNode }) {
 }
 
 export default function StaffDashboardPage() {
+  // 儀表板頁只顯示聚合結果，不在前端自行計算統計數字。
   const [data, setData] = useState<AdminDashboardPayload | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
   useEffect(() => {
+    // 首次進頁即抓 dashboard，避免拆成多支 API 造成多段 loading。
     setLoading(true)
     apiFetch<AdminDashboardPayload>('/staff/dashboard/')
       .then((payload) => {

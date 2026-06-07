@@ -1,6 +1,17 @@
 'use client'
 
 /**
+ * `use client`
+ * 來源：Next.js App Router。
+ *
+ * 發票頁需要：
+ * - 本地表單 state
+ * - 初次抓 API
+ * - 送出更新
+ * - 使用 `sessionStorage` 暫存草稿
+ */
+
+/**
  * 發票資料頁
  *
  * 功能：
@@ -10,6 +21,10 @@
  * 主要 API：
  * - GET `/api/v1/me/invoice/`
  * - POST `/api/v1/me/invoice/`
+ *
+ * 來源：
+ * - `FormEvent` / `useEffect` / `useState` 來自 React
+ * - draft helper 來自 `@/lib/session-drafts`
  */
 
 import { FormEvent, useEffect, useState } from 'react'
@@ -20,6 +35,16 @@ import type { InvoiceProfile } from '@/lib/types'
 
 const INVOICE_DRAFT_KEY = 'me-invoice-form'
 
+/**
+ * 發票設定頁。
+ *
+ * 後端把發票資料當成單一 profile 儲存，
+ * 前端只需要維護一份表單並整份送回。
+ *
+ * 設計方式：
+ * - 這裡不拆成多個小 state
+ * - 因為發票資料本身就是同一份 profile，整包送回最直觀
+ */
 export default function MeInvoicePage() {
   /** 發票資料表單。 */
   const [form, setForm] = useState<InvoiceProfile>(
@@ -40,12 +65,26 @@ export default function MeInvoicePage() {
   /** 成功訊息。 */
   const [message, setMessage] = useState('')
 
+  /**
+   * 暫存尚未送出的發票資料。
+   *
+   * 來源：
+   * - `sessionStorage` 屬於瀏覽器 Web Storage API
+   *
+   * 用途：
+   * - 使用者切頁或重整時，還能保留未送出的輸入值
+   */
   useEffect(() => {
     setSessionDraft(INVOICE_DRAFT_KEY, form)
   }, [form])
 
   useEffect(() => {
-    /** 載入目前登入者的發票資料。 */
+    /**
+     * 載入目前登入者的發票資料。
+     *
+     * 後端資料回來後，若本地還有 draft，就以 draft 疊上去，
+     * 避免使用者剛輸入到一半又被後端舊值覆蓋。
+     */
     setLoading(true)
     apiFetch<InvoiceProfile>('/me/invoice/')
       .then((payload) => {
@@ -62,6 +101,11 @@ export default function MeInvoicePage() {
    *
    * event:
    * - form submit 事件，需先阻止預設送出行為。
+   *
+   * 成功後：
+   * - 清掉 draft
+   * - 以後端回傳值回填畫面
+   * - 顯示成功訊息
    */
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()

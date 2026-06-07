@@ -1,5 +1,17 @@
 'use client'
 
+/**
+ * `use client`
+ * 來源：Next.js App Router。
+ *
+ * 這頁需要：
+ * - 本地表單 state
+ * - 初次載入運費規則
+ * - 送出更新
+ *
+ * 因此必須是 Client Component。
+ */
+
 import { FormEvent, useEffect, useState } from 'react'
 
 import { apiFetch } from '@/lib/api'
@@ -13,6 +25,15 @@ const EMPTY_RULES: SellerShippingRules = {
   free_shipping_threshold: '1200.00',
 }
 
+/**
+ * 賣家預設運費規則頁。
+ *
+ * 這份規則會被賣家商品拿來當預設配送設定來源。
+ *
+ * 來源：
+ * - `FormEvent` / `useEffect` / `useState` 來自 React
+ * - `apiFetch` 來自專案 API helper
+ */
 export default function SellerShippingRulesPage() {
   const [rules, setRules] = useState<SellerShippingRules>(EMPTY_RULES)
   const [loading, setLoading] = useState(true)
@@ -21,6 +42,12 @@ export default function SellerShippingRulesPage() {
   const [message, setMessage] = useState('')
 
   useEffect(() => {
+    /**
+     * 進頁後先讀目前賣家規則。
+     *
+     * 這裡把 loader 寫在 effect 內部而不是抽到外面，
+     * 是因為目前只在 mount 時用一次，保持區域封裝比較簡單。
+     */
     async function loadRules() {
       try {
         setLoading(true)
@@ -37,6 +64,12 @@ export default function SellerShippingRulesPage() {
     void loadRules()
   }, [])
 
+  /**
+   * 整份更新賣家運費規則。
+   *
+   * 後端把這份資料視為單一設定 profile，
+   * 所以前端用 `PUT` 整包覆蓋，而不是一欄一欄 patch。
+   */
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     try {

@@ -15,6 +15,16 @@ import type {
   Review,
 } from '@/lib/types'
 
+/**
+ * 商品詳情頁會同時載入多份關聯資料：
+ * - 商品本體
+ * - 評論
+ * - 問答
+ * - 推薦商品
+ * - 特定商品的比價資料
+ *
+ * 這頁是互動最重的商品頁，因此把所有局部表單狀態都集中在同一個 client component 管理。
+ */
 type ProductRecommendationsPayload = {
   similar: Product[]
   also_bought: Product[]
@@ -50,16 +60,27 @@ const INITIAL_QUESTION_FORM: QuestionFormState = {
   body: '',
 }
 
+/**
+ * 商品詳情頁。
+ *
+ * 頁面責任：
+ * 1. 以 slug 載入商品與其周邊內容
+ * 2. 管理變體、主圖、數量等購買狀態
+ * 3. 提供評論、提問、回答、收藏、比較等互動
+ */
 export default function ProductDetailPage() {
   const params = useParams<{ slug: string }>()
+  // useParams 回傳的 slug 可能在 render 期間重新建立物件，先 memo 成穩定值。
   const slug = useMemo(() => params.slug, [params.slug])
 
+  // 這幾個 state 分別對應商品頁的主要資料區塊。
   const [product, setProduct] = useState<Product | null>(null)
   const [reviews, setReviews] = useState<Review[]>([])
   const [questions, setQuestions] = useState<Question[]>([])
   const [recommendations, setRecommendations] = useState<ProductRecommendationsPayload>({ similar: [], also_bought: [] })
   const [priceComparison, setPriceComparison] = useState<PriceComparisonPayload | null>(null)
 
+  // 互動狀態：訊息、送出中、比價刷新中、收藏/比較開關。
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
@@ -73,11 +94,16 @@ export default function ProductDetailPage() {
   const [selectedSize, setSelectedSize] = useState('')
   const [activeImage, setActiveImage] = useState('')
 
+  // 三種小表單：評論、提問、回答草稿。
   const [reviewForm, setReviewForm] = useState<ReviewFormState>(INITIAL_REVIEW_FORM)
   const [questionForm, setQuestionForm] = useState<QuestionFormState>(INITIAL_QUESTION_FORM)
   const [answerDrafts, setAnswerDrafts] = useState<Record<number, string>>({})
 
   useEffect(() => {
+    /**
+     * 首次進頁時平行載入四份資料。
+     * 比價只針對特定商品開啟，避免所有商品頁都額外打一次外部比較 API。
+     */
     async function load() {
       try {
         setLoading(true)
@@ -90,7 +116,7 @@ export default function ProductDetailPage() {
           apiFetch<ProductRecommendationsPayload>(`/products/${slug}/recommendations/`),
         ])
 
-        const shouldShowPriceComparison = productPayload.slug === 'new-forcepolo'
+        const shouldShowPriceComparison = Boolean(productPayload.price_compare_enabled)
         const nextPriceComparison = shouldShowPriceComparison
           ? await apiFetch<PriceComparisonPayload>(`/products/${slug}/price-compare/`)
           : null
@@ -122,21 +148,30 @@ export default function ProductDetailPage() {
     [product?.variants, selectedColor, selectedSize],
   )
 
+  // 顏色切換後，可選尺寸會跟著改變，因此尺寸選項要從變體即時計算。
   const sizeChoices = useMemo(
     () => getAvailableSizesForColor(product?.variants, selectedColor),
     [product?.variants, selectedColor],
   )
 
   const colorChoices = product?.color_options ?? []
+  // 規格文案會去除由系統自動管理的尺寸庫存片段，避免前端重複顯示。
   const detailSpecsText = useMemo(() => stripManagedSizeSpecs(product?.specs_text ?? ''), [product?.specs_text])
 
+  // 圖庫永遠優先顯示目前選中變體的圖，再接一般商品圖。
   const galleryImages = useMemo(() => {
-    const leadImage = selectedVariant?.image || product?.primary_image || product?.images?.[0] || ''
+    const leadImage =
+      selectedVariant?.image ||
+      selectedVariant?.image_path_snapshot ||
+      product?.primary_image ||
+      product?.images?.[0] ||
+      ''
     const ordered = [leadImage, ...(product?.images ?? [])].filter(Boolean)
     return ordered.filter((image, index) => ordered.indexOf(image) === index)
-  }, [product?.images, product?.primary_image, selectedVariant?.image])
+  }, [product?.images, product?.primary_image, selectedVariant?.image, selectedVariant?.image_path_snapshot])
 
   useEffect(() => {
+    // 如果顏色切換後原本尺寸已無效，就自動切回第一個合法尺寸。
     if (!sizeChoices.length) {
       return
     }
@@ -146,9 +181,11 @@ export default function ProductDetailPage() {
   }, [selectedSize, sizeChoices])
 
   useEffect(() => {
+    // 每次圖庫內容改變時，預設主圖跟著切到第一張。
     setActiveImage(galleryImages[0] ?? '')
   }, [galleryImages])
 
+  // 這些 display 變數都是為了讓 JSX 不直接散落太多判斷邏輯。
   const displayPrice = selectedVariant?.price ?? product?.price ?? 0
   const displayCompareAt = selectedVariant ? (selectedVariant.compare_at_price ?? null) : (product?.compare_at_price ?? null)
   const displayDiscountPercent =
@@ -167,6 +204,10 @@ export default function ProductDetailPage() {
     setError('')
   }
 
+  /**
+   * 加入購物車時會把目前選到的變體資訊一起送出。
+   * 如果商品沒有變體，variantId / variantName 會是空值，後端會以商品本體處理。
+   */
   async function addToCart() {
     try {
       setSubmitting(true)
@@ -191,6 +232,7 @@ export default function ProductDetailPage() {
     }
   }
 
+  // 收藏狀態以後端回傳為準，成功後同步刷新 header 收藏數量。
   async function toggleFavorite() {
     try {
       const payload = await apiFetch<{ active: boolean; favorite_count: number }>(`/products/${slug}/favorite/`, { method: 'POST' })
@@ -202,6 +244,7 @@ export default function ProductDetailPage() {
     }
   }
 
+  // 比較清單可能觸發舊商品被擠出，因此 success 訊息會帶出 removed slug。
   async function toggleCompare() {
     try {
       const payload = await apiFetch<{ active: boolean; removed_slug?: string | null }>(`/products/${slug}/compare/`, {
@@ -219,6 +262,7 @@ export default function ProductDetailPage() {
     }
   }
 
+  // 評論送出後直接把新評論插到前端清單最上方，避免再重抓全部列表。
   async function submitReview(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     try {
@@ -234,6 +278,7 @@ export default function ProductDetailPage() {
     }
   }
 
+  // 提問送出後沿用相同模式，把新問題插回目前列表。
   async function submitQuestion(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     try {
@@ -249,6 +294,7 @@ export default function ProductDetailPage() {
     }
   }
 
+  // 回答只更新單一問題節點，避免整份 questions 重抓。
   async function submitAnswer(questionId: number) {
     const body = (answerDrafts[questionId] || '').trim()
     if (!body) {
@@ -268,6 +314,7 @@ export default function ProductDetailPage() {
     }
   }
 
+  // 比價刷新是手動操作，避免商品頁每次 render 都去打外部來源。
   async function refreshPriceComparison() {
     try {
       setPriceRefreshing(true)
@@ -339,7 +386,7 @@ export default function ProductDetailPage() {
             </div>
           ) : null}
 
-          {selectedVariant?.image ? <div className="muted">目前顏色已切換到對應圖片。</div> : null}
+          {(selectedVariant?.image || selectedVariant?.image_path_snapshot) ? <div className="muted">目前顏色已切換到對應圖片。</div> : null}
           {colorChoices.length ? <div className="muted">顏色: {colorChoices.join(', ')}</div> : null}
           {detailSpecsText ? <pre className="muted" style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{detailSpecsText}</pre> : null}
         </section>
@@ -423,6 +470,8 @@ export default function ProductDetailPage() {
             {priceComparison.last_refreshed_at_display ?? priceComparison.last_refreshed_at}
           </div>
 
+          {priceComparison.query ? <div className="muted">關鍵字：{priceComparison.query}</div> : null}
+
           {!priceComparison.items.length ? (
             <div className="muted">目前沒有外站比價資料。</div>
           ) : (
@@ -440,17 +489,17 @@ export default function ProductDetailPage() {
                   <tr key={`${item.site}-${item.url}`}>
                     <td>{item.site_label}</td>
                     <td>
-                      <a href={item.url} rel="noreferrer" target="_blank">
-                        {item.title}
-                      </a>
+                      {item.url ? (
+                        <a href={item.url} rel="noreferrer" target="_blank">
+                          {item.title}
+                        </a>
+                      ) : (
+                        <span>{item.title || '未找到符合商品'}</span>
+                      )}
+                      {item.note ? <div className="muted">{item.note}</div> : null}
                     </td>
-                    <td>
-                      {item.currency} {item.price}
-                    </td>
-                    <td>
-                      {item.diff_amount > 0 ? '+' : ''}
-                      {item.diff_amount} ({item.diff_percent}%)
-                    </td>
+                    <td>{item.status === 'matched' ? `${item.currency} ${item.price}` : '-'}</td>
+                    <td>{item.status === 'matched' ? `${item.diff_amount > 0 ? '+' : ''}${item.diff_amount} (${item.diff_percent}%)` : '-'}</td>
                   </tr>
                 ))}
               </tbody>
@@ -537,7 +586,7 @@ export default function ProductDetailPage() {
                 <div className="stack">
                   {question.answers.map((answer) => (
                     <div className="card" key={answer.id}>
-                      <strong>{answer.author}</strong>
+                      <strong>{answer.is_seller_reply ? `賣家回覆 (${answer.author})` : answer.author}</strong>
                       <div className="muted">{answer.created_at_display ?? answer.created_at}</div>
                       <div>{answer.body}</div>
                     </div>

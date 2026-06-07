@@ -81,7 +81,7 @@
       "上衣"
     ],
     "images": [
-      "/static/uploads/products/product-20260528111926689700-20260528111926689700-1.png"
+      "https://storage.googleapis.com/store_django/products/product-20260528111926689700-20260528111926689700-1.png"
     ],
     "specs": {
       "尺寸": "S,M,L,XL"
@@ -109,7 +109,7 @@
       "上衣"
     ],
     "images": [
-      "/static/uploads/products/product-20260528113449327015-20260528113449327015-1.png"
+      "https://storage.googleapis.com/store_django/products/product-20260528113449327015-20260528113449327015-1.png"
     ],
     "specs": {
       "尺寸": "S,M,L"
@@ -176,9 +176,9 @@
       "長袖上衣"
     ],
     "images": [
-      "/static/uploads/products/product-20260530122432417910-20260530122432418916-1.png",
-      "/static/uploads/products/product-20260530122432417910-20260530122432418916-2.png",
-      "/static/uploads/products/product-20260530122432417910-20260530122432419925-3.png"
+      "https://storage.googleapis.com/store_django/products/product-20260530122432417910-20260530122432418916-1.png",
+      "https://storage.googleapis.com/store_django/products/product-20260530122432417910-20260530122432418916-2.png",
+      "https://storage.googleapis.com/store_django/products/product-20260530122432417910-20260530122432419925-3.png"
     ],
     "specs": {
       "顏色": "白,灰,黑",
@@ -240,7 +240,7 @@
           "size": "M"
         },
         "image_index": 2,
-        "image": "/static/uploads/products/product-20260530122432417910-20260530122432418916-2.png"
+        "image": "https://storage.googleapis.com/store_django/products/product-20260530122432417910-20260530122432418916-2.png"
       },
       {
         "id": "長袖上衣-灰-l",
@@ -254,7 +254,7 @@
           "size": "L"
         },
         "image_index": 2,
-        "image": "/static/uploads/products/product-20260530122432417910-20260530122432418916-2.png"
+        "image": "https://storage.googleapis.com/store_django/products/product-20260530122432417910-20260530122432418916-2.png"
       },
       {
         "id": "長袖上衣-灰-xl",
@@ -268,7 +268,7 @@
           "size": "XL"
         },
         "image_index": 2,
-        "image": "/static/uploads/products/product-20260530122432417910-20260530122432418916-2.png"
+        "image": "https://storage.googleapis.com/store_django/products/product-20260530122432417910-20260530122432418916-2.png"
       },
       {
         "id": "長袖上衣-黑-s",
@@ -282,7 +282,7 @@
           "size": "S"
         },
         "image_index": 3,
-        "image": "/static/uploads/products/product-20260530122432417910-20260530122432419925-3.png"
+        "image": "https://storage.googleapis.com/store_django/products/product-20260530122432417910-20260530122432419925-3.png"
       }
     ],
     "owner_user_id": 5,
@@ -305,7 +305,7 @@
       "短袖上衣"
     ],
     "images": [
-      "/static/uploads/products/new-forcepolo-20260530123508966727-1.png"
+      "https://storage.googleapis.com/store_django/products/new-forcepolo-20260530123508966727-1.png"
     ],
     "specs": {
       "尺寸": "L"
@@ -347,7 +347,7 @@
       "短褲"
     ],
     "images": [
-      "/static/uploads/products/product-20260531050841957148-20260531050841959144-1.png"
+      "https://storage.googleapis.com/store_django/products/product-20260531050841957148-20260531050841959144-1.png"
     ],
     "specs": {
       "材質": "100純棉",
@@ -391,7 +391,7 @@
       "短袖上衣"
     ],
     "images": [
-      "/static/uploads/products/product-20260531051317042625-20260531051317042625-1.png"
+      "https://storage.googleapis.com/store_django/products/product-20260531051317042625-20260531051317042625-1.png"
     ],
     "specs": {
       "顏色": "藍",

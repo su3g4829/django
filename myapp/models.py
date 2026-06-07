@@ -116,15 +116,6 @@ class ProductStatus(models.TextChoices):
     ARCHIVED = "archived", "Archived"
 
 
-class BannerStatus(models.TextChoices):
-    """Banner 審核與上下線狀態。"""
-
-    PENDING = "pending", "Pending"
-    APPROVED = "approved", "Approved"
-    REJECTED = "rejected", "Rejected"
-    ARCHIVED = "archived", "Archived"
-
-
 class OrderStatus(models.TextChoices):
     """訂單主狀態。表示整筆訂單在交易流程中的總體進度。"""
 
@@ -212,26 +203,6 @@ class ShipmentEventType(models.TextChoices):
     CANCELLED = "cancelled", "Cancelled"
 
 
-class CommunityTopic(models.TextChoices):
-    """社群貼文分類主題。可用於前台分區與後台內容管理。"""
-
-    GENERAL = "general", "General"
-    PRODUCT = "product", "Product"
-    SUPPORT = "support", "Support"
-
-
-class ModerationStatus(models.TextChoices):
-    """內容審核狀態。適用於評論、問答、社群內容等對外可見資料。"""
-
-    VISIBLE = "visible", "Visible"
-    HIDDEN = "hidden", "Hidden"
-    FLAGGED = "flagged", "Flagged"
-    DELETED = "deleted", "Deleted"
-
-
-#
-# 會員 / 身分 / 設定
-#
 class AppUser(TimestampedModel):
     """
     平台使用者主表。
@@ -245,6 +216,13 @@ class AppUser(TimestampedModel):
     這張表只放使用者主資料。
     地址、發票設定、運費規則另外拆到子表，避免使用者主表過胖。
     """
+
+    # Django 將這張表視為正式 AUTH_USER_MODEL 時，至少會檢查：
+    # - USERNAME_FIELD
+    # - REQUIRED_FIELDS
+    # 目前先補齊最小需求，讓第一波 migration 可以建立 users 表。
+    USERNAME_FIELD = "username"
+    REQUIRED_FIELDS = ["email"]
 
     username = models.CharField(max_length=150, unique=True)
     email = models.EmailField(unique=True)
@@ -278,6 +256,14 @@ class AppUser(TimestampedModel):
         # `db_table` 指定資料表名；`ordering` 指定預設查詢排序。
         db_table = "users"
         ordering = ["id"]
+
+    @property
+    def is_anonymous(self) -> bool:
+        return False
+
+    @property
+    def is_authenticated(self) -> bool:
+        return True
 
     def __str__(self) -> str:
         # `__str__` 是 Python 物件方法；Django admin / shell / 關聯選單會顯示這個字串。
@@ -473,6 +459,8 @@ class Product(TimestampedModel):
     price = models.DecimalField(max_digits=12, decimal_places=2)
     compare_at_price = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     stock = models.IntegerField(default=0)
+    price_compare_enabled = models.BooleanField(default=False)
+    price_compare_query = models.CharField(max_length=255, blank=True)
     # `JSONField` 用來保存彈性規格資料，例如材質、容量、尺寸摘要。
     specs = models.JSONField(default=dict, blank=True)
     # `choices=ProductStatus.choices` 代表這個欄位只能使用 ProductStatus 定義的列舉值。
@@ -564,129 +552,6 @@ class ProductTagRelation(models.Model):
         constraints = [
             models.UniqueConstraint(fields=["product", "tag"], name="uniq_product_tag_relation"),
         ]
-
-
-#
-# 使用者購物行為 / 個人化
-#
-class Cart(TimestampedModel):
-    """
-    購物車主表。
-
-    目前專案實際上仍使用 session 保存購物車；這張表是未來若要將購物車持久化到 DB
-    時的規劃結構。可同時支援登入使用者與訪客 session。
-    """
-
-    user = models.ForeignKey("myapp.AppUser", on_delete=models.CASCADE, null=True, blank=True, related_name="carts")
-    session_key = models.CharField(max_length=100, blank=True)
-    is_active = models.BooleanField(default=True)
-
-    class Meta:
-        # 這張表目前只先固定資料表名稱；排序規則未來可再依需求補。
-        db_table = "carts"
-
-
-class CartItem(TimestampedModel):
-    """
-    購物車明細。
-
-    這裡保留商品/變體外鍵，也保留價格與名稱 snapshot，
-    避免商品改價後購物車內容完全無法還原當時畫面。
-    """
-
-    cart = models.ForeignKey(Cart, on_delete=models.CASCADE, related_name="items")
-    product = models.ForeignKey(Product, on_delete=models.SET_NULL, null=True, blank=True)
-    product_variant = models.ForeignKey(ProductVariant, on_delete=models.SET_NULL, null=True, blank=True)
-    # item_key 對應目前 cart service 的 key 規則：
-    # - 無變體：`product-slug`
-    # - 有變體：`product-slug__variant-id`
-    # 之後若正式切 DB cart，以 `(cart, item_key)` 當唯一鍵會比 nullable
-    # variant 外鍵更穩，避免 MySQL 對 UNIQUE + NULL 的重複容忍問題。
-    item_key = models.CharField(max_length=255)
-    quantity = models.PositiveIntegerField(default=1)
-    unit_price_snapshot = models.DecimalField(max_digits=12, decimal_places=2)
-    product_name_snapshot = models.CharField(max_length=255)
-    variant_name_snapshot = models.CharField(max_length=255, blank=True)
-    product_slug_snapshot = models.SlugField(max_length=200)
-
-    class Meta:
-        # 避免同一購物車中重複出現同商品/同變體多筆資料。
-        # 正常情況應該是更新數量，而不是新增重複列。
-        db_table = "cart_items"
-        constraints = [
-            models.UniqueConstraint(fields=["cart", "item_key"], name="uniq_cart_item_key"),
-        ]
-
-
-class UserFavorite(TimestampedModel):
-    """
-    會員收藏商品。
-
-    這是會員對商品的長期偏好資料，與 session 型的暫時行為不同。
-    唯一約束確保同一使用者對同一商品只收藏一次。
-    """
-
-    user = models.ForeignKey("myapp.AppUser", on_delete=models.CASCADE, related_name="favorites")
-    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="favorited_by")
-
-    class Meta:
-        # 同一使用者對同一商品只能收藏一次。
-        db_table = "user_favorites"
-        constraints = [
-            models.UniqueConstraint(fields=["user", "product"], name="uniq_user_favorite"),
-        ]
-
-
-class CompareItem(TimestampedModel):
-    """
-    商品比較清單。
-
-    目前前台比價清單仍可由 session 支撐；若之後要持久化或跨裝置同步，
-    這張表就是正式落點。
-    """
-
-    user = models.ForeignKey("myapp.AppUser", on_delete=models.CASCADE, null=True, blank=True, related_name="compare_items")
-    session_key = models.CharField(max_length=100, blank=True)
-    # `bucket_key` 是給資料庫唯一鍵用的穩定 owner key。
-    # 例如：
-    # - 已登入會員：`user:123`
-    # - 訪客模式：`session:abcxyz`
-    # 這樣可以避免 MySQL 在 `NULL` 欄位唯一約束上的不同行為。
-    bucket_key = models.CharField(max_length=140)
-    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="compare_entries")
-
-    class Meta:
-        db_table = "compare_items"
-        constraints = [
-            # 比較清單在資料庫層應該是 set-like，同一個 bucket 對同一商品只能有一筆。
-            models.UniqueConstraint(fields=["bucket_key", "product"], name="uniq_compare_bucket_product"),
-        ]
-
-
-class RecentView(TimestampedModel):
-    """
-    最近瀏覽商品紀錄。
-
-    用來支援：
-    - 會員中心最近看過
-    - 前台快速返回
-    - 推薦系統的瀏覽行為訊號
-    """
-
-    user = models.ForeignKey("myapp.AppUser", on_delete=models.CASCADE, null=True, blank=True, related_name="recent_views")
-    session_key = models.CharField(max_length=100, blank=True)
-    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="recent_views")
-    viewed_at = models.DateTimeField()
-
-    class Meta:
-        # 最近瀏覽的查詢通常需要最新在前。
-        db_table = "recent_views"
-        ordering = ["-viewed_at"]
-
-
-#
-# 訂單 / 履約 / 售後
-#
 class Order(TimestampedModel):
     """
     訂單主表。
@@ -916,25 +781,206 @@ class PaymentCallbackLog(TimestampedModel):
         ordering = ["-id"]
 
 
+class NewebpayStoreMapSelection(TimestampedModel):
+    """
+    藍新超商選店暫存紀錄表。
+
+    這張表對應目前 store-map flow 在 JSON 內保存的 record，
+    之後 `newebpay_logistics_real.py` 轉 ORM 時會以此取代
+    `newebpay_store_map_selections.json`。
+    """
+
+    buyer = models.ForeignKey(
+        "myapp.AppUser",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="newebpay_store_map_selections",
+    )
+    buyer_username_snapshot = models.CharField(max_length=150, blank=True)
+    selection_token = models.CharField(max_length=120, unique=True)
+    merchant_order_no = models.CharField(max_length=64, db_index=True)
+    pickup_store_brand = models.CharField(max_length=50, blank=True)
+    pickup_store_brand_label = models.CharField(max_length=100, blank=True)
+    payment_method = models.CharField(max_length=50, blank=True)
+    status = models.CharField(max_length=50, default="prepared")
+    store_id = models.CharField(max_length=50, blank=True)
+    store_name = models.CharField(max_length=255, blank=True)
+    store_address = models.CharField(max_length=500, blank=True)
+    store_type = models.CharField(max_length=100, blank=True)
+    action_url = models.CharField(max_length=500, blank=True)
+    callback_url = models.CharField(max_length=500, blank=True)
+    return_url = models.CharField(max_length=500, blank=True)
+    gateway_return_url = models.CharField(max_length=500, blank=True)
+    plain_params = models.JSONField(default=dict, blank=True)
+    form_fields = models.JSONField(default=dict, blank=True)
+    reply_payload = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        db_table = "newebpay_store_map_selections"
+        ordering = ["-updated_at", "-id"]
+
+
+class AdminAuditLog(TimestampedModel):
+    """
+    後台操作稽核紀錄表。
+
+    先保留通用欄位，讓商品審核、會員狀態調整、售後審核、
+    banner 審核等管理操作都能共用同一張 audit table。
+    """
+
+    actor = models.ForeignKey(
+        "myapp.AppUser",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="admin_audit_logs",
+    )
+    action = models.CharField(max_length=100)
+    target_type = models.CharField(max_length=100, blank=True)
+    target_id = models.CharField(max_length=100, blank=True)
+    target_label = models.CharField(max_length=255, blank=True)
+    payload_json = models.JSONField(default=dict, blank=True)
+    note = models.TextField(blank=True)
+
+    class Meta:
+        db_table = "admin_audit_logs"
+        ordering = ["-id"]
+
+
 #
-# 內容：評論 / 問答 / 社群
+# ??? / ????????????? migration
 #
+# ???????
+# - ?? / ?? / ?? / ????
+# - ?? / ?? / ?? / ?? / tag
+# - ?? / ???? / ?? / ????
+# - ???? / callback log
+#
+# ??????????????JSON repository ??? ORM ?????
+# - ??? / ?? / ?? / ????
+# - ?? / ?? / ??
+# - Banner / ???? / ????
+# - ?? / ??
+
+
+#
+# 第二波 schema：購物 / 個人化 / 內容 / 社群 / Banner / 推薦
+#
+class Cart(TimestampedModel):
+    """
+    購物車主表。
+
+    登入會員一人一台 cart；未登入訪客仍可先用 session，登入後再合併進 DB。
+    """
+
+    user = models.OneToOneField("myapp.AppUser", on_delete=models.CASCADE, related_name="cart")
+    coupon_code = models.CharField(max_length=100, blank=True)
+
+    class Meta:
+        db_table = "carts"
+
+
+class CartItem(TimestampedModel):
+    """
+    購物車項目表。
+
+    `item_key` 用來避免 MySQL 對 nullable unique 的問題；
+    同一個 cart 內以 `cart + item_key` 保證唯一。
+    """
+
+    cart = models.ForeignKey(Cart, on_delete=models.CASCADE, related_name="items")
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="cart_items")
+    product_variant = models.ForeignKey(
+        ProductVariant,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="cart_items",
+    )
+    item_key = models.CharField(max_length=255)
+    quantity = models.PositiveIntegerField(default=1)
+    unit_price_snapshot = models.DecimalField(max_digits=12, decimal_places=2)
+    product_name_snapshot = models.CharField(max_length=255)
+    variant_name_snapshot = models.CharField(max_length=255, blank=True)
+    sku_snapshot = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        db_table = "cart_items"
+        ordering = ["id"]
+        constraints = [
+            models.UniqueConstraint(fields=["cart", "item_key"], name="uniq_cart_item_key"),
+        ]
+
+
+class UserFavorite(TimestampedModel):
+    """會員收藏商品關聯表。"""
+
+    user = models.ForeignKey("myapp.AppUser", on_delete=models.CASCADE, related_name="favorites")
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="favorited_by")
+
+    class Meta:
+        db_table = "user_favorites"
+        ordering = ["-id"]
+        constraints = [
+            models.UniqueConstraint(fields=["user", "product"], name="uniq_user_favorite"),
+        ]
+
+
+class CompareItem(TimestampedModel):
+    """
+    商品比較關聯表。
+
+    `bucket_key` 統一描述 compare owner：
+    - `user:12`
+    - `session:abcxyz`
+    """
+
+    user = models.ForeignKey(
+        "myapp.AppUser",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="compare_items",
+    )
+    session_key = models.CharField(max_length=255, blank=True)
+    bucket_key = models.CharField(max_length=255)
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="compare_items")
+
+    class Meta:
+        db_table = "compare_items"
+        ordering = ["-id"]
+        constraints = [
+            models.UniqueConstraint(fields=["bucket_key", "product"], name="uniq_compare_bucket_product"),
+        ]
+
+
+class RecentView(TimestampedModel):
+    """最近瀏覽商品紀錄表。"""
+
+    user = models.ForeignKey("myapp.AppUser", on_delete=models.CASCADE, related_name="recent_views")
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="recent_views")
+    viewed_at = models.DateTimeField()
+
+    class Meta:
+        db_table = "recent_views"
+        ordering = ["-viewed_at", "-id"]
+
+
 class ProductReview(TimestampedModel):
     """
-    商品評論。
+    商品評論表。
 
-    DB 內保留真實作者關聯與作者名稱快照；
-    API 對外是否匿名顯示，應在 service / serializer 層處理，不在資料庫層硬改。
+    DB 內保留真實作者 FK；匿名顯示或暱稱顯示由 API 層處理。
     """
 
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="reviews")
-    author = models.ForeignKey("myapp.AppUser", on_delete=models.SET_NULL, null=True, blank=True, related_name="reviews")
-    author_name_snapshot = models.CharField(max_length=150)
-    public_display_name = models.CharField(max_length=150, blank=True)
+    author = models.ForeignKey("myapp.AppUser", on_delete=models.CASCADE, related_name="product_reviews")
+    author_display_name_snapshot = models.CharField(max_length=150, blank=True)
     rating = models.PositiveSmallIntegerField()
-    title = models.CharField(max_length=255)
-    body = models.TextField()
-    moderation_status = models.CharField(max_length=20, choices=ModerationStatus.choices, default=ModerationStatus.VISIBLE)
+    title = models.CharField(max_length=255, blank=True)
+    body = models.TextField(blank=True)
+    is_visible = models.BooleanField(default=True)
 
     class Meta:
         db_table = "product_reviews"
@@ -942,20 +988,14 @@ class ProductReview(TimestampedModel):
 
 
 class ProductQuestion(TimestampedModel):
-    """
-    商品問答中的提問主表。
-
-    與評論不同，問答需要再往下連到回答表，因此拆成 Question / Answer 兩層。
-    公開顯示是否匿名，仍由 API 層控制。
-    """
+    """商品問答主表。"""
 
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="questions")
-    author = models.ForeignKey("myapp.AppUser", on_delete=models.SET_NULL, null=True, blank=True, related_name="questions")
-    author_name_snapshot = models.CharField(max_length=150)
-    public_display_name = models.CharField(max_length=150, blank=True)
-    title = models.CharField(max_length=255)
+    author = models.ForeignKey("myapp.AppUser", on_delete=models.CASCADE, related_name="product_questions")
+    author_display_name_snapshot = models.CharField(max_length=150, blank=True)
+    title = models.CharField(max_length=255, blank=True)
     body = models.TextField()
-    moderation_status = models.CharField(max_length=20, choices=ModerationStatus.choices, default=ModerationStatus.VISIBLE)
+    is_visible = models.BooleanField(default=True)
 
     class Meta:
         db_table = "product_questions"
@@ -963,24 +1003,13 @@ class ProductQuestion(TimestampedModel):
 
 
 class ProductQuestionAnswer(TimestampedModel):
-    """
-    商品問答中的回答表。
-
-    一個問題可對應多個回答，回答者可能是賣家、管理者或一般會員。
-    """
+    """商品問答回覆表。"""
 
     question = models.ForeignKey(ProductQuestion, on_delete=models.CASCADE, related_name="answers")
-    author = models.ForeignKey(
-        "myapp.AppUser",
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="question_answers",
-    )
-    author_name_snapshot = models.CharField(max_length=150)
-    public_display_name = models.CharField(max_length=150, blank=True)
+    author = models.ForeignKey("myapp.AppUser", on_delete=models.CASCADE, related_name="product_question_answers")
+    author_display_name_snapshot = models.CharField(max_length=150, blank=True)
     body = models.TextField()
-    moderation_status = models.CharField(max_length=20, choices=ModerationStatus.choices, default=ModerationStatus.VISIBLE)
+    is_visible = models.BooleanField(default=True)
 
     class Meta:
         db_table = "product_question_answers"
@@ -991,18 +1020,16 @@ class CommunityPost(TimestampedModel):
     """
     社群貼文主表。
 
-    目前對應論壇/社群牆的主文內容，包含 topic、標籤、票數與匿名顯示資料。
+    `body_html` 先沿用目前前端 payload；之後若要保留 raw markdown 再擴充。
     """
 
-    topic = models.CharField(max_length=30, choices=CommunityTopic.choices, default=CommunityTopic.GENERAL)
-    author = models.ForeignKey("myapp.AppUser", on_delete=models.SET_NULL, null=True, blank=True, related_name="community_posts")
-    author_name_snapshot = models.CharField(max_length=150)
-    public_display_name = models.CharField(max_length=150, blank=True)
+    author = models.ForeignKey("myapp.AppUser", on_delete=models.CASCADE, related_name="community_posts")
+    author_display_name_snapshot = models.CharField(max_length=150, blank=True)
+    topic = models.CharField(max_length=100, blank=True)
     title = models.CharField(max_length=255)
-    body = models.TextField()
-    tags = models.JSONField(default=list, blank=True)
-    vote_count = models.IntegerField(default=0)
-    moderation_status = models.CharField(max_length=20, choices=ModerationStatus.choices, default=ModerationStatus.VISIBLE)
+    body_html = models.TextField()
+    votes_count = models.IntegerField(default=0)
+    is_visible = models.BooleanField(default=True)
 
     class Meta:
         db_table = "community_posts"
@@ -1010,21 +1037,13 @@ class CommunityPost(TimestampedModel):
 
 
 class CommunityReply(TimestampedModel):
-    """
-    社群貼文回覆表。
-
-    與主文分表，方便未來：
-    - 獨立審核
-    - 回覆分頁
-    - 針對回覆做更多權限或通知邏輯
-    """
+    """社群貼文回覆表。"""
 
     post = models.ForeignKey(CommunityPost, on_delete=models.CASCADE, related_name="replies")
-    author = models.ForeignKey("myapp.AppUser", on_delete=models.SET_NULL, null=True, blank=True, related_name="community_replies")
-    author_name_snapshot = models.CharField(max_length=150)
-    public_display_name = models.CharField(max_length=150, blank=True)
+    author = models.ForeignKey("myapp.AppUser", on_delete=models.CASCADE, related_name="community_replies")
+    author_display_name_snapshot = models.CharField(max_length=150, blank=True)
     body = models.TextField()
-    moderation_status = models.CharField(max_length=20, choices=ModerationStatus.choices, default=ModerationStatus.VISIBLE)
+    is_visible = models.BooleanField(default=True)
 
     class Meta:
         db_table = "community_replies"
@@ -1032,12 +1051,7 @@ class CommunityReply(TimestampedModel):
 
 
 class CommunityVote(TimestampedModel):
-    """
-    社群貼文投票紀錄。
-
-    目前先用單純的貼文投票模型。
-    若未來要支援回覆按讚、倒讚、表情反應，可再擴充。
-    """
+    """社群貼文投票表，目前先只支援單向 upvote。"""
 
     post = models.ForeignKey(CommunityPost, on_delete=models.CASCADE, related_name="votes")
     user = models.ForeignKey("myapp.AppUser", on_delete=models.CASCADE, related_name="community_votes")
@@ -1046,29 +1060,24 @@ class CommunityVote(TimestampedModel):
     class Meta:
         db_table = "community_votes"
         constraints = [
-            models.UniqueConstraint(fields=["post", "user"], name="uniq_community_post_vote"),
+            models.UniqueConstraint(fields=["post", "user"], name="uniq_community_vote"),
         ]
 
 
-#
-# 營運素材 / Banner / 後台稽核
-#
 class MediaAsset(TimestampedModel):
-    """
-    媒體資產主表。
+    """共用媒體素材主表，給 banner 或未來其他模組共用。"""
 
-    用於統一管理商品圖、Banner 圖或未來其他上傳檔案。
-    如果之後要做檔案回收、尺寸資訊或 CDN，同步點都會在這張表。
-    """
-
-    owner = models.ForeignKey("myapp.AppUser", on_delete=models.SET_NULL, null=True, blank=True, related_name="media_assets")
+    uploaded_by = models.ForeignKey(
+        "myapp.AppUser",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="uploaded_media_assets",
+    )
     file_path = models.CharField(max_length=500)
-    original_name = models.CharField(max_length=255, blank=True)
-    content_type = models.CharField(max_length=100, blank=True)
+    file_name = models.CharField(max_length=255)
+    mime_type = models.CharField(max_length=100, blank=True)
     file_size = models.BigIntegerField(default=0)
-    width = models.PositiveIntegerField(null=True, blank=True)
-    height = models.PositiveIntegerField(null=True, blank=True)
-    purpose = models.CharField(max_length=50, blank=True)
 
     class Meta:
         db_table = "media_assets"
@@ -1076,34 +1085,25 @@ class MediaAsset(TimestampedModel):
 
 
 class Banner(TimestampedModel):
-    """
-    Banner / 廣告申請與展示資料。
+    """Banner 申請 / 審核 / 上線主表。"""
 
-    同時覆蓋：
-    - 賣家申請的 banner 內容
-    - 後台審核狀態
-    - 前台顯示位置、期間、排序
-    """
-
-    title = models.CharField(max_length=255)
+    title = models.CharField(max_length=255, blank=True)
     copy_text = models.TextField(blank=True)
-    image_path = models.CharField(max_length=500, blank=True)
-    media_asset = models.ForeignKey(MediaAsset, on_delete=models.SET_NULL, null=True, blank=True, related_name="banners")
+    image_path = models.CharField(max_length=500)
     link_url = models.CharField(max_length=500, blank=True)
-    starts_at = models.DateField(null=True, blank=True)
-    ends_at = models.DateField(null=True, blank=True)
-    position = models.CharField(max_length=100)
-    position_label = models.CharField(max_length=150, blank=True)
+    position = models.CharField(max_length=100, blank=True)
     note = models.TextField(blank=True)
-    sort_order = models.IntegerField(default=0)
-    status = models.CharField(max_length=20, choices=BannerStatus.choices, default=BannerStatus.PENDING)
+    sort_order = models.PositiveIntegerField(default=0)
+    status = models.CharField(max_length=50, default="pending")
     is_active = models.BooleanField(default=False)
-    is_currently_visible = models.BooleanField(default=False)
     rejection_reason = models.TextField(blank=True)
-    applicant = models.ForeignKey("myapp.AppUser", on_delete=models.SET_NULL, null=True, blank=True, related_name="banner_applications")
-    applicant_username_snapshot = models.CharField(max_length=150, blank=True)
-    applicant_display_name_snapshot = models.CharField(max_length=150, blank=True)
-    reviewed_at = models.DateTimeField(null=True, blank=True)
+    applicant_user = models.ForeignKey(
+        "myapp.AppUser",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="banner_applications",
+    )
     reviewed_by = models.ForeignKey(
         "myapp.AppUser",
         on_delete=models.SET_NULL,
@@ -1111,99 +1111,34 @@ class Banner(TimestampedModel):
         blank=True,
         related_name="reviewed_banners",
     )
-    reviewed_by_username_snapshot = models.CharField(max_length=150, blank=True)
-    reviewed_by_display_name_snapshot = models.CharField(max_length=150, blank=True)
+    starts_at = models.DateTimeField(null=True, blank=True)
+    ends_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = "banners"
         ordering = ["sort_order", "id"]
 
 
-class AdminAuditLog(TimestampedModel):
-    """
-    後台操作稽核紀錄。
-
-    正式上資料庫後，凡是帳號狀態調整、商品審核、Banner 審核、內容隱藏等，
-    都應有可追查的 before / after 資料。
-    """
-
-    actor = models.ForeignKey("myapp.AppUser", on_delete=models.SET_NULL, null=True, blank=True, related_name="admin_audit_logs")
-    action = models.CharField(max_length=100)
-    target_type = models.CharField(max_length=100)
-    target_id = models.CharField(max_length=100, blank=True)
-    summary = models.CharField(max_length=255, blank=True)
-    before_data = models.JSONField(default=dict, blank=True)
-    after_data = models.JSONField(default=dict, blank=True)
-    request_id = models.CharField(max_length=100, blank=True)
-
-    class Meta:
-        db_table = "admin_audit_logs"
-        ordering = ["-id"]
-
-
-#
-# 競品價格 / 推薦
-#
-class CompetitorSite(TimestampedModel):
-    """比價站點主表，例如不同外部電商來源。"""
-
-    name = models.CharField(max_length=150, unique=True)
-    base_url = models.CharField(max_length=255)
-    is_active = models.BooleanField(default=True)
-
-    class Meta:
-        db_table = "competitor_sites"
-        ordering = ["name"]
-
-
-class CompetitorProduct(TimestampedModel):
-    """
-    外部站點商品主表，供價格追蹤與競品對照使用。
-
-    這裡不保存每次抓價的完整歷史，而是只保留「目前最新」的價格資訊，
-    避免之後商品數量變多時，價格快照表膨脹過快。
-    """
-
-    # 一筆外部商品對照必須知道它對應站內哪個商品，
-    # 不然之後會無法回答「這個競品價格屬於我們哪件商品」。
-    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="competitor_products")
-    site = models.ForeignKey(CompetitorSite, on_delete=models.CASCADE, related_name="products")
-    external_product_id = models.CharField(max_length=255, blank=True)
-    name = models.CharField(max_length=255)
-    product_url = models.CharField(max_length=500, blank=True)
-    image_url = models.CharField(max_length=500, blank=True)
-    latest_price = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
-    latest_currency = models.CharField(max_length=10, default="TWD")
-    availability_status = models.CharField(max_length=30, blank=True)
-    last_checked_at = models.DateTimeField(null=True, blank=True)
-    latest_payload_json = models.JSONField(default=dict, blank=True)
-
-    class Meta:
-        db_table = "competitor_products"
-        ordering = ["site_id", "id"]
-        constraints = [
-            models.UniqueConstraint(
-                fields=["product", "site", "external_product_id"],
-                name="uniq_competitor_product_mapping",
-            ),
-        ]
-
-
 class ProductRecommendation(TimestampedModel):
     """
     商品推薦關聯表。
 
-    可作為人工推薦、規則推薦或未來演算法推薦的落點。
-    目前先用 `source_product -> recommended_product` 的簡單模型表示。
+    作為人工推薦、規則推薦或未來演算法結果的落點，
+    目前先保留 `source_product -> recommended_product` 的簡單形式。
     """
 
     source_product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="outgoing_recommendations")
-    recommended_product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="incoming_recommendations")
+    recommended_product = models.ForeignKey(
+        Product,
+        on_delete=models.CASCADE,
+        related_name="incoming_recommendations",
+    )
     score = models.DecimalField(max_digits=8, decimal_places=4, default=0)
     reason = models.CharField(max_length=255, blank=True)
 
     class Meta:
         db_table = "product_recommendations"
+        ordering = ["source_product_id", "-score", "id"]
         constraints = [
             models.UniqueConstraint(
                 fields=["source_product", "recommended_product"],
