@@ -2723,6 +2723,19 @@ class CheckoutConfirmApi(APIView):
             )
         except ValueError as exc:
             return _error(str(exc))
+        except Exception as exc:
+            logger.exception(
+                "Checkout confirm failed.",
+                extra={
+                    "username": user.get("username", ""),
+                    "shipping_method": str(payload.get("shipping_method", "")),
+                    "payment_method": str(payload.get("payment_method", "")),
+                    "address_id": payload.get("address_id"),
+                    "pickup_store_brand": str(payload.get("pickup_store_brand", "")),
+                    "pickup_store_code": str(payload.get("pickup_store_code", "")),
+                },
+            )
+            return _error(f"Checkout confirm failed: {exc}", status.HTTP_500_INTERNAL_SERVER_ERROR)
         detail = order_service.get_order_detail_for_user(order["id"], user["username"]) or order
         return Response(detail, status=status.HTTP_201_CREATED)
 
