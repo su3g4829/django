@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, Iterable, Optional
@@ -47,6 +48,7 @@ from .permissions import IsSellerOrAdminDemoUser
 from .permissions import get_demo_user
 
 PAGE_SIZE = 3
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -1638,7 +1640,11 @@ class NewebpaySandboxPaymentCallbackApi(APIView):
             return _error(str(exc), status.HTTP_503_SERVICE_UNAVAILABLE)
         except ValueError as exc:
             return _error(str(exc), status.HTTP_400_BAD_REQUEST)
-        newebpay_payment_real_service.persist_callback_record(record)
+        try:
+            newebpay_payment_real_service.persist_callback_record(record)
+        except Exception:
+            logger.exception("Failed to persist NewebPay sandbox callback record.")
+            return _error("Failed to persist NewebPay sandbox callback record.", status.HTTP_500_INTERNAL_SERVER_ERROR)
         return Response({"detail": "NewebPay sandbox payment callback processed.", "record": record})
 
 
@@ -1702,12 +1708,29 @@ class NewebpaySandboxPaymentReturnApi(APIView):
                 source="return",
             )
         except Exception as exc:  # pragma: no cover - redirect fallback
+            logger.exception("Failed to handle NewebPay sandbox return payload.")
             return HttpResponseRedirect(self._redirect_url(None, {"payment_callback": "failed", "message": str(exc)}))
 
-        newebpay_payment_real_service.persist_callback_record(record)
         decoded = record.get("decoded_payload") or {}
         merchant_order_no = newebpay_payment_real_service.extract_callback_result_fields(decoded)["merchant_order_no"]
         order_id = _parse_order_id_from_merchant_order_no(merchant_order_no) if merchant_order_no else None
+        try:
+            newebpay_payment_real_service.persist_callback_record(record)
+        except Exception as exc:  # pragma: no cover - redirect fallback
+            logger.exception(
+                "Failed to persist NewebPay sandbox return record for merchant_order_no=%s.",
+                merchant_order_no or "<missing>",
+            )
+            return HttpResponseRedirect(
+                self._redirect_url(
+                    order_id,
+                    {
+                        "payment_callback": "failed",
+                        "message": str(exc),
+                        "merchant_order_no": merchant_order_no,
+                    },
+                )
+            )
         return HttpResponseRedirect(
             self._redirect_url(
                 order_id,
