@@ -158,17 +158,31 @@ export default function ProductDetailPage() {
   // 規格文案會去除由系統自動管理的尺寸庫存片段，避免前端重複顯示。
   const detailSpecsText = useMemo(() => stripManagedSizeSpecs(product?.specs_text ?? ''), [product?.specs_text])
 
+  const selectedColorImage = useMemo(() => {
+    if (!product?.images?.length || !selectedColor || !colorChoices.length) {
+      return ''
+    }
+
+    const colorIndex = colorChoices.findIndex((color) => color.trim() === selectedColor.trim())
+    if (colorIndex < 0) {
+      return ''
+    }
+
+    return product.images[colorIndex] ?? ''
+  }, [colorChoices, product?.images, selectedColor])
+
   // 圖庫永遠優先顯示目前選中變體的圖，再接一般商品圖。
   const galleryImages = useMemo(() => {
     const leadImage =
       selectedVariant?.image ||
       selectedVariant?.image_path_snapshot ||
+      selectedColorImage ||
       product?.primary_image ||
       product?.images?.[0] ||
       ''
     const ordered = [leadImage, ...(product?.images ?? [])].filter(Boolean)
     return ordered.filter((image, index) => ordered.indexOf(image) === index)
-  }, [product?.images, product?.primary_image, selectedVariant?.image, selectedVariant?.image_path_snapshot])
+  }, [product?.images, product?.primary_image, selectedColorImage, selectedVariant?.image, selectedVariant?.image_path_snapshot])
 
   useEffect(() => {
     // 如果顏色切換後原本尺寸已無效，就自動切回第一個合法尺寸。
