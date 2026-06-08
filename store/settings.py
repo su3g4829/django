@@ -164,8 +164,14 @@ AUTH_USER_MODEL = "myapp.AppUser"
 DB_BACKEND  = os.getenv("STORE_DB_BACKEND", "sqlite").strip().lower()
 
 if DB_BACKEND == "mysql":
+    mysql_connect_timeout = int(_env_text("MYSQL_CONNECT_TIMEOUT") or "15")
+    mysql_read_timeout = int(_env_text("MYSQL_READ_TIMEOUT") or "120")
+    mysql_write_timeout = int(_env_text("MYSQL_WRITE_TIMEOUT") or "120")
     mysql_options: dict[str, object] = {
         "charset": "utf8mb4",
+        "connect_timeout": mysql_connect_timeout,
+        "read_timeout": mysql_read_timeout,
+        "write_timeout": mysql_write_timeout,
     }
     mysql_options.update(_mysql_ssl_options())
     DATABASES = {
@@ -176,6 +182,8 @@ if DB_BACKEND == "mysql":
             "PASSWORD": os.getenv("MYSQL_PASSWORD", ""),
             "HOST": os.getenv("MYSQL_HOST", "127.0.0.1"),
             "PORT": os.getenv("MYSQL_PORT", "3306"),
+            "CONN_MAX_AGE": int(_env_text("MYSQL_CONN_MAX_AGE") or "60"),
+            "CONN_HEALTH_CHECKS": _env_bool("MYSQL_CONN_HEALTH_CHECKS", True),
             "OPTIONS": mysql_options,
         }
     }
