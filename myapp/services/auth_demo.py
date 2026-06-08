@@ -550,6 +550,61 @@ def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
     return _user_snapshot(user)
 
 
+def get_user_by_email(email: str) -> Optional[Dict[str, Any]]:
+    """Return one canonical user snapshot by email when available."""
+    clean_email = str(email or "").strip().lower()
+    if not clean_email:
+        return None
+    if _db_auth_enabled():
+        db_user = AppUserModel.objects.filter(email=clean_email).first()
+        if not db_user:
+            return None
+        return _user_snapshot(
+            {
+                **_db_user_to_record(db_user),
+                "shipping_rules": get_seller_shipping_rules(db_user.username),
+            }
+        )
+    for user in local_store.get_users():
+        if str(user.get("email") or "").strip().lower() == clean_email:
+            return _user_snapshot(user)
+    return None
+
+
+def set_password(username: str, new_password: str) -> Dict[str, Any]:
+    """Update one user's password without requiring profile fields."""
+    clean_username = str(username or "").strip().lower()
+    if not clean_username:
+        raise ValueError("User not found.")
+    if len(new_password) < 6:
+        raise ValueError("New password must be at least 6 characters.")
+
+    if _db_auth_enabled():
+        db_user = _get_or_bootstrap_db_user(clean_username)
+        if not db_user:
+            raise ValueError("User not found.")
+        db_user.password_hash = make_password(new_password)
+        db_user.save(update_fields=["password_hash", "updated_at"])
+        return _user_snapshot(
+            {
+                **_db_user_to_record(db_user),
+                "password_hash": db_user.password_hash,
+                "shipping_rules": get_seller_shipping_rules(clean_username),
+            }
+        )
+
+    users = deepcopy(local_store.get_users())
+    for item in users:
+        if item.get("username") != clean_username:
+            continue
+        item["password_hash"] = make_password(new_password)
+        item.pop("password", None)
+        item["updated_at"] = timezone.now().isoformat()
+        local_store.save_users(users)
+        return _user_snapshot(item)
+    raise ValueError("User not found.")
+
+
 def update_seller_shipping_rules(
     username: str,
     *,

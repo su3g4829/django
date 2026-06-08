@@ -270,6 +270,23 @@ class AppUser(TimestampedModel):
         return self.username
 
 
+class PasswordResetToken(TimestampedModel):
+    """開發用忘記密碼重設 token。"""
+
+    user = models.ForeignKey("myapp.AppUser", on_delete=models.CASCADE, related_name="password_reset_tokens")
+    email = models.EmailField()
+    token = models.CharField(max_length=255, unique=True)
+    expires_at = models.DateTimeField()
+    used_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "password_reset_tokens"
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"{self.user.username}:{self.token[:8]}"
+
+
 class UserAddress(TimestampedModel):
     """
     使用者地址簿。

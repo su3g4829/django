@@ -54,6 +54,37 @@ def _env_list(name: str, default: list[str] | None = None) -> list[str]:
     return items or list(default or [])
 
 
+def _env_text(name: str) -> str:
+    value = os.getenv(name, "")
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+        return value[1:-1]
+    return value
+
+
+def _mysql_ssl_options() -> dict[str, object]:
+    mode = _env_text("MYSQL_SSL_MODE").strip().upper()
+    ca_path = _env_text("MYSQL_SSL_CA_PATH").strip()
+    ca_cert = _env_text("MYSQL_SSL_CA_CERT").strip()
+
+    if not mode and not ca_path and not ca_cert:
+        return {}
+
+    ssl_options: dict[str, str] = {}
+    if ca_path:
+        ssl_options["ca"] = ca_path
+    elif ca_cert:
+        cert_dir = BASE_DIR / "var" / "certs"
+        cert_dir.mkdir(parents=True, exist_ok=True)
+        cert_path = cert_dir / "mysql-ca.pem"
+        normalized = ca_cert.replace("\\n", "\n").strip()
+        cert_path.write_text(f"{normalized}\n", encoding="utf-8")
+        ssl_options["ca"] = str(cert_path)
+
+    if mode in {"REQUIRED", "VERIFY_CA", "VERIFY_IDENTITY", "VERIFY_FULL"}:
+        return {"ssl": ssl_options if ssl_options else {}}
+    return {}
+
+
 APP_ENV = os.getenv("STORE_ENV", "development").strip().lower()
 TESTING = "test" in sys.argv
 DEBUG = _env_bool("DJANGO_DEBUG", APP_ENV == "development")
@@ -133,6 +164,10 @@ AUTH_USER_MODEL = "myapp.AppUser"
 DB_BACKEND  = os.getenv("STORE_DB_BACKEND", "sqlite").strip().lower()
 
 if DB_BACKEND == "mysql":
+    mysql_options: dict[str, object] = {
+        "charset": "utf8mb4",
+    }
+    mysql_options.update(_mysql_ssl_options())
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.mysql",
@@ -141,9 +176,7 @@ if DB_BACKEND == "mysql":
             "PASSWORD": os.getenv("MYSQL_PASSWORD", ""),
             "HOST": os.getenv("MYSQL_HOST", "127.0.0.1"),
             "PORT": os.getenv("MYSQL_PORT", "3306"),
-            "OPTIONS": {
-                "charset": "utf8mb4",
-            },
+            "OPTIONS": mysql_options,
         }
     }
 else:

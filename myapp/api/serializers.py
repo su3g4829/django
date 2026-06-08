@@ -999,6 +999,62 @@ class ProfileUpdateSerializer(serializers.Serializer):
     confirm_password = serializers.CharField(required=False, allow_blank=True)
 
 
+class PasswordResetRequestSerializer(serializers.Serializer):
+    """忘記密碼請求格式。"""
+
+    email = serializers.EmailField()
+
+
+class PasswordResetConfirmSerializer(serializers.Serializer):
+    """重設密碼提交格式。"""
+
+    token = serializers.CharField()
+    new_password = serializers.CharField()
+    password_confirm = serializers.CharField()
+
+
+class PasswordResetTokenQuerySerializer(serializers.Serializer):
+    """重設 token 驗證 query。"""
+
+    token = serializers.CharField()
+
+
+class DevMailboxQuerySerializer(serializers.Serializer):
+    """開發用信箱頁查詢條件。"""
+
+    email = serializers.EmailField(required=False, allow_blank=True)
+
+
+class PasswordResetRecordQuerySerializer(serializers.Serializer):
+    """後台查看重設紀錄的查詢條件。"""
+
+    email = serializers.EmailField(required=False, allow_blank=True)
+    status = serializers.CharField(required=False, allow_blank=True)
+
+
+class DevMailboxItemSerializer(serializers.Serializer):
+    """開發用信箱單筆訊息格式。"""
+
+    id = serializers.IntegerField(required=False)
+    username = serializers.CharField()
+    display_name = serializers.CharField()
+    email = serializers.EmailField()
+    token = serializers.CharField()
+    reset_url = serializers.CharField()
+    subject = serializers.CharField()
+    preview = serializers.CharField()
+    status = serializers.CharField()
+    status_label = serializers.CharField(required=False, allow_blank=True)
+    is_used = serializers.BooleanField()
+    is_expired = serializers.BooleanField()
+    created_at = serializers.CharField()
+    created_at_display = serializers.CharField(required=False, allow_blank=True)
+    expires_at = serializers.CharField()
+    expires_at_display = serializers.CharField(required=False, allow_blank=True)
+    used_at = serializers.CharField(required=False, allow_blank=True)
+    used_at_display = serializers.CharField(required=False, allow_blank=True)
+
+
 class SellerRequestDecisionSerializer(serializers.Serializer):
     """SellerRequestDecisionSerializer。
     

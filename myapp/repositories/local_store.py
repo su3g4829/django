@@ -346,6 +346,18 @@ def save_users(users: List[Dict[str, Any]]) -> None:
     _invalidate("users")
 
 
+def get_password_reset_tokens() -> List[Dict[str, Any]]:
+    try:
+        return _cached("password_reset_tokens", lambda: _load_json("password_reset_tokens.json"))
+    except FileNotFoundError:
+        return []
+
+
+def save_password_reset_tokens(tokens: List[Dict[str, Any]]) -> None:
+    _write_json("password_reset_tokens.json", tokens)
+    _invalidate("password_reset_tokens")
+
+
 def get_orders() -> List[Dict[str, Any]]:
     try:
         return _cached("orders", lambda: _load_json("orders.json"))

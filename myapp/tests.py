@@ -32,6 +32,7 @@ from .models import CompareItem as CompareItemModel
 from .models import NewebpayStoreMapSelection as NewebpayStoreMapSelectionModel
 from .models import Order as OrderModel
 from .models import OrderItem as OrderItemModel
+from .models import PasswordResetToken as PasswordResetTokenModel
 from .models import PaymentTransaction as PaymentTransactionModel
 from .models import Product as ProductModel
 from .models import ProductQuestion as ProductQuestionModel
@@ -52,6 +53,7 @@ from .services import cloud_storage as cloud_storage_service
 from .services import community as community_service
 from .services import newebpay_payment_real as newebpay_payment_real_service
 from .services import orders as orders_service
+from .services import password_reset as password_reset_service
 from .services import personalization as personalization_service
 from .services import price_compare as price_compare_service
 from .services import product_management
@@ -982,6 +984,53 @@ class ProductFeatureTests(SimpleTestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["detail"], "This username is already taken.")
+
+    def test_password_reset_request_creates_dev_mailbox_message(self):
+        auth_demo.register_user("resetuser", "Reset User", "secret123", "reset@example.com")
+
+        response = self._post_json("/api/v1/auth/password-reset/request/", {"email": "reset@example.com"})
+        mailbox_response = self.client.get("/api/v1/auth/password-reset/dev-mailbox/?email=reset@example.com")
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(
+            response.json()["detail"],
+            "If the email exists, a reset link has been prepared in the dev mailbox.",
+        )
+        self.assertEqual(mailbox_response.status_code, 200)
+        item = mailbox_response.json()["items"][0]
+        self.assertEqual(item["email"], "reset@example.com")
+        self.assertIn("/reset-password?token=", item["reset_url"])
+        self.assertEqual(item["status"], "active")
+
+    def test_password_reset_confirm_updates_password_and_invalidates_token(self):
+        auth_demo.register_user("resetuser", "Reset User", "secret123", "reset@example.com")
+        self._post_json("/api/v1/auth/password-reset/request/", {"email": "reset@example.com"})
+        mailbox_response = self.client.get("/api/v1/auth/password-reset/dev-mailbox/?email=reset@example.com")
+        token = mailbox_response.json()["items"][0]["token"]
+
+        response = self._post_json(
+            "/api/v1/auth/password-reset/confirm/",
+            {
+                "token": token,
+                "new_password": "secret456",
+                "password_confirm": "secret456",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["detail"], "Password has been reset. Please sign in with your new password.")
+        self.assertEqual(self._login(username="resetuser", password="secret456").status_code, 200)
+        self.assertEqual(self._login(username="resetuser", password="secret123").status_code, 400)
+        second_try = self._post_json(
+            "/api/v1/auth/password-reset/confirm/",
+            {
+                "token": token,
+                "new_password": "another789",
+                "password_confirm": "another789",
+            },
+        )
+        self.assertEqual(second_try.status_code, 400)
+        self.assertEqual(second_try.json()["detail"], "Reset link is invalid or expired.")
 
     def test_buyer_can_manage_addresses_and_invoice_profile(self):
         self._login(username="buyer", next_url="/me/addresses/")
@@ -4374,6 +4423,22 @@ class AuthOrmSyncTests(TestCase):
         self.assertEqual(db_user.email, "orm-updated@example.com")
         self.assertEqual(db_user.account_status, "suspended")
 
+    def test_password_reset_flow_can_run_from_orm_without_json_user_snapshot(self):
+        auth_demo.register_user("reset_orm", "Reset ORM", "secret123", "reset-orm@example.com")
+        password_reset_service.request_password_reset("reset-orm@example.com")
+        token = PasswordResetTokenModel.objects.get(email="reset-orm@example.com")
+
+        users_path = Path(settings.BASE_DIR) / "data" / "users.json"
+        users_path.write_text("[]", encoding="utf-8")
+        local_store.clear_cache()
+
+        password_reset_service.confirm_password_reset(token.token, "secret456")
+
+        db_user = AppUserModel.objects.get(username="reset_orm")
+        token.refresh_from_db()
+        self.assertTrue(check_password("secret456", db_user.password_hash))
+        self.assertIsNotNone(token.used_at)
+
 
 class ProductManagementOrmSyncTests(TestCase):
     """驗證商品同步 ORM 時會重用既有品牌主檔。"""
@@ -5098,6 +5163,22 @@ class AdminOrmSyncTests(TestCase):
         self.assertEqual(db_user.seller_request_status, "approved")
         current_request = SellerRequestModel.objects.get(user=db_user, is_current=True)
         self.assertEqual(current_request.status, "approved")
+
+    def test_admin_user_api_includes_password_reset_records(self):
+        auth_demo.register_user("resetviewer", "Reset Viewer", "secret123", "resetviewer@example.com")
+        password_reset_service.request_password_reset("resetviewer@example.com")
+        self._remove_user_from_json("resetviewer")
+
+        self.assertEqual(self._login().status_code, 200)
+
+        response = self.client.get("/api/v1/staff/users/")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIn("reset_records", payload)
+        self.assertEqual(payload["reset_records"][0]["email"], "resetviewer@example.com")
+        self.assertEqual(payload["reset_records"][0]["status"], "active")
+        self.assertIn("/reset-password?token=", payload["reset_records"][0]["reset_url"])
 
     def test_admin_product_listing_ignores_json_only_products_when_orm_is_enabled(self):
         products_path = Path(self.temp_dir.name) / "data" / "products.json"

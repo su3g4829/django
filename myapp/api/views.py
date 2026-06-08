@@ -32,6 +32,7 @@ from ..services import customer_center
 from ..services import newebpay_logistics_real as newebpay_logistics_real_service
 from ..services import newebpay_payment_real as newebpay_payment_real_service
 from ..services import orders as order_service
+from ..services import password_reset as password_reset_service
 from ..services import personalization as personalization_service
 from ..services import price_compare as price_compare_service
 from ..services import product_management
@@ -1948,7 +1949,8 @@ class AdminUsersApi(APIView):
             role=str(params.get("role", "")),
             account_status=str(params.get("account_status", "")),
         )
-        return Response({"items": items})
+        reset_records = password_reset_service.list_reset_records()
+        return Response({"items": items, "reset_records": reset_records})
 
 
 class AdminProductsApi(APIView):
@@ -2338,6 +2340,72 @@ class LogoutApi(APIView):
         """清除登入 session。"""
         auth_demo.logout(request.session)
         return Response({"detail": "Signed out.", "user": None})
+
+
+class PasswordResetRequestApi(APIView):
+    """建立忘記密碼重設連結，並寫入開發用信箱。"""
+
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        payload = _validated(sz.PasswordResetRequestSerializer, request.data)
+        try:
+            result = password_reset_service.request_password_reset(str(payload["email"]))
+        except ValueError as exc:
+            return _error(str(exc))
+        return Response(result, status=status.HTTP_201_CREATED)
+
+
+class PasswordResetDevMailboxApi(APIView):
+    """列出開發環境中的重設信件。"""
+
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        payload = _validated(sz.DevMailboxQuerySerializer, request.query_params)
+        items = password_reset_service.list_dev_mailbox(str(payload.get("email", "")))
+        return Response({"items": items})
+
+
+class PasswordResetVerifyApi(APIView):
+    """驗證忘記密碼 token 是否仍可使用。"""
+
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        payload = _validated(sz.PasswordResetTokenQuerySerializer, request.query_params)
+        try:
+            item = password_reset_service.get_token_status(str(payload["token"]))
+        except ValueError as exc:
+            return _error(str(exc), status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {
+                "detail": "Reset link is valid.",
+                "item": {
+                    "username": item["username"],
+                    "display_name": item["display_name"],
+                    "email": item["email"],
+                    "expires_at": item["expires_at"],
+                    "expires_at_display": item["expires_at_display"],
+                },
+            }
+        )
+
+
+class PasswordResetConfirmApi(APIView):
+    """使用 token 更新密碼。"""
+
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        payload = _validated(sz.PasswordResetConfirmSerializer, request.data)
+        if payload["new_password"] != payload["password_confirm"]:
+            return _error("Password confirmation does not match.")
+        try:
+            password_reset_service.confirm_password_reset(str(payload["token"]), str(payload["new_password"]))
+        except ValueError as exc:
+            return _error(str(exc), status.HTTP_400_BAD_REQUEST)
+        return Response({"detail": "Password has been reset. Please sign in with your new password."})
 
 
 class MeProfileApi(APIView):
