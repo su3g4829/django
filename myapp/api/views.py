@@ -2708,7 +2708,19 @@ class CheckoutConfirmApi(APIView):
         """建立訂單並清空購物車。"""
         user = get_demo_user(request)
         payload = _validated(sz.CheckoutConfirmSerializer, request.data)
-        logger.info(
+        print(
+            "Checkout confirm request received:",
+            {
+                "username": user.get("username", ""),
+                "shipping_method": str(payload.get("shipping_method", "")),
+                "payment_method": str(payload.get("payment_method", "")),
+                "address_id": payload.get("address_id"),
+                "pickup_store_brand": str(payload.get("pickup_store_brand", "")),
+                "pickup_store_code": str(payload.get("pickup_store_code", "")),
+            },
+            flush=True,
+        )
+        logger.warning(
             "Checkout confirm request received.",
             extra={
                 "username": user.get("username", ""),
@@ -2747,7 +2759,17 @@ class CheckoutConfirmApi(APIView):
                 },
             )
             return _error(f"Checkout confirm failed: {exc}", status.HTTP_500_INTERNAL_SERVER_ERROR)
-        logger.info(
+        print(
+            "Checkout confirm order created:",
+            {
+                "username": user.get("username", ""),
+                "order_id": order.get("id"),
+                "item_count": len(order.get("items", [])),
+                "payment_status": order.get("payment_status", ""),
+            },
+            flush=True,
+        )
+        logger.warning(
             "Checkout confirm order created.",
             extra={
                 "username": user.get("username", ""),
@@ -2757,7 +2779,16 @@ class CheckoutConfirmApi(APIView):
             },
         )
         detail = order_service.get_order_detail_for_user(order["id"], user["username"]) or order
-        logger.info(
+        print(
+            "Checkout confirm response ready:",
+            {
+                "username": user.get("username", ""),
+                "order_id": detail.get("id", order.get("id")),
+                "has_payment_status": bool(detail.get("payment_status")),
+            },
+            flush=True,
+        )
+        logger.warning(
             "Checkout confirm response ready.",
             extra={
                 "username": user.get("username", ""),

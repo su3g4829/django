@@ -138,7 +138,7 @@ def _checkout_item_debug_summary(items: List[Dict[str, Any]]) -> List[Dict[str, 
 
 def _log_checkout_checkpoint(stage: str, **extra: Any) -> None:
     """Emit checkout checkpoints so Render logs can pinpoint the failing step."""
-    logger.info("Checkout checkpoint: %s", stage, extra={"checkout_stage": stage, **extra})
+    logger.warning("Checkout checkpoint: %s", stage, extra={"checkout_stage": stage, **extra})
 
 
 def _db_orders_enabled() -> bool:
