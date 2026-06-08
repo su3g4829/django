@@ -2778,13 +2778,12 @@ class CheckoutConfirmApi(APIView):
                 "payment_status": order.get("payment_status", ""),
             },
         )
-        detail = order_service.get_order_detail_for_user(order["id"], user["username"]) or order
         print(
             "Checkout confirm response ready:",
             {
                 "username": user.get("username", ""),
-                "order_id": detail.get("id", order.get("id")),
-                "has_payment_status": bool(detail.get("payment_status")),
+                "order_id": order.get("id"),
+                "has_payment_status": bool(order.get("payment_status")),
             },
             flush=True,
         )
@@ -2792,11 +2791,11 @@ class CheckoutConfirmApi(APIView):
             "Checkout confirm response ready.",
             extra={
                 "username": user.get("username", ""),
-                "order_id": detail.get("id", order.get("id")),
-                "has_payment_status": bool(detail.get("payment_status")),
+                "order_id": order.get("id"),
+                "has_payment_status": bool(order.get("payment_status")),
             },
         )
-        return Response(detail, status=status.HTTP_201_CREATED)
+        return Response(order, status=status.HTTP_201_CREATED)
 
 
 class BuyerCheckoutStoreMapPrepareApi(APIView):
