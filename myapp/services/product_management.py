@@ -1824,7 +1824,10 @@ def available_stock(product: Dict[str, Any], variant_id: str = "") -> int | None
     variants = product.get("variants") or []
     if clean_variant_id and variants:
         for variant in variants:
-            if variant.get("id") == clean_variant_id:
+            variant_internal_id = str(variant.get("id") or "").strip()
+            variant_external_id = str(variant.get("external_variant_id") or "").strip()
+            variant_sku = str(variant.get("sku") or "").strip()
+            if clean_variant_id in {variant_internal_id, variant_external_id, variant_sku}:
                 try:
                     return int(variant.get("stock", 0))
                 except (TypeError, ValueError):
@@ -1854,8 +1857,12 @@ def get_variant(product: Dict[str, Any], variant_id: str) -> Dict[str, Any] | No
     回傳:
         整理後的資料字典；若查無資料，部分函式可能回傳 `None`。
     """
+    clean_variant_id = str(variant_id).strip()
     for variant in product.get("variants", []):
-        if variant.get("id") == variant_id:
+        variant_internal_id = str(variant.get("id") or "").strip()
+        variant_external_id = str(variant.get("external_variant_id") or "").strip()
+        variant_sku = str(variant.get("sku") or "").strip()
+        if clean_variant_id in {variant_internal_id, variant_external_id, variant_sku}:
             return dict(variant)
     return None
 
@@ -1871,8 +1878,12 @@ def _find_variant_ref(product: Dict[str, Any], variant_id: str) -> Dict[str, Any
     回傳:
         依函式用途回傳對應資料。
     """
+    clean_variant_id = str(variant_id).strip()
     for variant in product.get("variants", []):
-        if variant.get("id") == variant_id:
+        variant_internal_id = str(variant.get("id") or "").strip()
+        variant_external_id = str(variant.get("external_variant_id") or "").strip()
+        variant_sku = str(variant.get("sku") or "").strip()
+        if clean_variant_id in {variant_internal_id, variant_external_id, variant_sku}:
             return variant
     return None
 
