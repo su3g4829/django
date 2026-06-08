@@ -343,6 +343,11 @@ LOGGING = {
             "level": os.getenv("STORE_LOG_LEVEL", "INFO"),
             "propagate": False,
         },
+        "myapp": {
+            "handlers": ["console", "application_file"],
+            "level": os.getenv("STORE_LOG_LEVEL", "INFO"),
+            "propagate": False,
+        },
         "store.access": {
             "handlers": ["access_file", "console"],
             "level": os.getenv("STORE_ACCESS_LOG_LEVEL", "INFO"),
