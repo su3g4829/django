@@ -215,7 +215,7 @@ export default function ProductDetailPage() {
   const displayDiscountPercent =
     displayCompareAt && displayCompareAt > displayPrice ? Math.round(((displayCompareAt - displayPrice) / displayCompareAt) * 100) : 0
   const displayStock = selectedVariant?.stock ?? product?.stock ?? null
-  const variantId = selectedVariant?.id ?? ''
+  const variantId = selectedVariant?.external_variant_id || selectedVariant?.id || ''
   const variantName = selectedVariant?.name ?? ''
   const recommendationItems = [...recommendations.similar, ...recommendations.also_bought]
   const sellerLabel =

@@ -230,6 +230,7 @@ export type ProductCategoryOption = {
  */
 export type ProductVariant = {
   id: string
+  external_variant_id?: string
   name: string
   sku?: string
   price: number
