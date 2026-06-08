@@ -1,6 +1,7 @@
 'use client'
 
 import Link from 'next/link'
+import { Suspense } from 'react'
 import { FormEvent, useEffect, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 
@@ -25,7 +26,7 @@ type MailboxResponse = {
   items: MailboxItem[]
 }
 
-export default function DevMailboxPage() {
+function DevMailboxContent() {
   const searchParams = useSearchParams()
   const [email, setEmail] = useState(searchParams.get('email') || '')
   const [items, setItems] = useState<MailboxItem[]>([])
@@ -112,5 +113,20 @@ export default function DevMailboxPage() {
         ))}
       </div>
     </section>
+  )
+}
+
+export default function DevMailboxPage() {
+  return (
+    <Suspense
+      fallback={
+        <section className="card stack" style={{ maxWidth: 880, margin: '0 auto' }}>
+          <h1>開發信箱</h1>
+          <p className="muted">載入中...</p>
+        </section>
+      }
+    >
+      <DevMailboxContent />
+    </Suspense>
   )
 }

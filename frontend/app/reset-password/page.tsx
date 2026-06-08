@@ -1,6 +1,7 @@
 'use client'
 
 import Link from 'next/link'
+import { Suspense } from 'react'
 import { FormEvent, useEffect, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 
@@ -19,7 +20,7 @@ type ConfirmResponse = {
   detail: string
 }
 
-export default function ResetPasswordPage() {
+function ResetPasswordContent() {
   const searchParams = useSearchParams()
   const token = searchParams.get('token') || ''
   const [password, setPassword] = useState('')
@@ -124,5 +125,20 @@ export default function ResetPasswordPage() {
         </Link>
       </div>
     </section>
+  )
+}
+
+export default function ResetPasswordPage() {
+  return (
+    <Suspense
+      fallback={
+        <section className="card stack" style={{ maxWidth: 560, margin: '0 auto' }}>
+          <h1>重設密碼</h1>
+          <p className="muted">載入中...</p>
+        </section>
+      }
+    >
+      <ResetPasswordContent />
+    </Suspense>
   )
 }
