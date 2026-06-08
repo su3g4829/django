@@ -13,6 +13,7 @@ import base64
 import hashlib
 import importlib.util
 import json
+import logging
 import os
 import re
 from dataclasses import dataclass
@@ -31,6 +32,8 @@ from ..models import PaymentStatus as PaymentStatusModel
 from ..models import PaymentTransaction as PaymentTransactionModel
 from ..repositories import local_store
 from . import orders as order_service
+
+logger = logging.getLogger(__name__)
 
 PROVIDER_NAME = "NewebPay Payment"
 MODE_NAME = "sandbox"
@@ -452,6 +455,35 @@ def _decode_trade_info_payload(decrypted: str) -> Dict[str, Any]:
         return _normalize_decoded_payload(parsed_payload)
 
     return {'raw': decrypted}
+
+
+def _callback_debug_context(
+    *,
+    source: str,
+    status: str,
+    merchant_id: str,
+    trade_info: str,
+    trade_sha: str,
+    decoded_payload: Any | None = None,
+) -> Dict[str, Any]:
+    context: Dict[str, Any] = {
+        'source': source,
+        'status': status,
+        'merchant_id': merchant_id,
+        'trade_info_length': len(trade_info or ''),
+        'trade_sha_prefix': (trade_sha or '')[:12],
+    }
+    if decoded_payload is not None:
+        result_fields = extract_callback_result_fields(decoded_payload)
+        context.update(
+            {
+                'merchant_order_no': result_fields.get('merchant_order_no', ''),
+                'trade_no': result_fields.get('trade_no', ''),
+                'amount': result_fields.get('amount', ''),
+                'decoded_keys': sorted(decoded_payload.keys()) if isinstance(decoded_payload, dict) else [],
+            }
+        )
+    return context
 
 
 def extract_callback_result_fields(decoded_payload: Any) -> Dict[str, str]:
@@ -966,12 +998,70 @@ def handle_callback(
     config = _load_runtime_config()
     expected_sha = _build_trade_sha(trade_info, hash_key=config.hash_key, hash_iv=config.hash_iv)
     if expected_sha != trade_sha:
+        logger.warning(
+            "NewebPay callback TradeSha mismatch.",
+            extra=_callback_debug_context(
+                source=source,
+                status=status,
+                merchant_id=merchant_id,
+                trade_info=trade_info,
+                trade_sha=trade_sha,
+            ),
+        )
         raise ValueError('Invalid TradeSha.')
     if merchant_id != config.merchant_id:
+        logger.warning(
+            "NewebPay callback merchant_id mismatch.",
+            extra=_callback_debug_context(
+                source=source,
+                status=status,
+                merchant_id=merchant_id,
+                trade_info=trade_info,
+                trade_sha=trade_sha,
+            ),
+        )
         raise ValueError('MerchantID does not match configured sandbox merchant.')
 
-    decrypted = _decrypt_trade_info(trade_info, hash_key=config.hash_key, hash_iv=config.hash_iv)
+    try:
+        decrypted = _decrypt_trade_info(trade_info, hash_key=config.hash_key, hash_iv=config.hash_iv)
+    except Exception:
+        logger.exception(
+            "NewebPay callback TradeInfo decrypt failed.",
+            extra=_callback_debug_context(
+                source=source,
+                status=status,
+                merchant_id=merchant_id,
+                trade_info=trade_info,
+                trade_sha=trade_sha,
+            ),
+        )
+        raise
     decoded_payload = _decode_trade_info_payload(decrypted)
+    result_fields = extract_callback_result_fields(decoded_payload)
+    if not result_fields['merchant_order_no']:
+        logger.warning(
+            "NewebPay callback decoded successfully but merchant_order_no is missing.",
+            extra=_callback_debug_context(
+                source=source,
+                status=status,
+                merchant_id=merchant_id,
+                trade_info=trade_info,
+                trade_sha=trade_sha,
+                decoded_payload=decoded_payload,
+            ),
+        )
+    else:
+        logger.info(
+            "NewebPay callback decoded successfully.",
+            extra=_callback_debug_context(
+                source=source,
+                status=status,
+                merchant_id=merchant_id,
+                trade_info=trade_info,
+                trade_sha=trade_sha,
+                decoded_payload=decoded_payload,
+            ),
+        )
 
     return {
         'provider': PROVIDER_NAME,

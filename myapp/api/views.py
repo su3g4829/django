@@ -1714,6 +1714,11 @@ class NewebpaySandboxPaymentReturnApi(APIView):
         decoded = record.get("decoded_payload") or {}
         merchant_order_no = newebpay_payment_real_service.extract_callback_result_fields(decoded)["merchant_order_no"]
         order_id = _parse_order_id_from_merchant_order_no(merchant_order_no) if merchant_order_no else None
+        if merchant_order_no and order_id is None:
+            logger.warning(
+                "NewebPay sandbox return decoded merchant_order_no but failed to parse order id: %s",
+                merchant_order_no,
+            )
         try:
             newebpay_payment_real_service.persist_callback_record(record)
         except Exception as exc:  # pragma: no cover - redirect fallback
