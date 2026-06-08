@@ -163,12 +163,22 @@ export default function ProductDetailPage() {
       return ''
     }
 
-    const colorIndex = colorChoices.findIndex((color) => color.trim() === selectedColor.trim())
-    if (colorIndex < 0) {
-      return ''
+    const normalizedSelectedColor = selectedColor.trim()
+    const imageMatchedByName =
+      product.images.find((image) => {
+        try {
+          return decodeURIComponent(image).includes(normalizedSelectedColor)
+        } catch {
+          return image.includes(normalizedSelectedColor)
+        }
+      }) ?? ''
+
+    if (imageMatchedByName) {
+      return imageMatchedByName
     }
 
-    return product.images[colorIndex] ?? ''
+    const colorIndex = colorChoices.findIndex((color) => color.trim() === normalizedSelectedColor)
+    return colorIndex >= 0 ? (product.images[colorIndex] ?? '') : ''
   }, [colorChoices, product?.images, selectedColor])
 
   // 圖庫永遠優先顯示目前選中變體的圖，再接一般商品圖。
