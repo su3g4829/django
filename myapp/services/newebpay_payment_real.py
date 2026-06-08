@@ -82,8 +82,22 @@ def _iso_or_empty(value: Any) -> str:
     if not value:
         return ""
     if hasattr(value, "isoformat"):
+        if timezone.is_naive(value):
+            value = timezone.make_aware(value, timezone.get_current_timezone())
         return timezone.localtime(value).isoformat()
     return str(value)
+
+
+def _aware_datetime_or_none(value: str) -> Any:
+    cleaned = str(value or "").strip()
+    if not cleaned:
+        return None
+    parsed = parse_datetime(cleaned)
+    if parsed is None:
+        return None
+    if timezone.is_naive(parsed):
+        return timezone.make_aware(parsed, timezone.get_current_timezone())
+    return parsed
 
 
 def _payment_status_label(status: str, source: str = "") -> str:
@@ -1065,7 +1079,7 @@ def persist_callback_record(record: Dict[str, Any]) -> Dict[str, Any]:
             transaction.latest_raw_payload = {'latest_record': dict(record)}
             transaction.latest_result_payload = dict(result)
             if normalized_status == order_service.PAYMENT_STATUS_PAID:
-                pay_time = parse_datetime(str(result.get('PayTime', '')).strip()) if str(result.get('PayTime', '')).strip() else None
+                pay_time = _aware_datetime_or_none(str(result.get('PayTime', '')).strip())
                 transaction.paid_at = pay_time or timezone.now()
             transaction.save()
             PaymentCallbackLogModel.objects.create(
