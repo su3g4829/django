@@ -8,6 +8,7 @@ from collections import defaultdict
 from copy import deepcopy
 from datetime import date
 from decimal import Decimal
+import logging
 from typing import Any, Dict, List, Optional
 
 from django.utils import timezone
@@ -30,6 +31,8 @@ from . import auth_demo
 from . import cart as cart_service
 from . import customer_center
 from . import product_management
+
+logger = logging.getLogger(__name__)
 
 # 這個模組同時負責 checkout、訂單查詢、售後流程，以及 JSON/ORM 過渡期同步。
 # 下方常數會被買家、賣家、管理端與金流整合流程重用。
@@ -115,6 +118,27 @@ CONVENIENCE_STORE_BRAND_CHOICES = [
     {"value": "FAMI", "label": "全家"},
 ]
 CONVENIENCE_STORE_BRAND_LABELS = {item["value"]: item["label"] for item in CONVENIENCE_STORE_BRAND_CHOICES}
+
+
+def _checkout_item_debug_summary(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Build a compact, log-friendly checkout item summary."""
+    summary: List[Dict[str, Any]] = []
+    for item in items:
+        summary.append(
+            {
+                "slug": str(item.get("slug", "")),
+                "qty": int(item.get("qty", 0) or 0),
+                "price": str(item.get("price", "")),
+                "variant_id": str(item.get("variant_id", "")),
+                "variant_name": str(item.get("variant_name", "")),
+            }
+        )
+    return summary
+
+
+def _log_checkout_checkpoint(stage: str, **extra: Any) -> None:
+    """Emit checkout checkpoints so Render logs can pinpoint the failing step."""
+    logger.info("Checkout checkpoint: %s", stage, extra={"checkout_stage": stage, **extra})
 
 
 def _db_orders_enabled() -> bool:
@@ -854,6 +878,12 @@ def build_checkout_totals(
     shipping_method = normalize_checkout_shipping_method(shipping_method)
     cart = cart_service.get_cart(session)
     items = list(cart.get("items", {}).values())
+    _log_checkout_checkpoint(
+        "build_totals_loaded_cart",
+        shipping_method=shipping_method,
+        cart_item_count=len(items),
+        item_summary=_checkout_item_debug_summary(items),
+    )
     subtotal = sum((Decimal(str(item["price"])) * int(item["qty"]) for item in items), Decimal("0.00")).quantize(Decimal("0.01"))
     discount = cart_service.compute_totals(session)["discount"]
     seller_shipping_groups = build_seller_shipping_groups(items, shipping_method=shipping_method)
@@ -861,6 +891,16 @@ def build_checkout_totals(
 
     shipping = sum((_shipping_decimal(group["shipping_fee"]) for group in seller_shipping_groups), Decimal("0.00")).quantize(Decimal("0.01"))
     total = (subtotal + shipping - discount).quantize(Decimal("0.01"))
+    _log_checkout_checkpoint(
+        "build_totals_computed",
+        shipping_method=shipping_method,
+        subtotal=str(subtotal),
+        shipping=str(shipping),
+        discount=str(discount),
+        total=str(total),
+        seller_count=len(seller_shipping_groups),
+        unsupported_sellers=[group["seller_display_name"] for group in unsupported_groups],
+    )
     return {
         "totals": {
             "subtotal": subtotal,
@@ -1243,6 +1283,15 @@ def create_order_from_cart(
     """
     cart = cart_service.get_cart(session)
     items = list(cart.get("items", {}).values())
+    _log_checkout_checkpoint(
+        "create_order_loaded_cart",
+        username=user.get("username", ""),
+        shipping_method=shipping_method,
+        payment_method=payment_method,
+        address_id=address_id,
+        cart_item_count=len(items),
+        item_summary=_checkout_item_debug_summary(items),
+    )
     if not items:
         raise ValueError("Your cart is empty.")
 
@@ -1257,24 +1306,56 @@ def create_order_from_cart(
         if address_id is not None
         else customer_center.get_default_address(user["username"])
     )
+    _log_checkout_checkpoint(
+        "create_order_selected_address",
+        username=user.get("username", ""),
+        address_id=address_id,
+        has_selected_address=bool(selected_address),
+        shipping_method=shipping_method,
+    )
     if not selected_address:
         raise ValueError("Please select a shipping address.")
 
     checkout_pricing = build_checkout_totals(session, shipping_method=shipping_method)
+    _log_checkout_checkpoint(
+        "create_order_pricing_ready",
+        username=user.get("username", ""),
+        shipping_method=shipping_method,
+        totals={key: str(value) for key, value in checkout_pricing["totals"].items()},
+        seller_count=len(checkout_pricing["seller_shipping_groups"]),
+        unsupported_sellers=checkout_pricing["unsupported_sellers"],
+    )
     if checkout_pricing["unsupported_sellers"]:
         raise ValueError(
             "The selected shipping method is not available for: "
             + ", ".join(checkout_pricing["unsupported_sellers"])
             + "."
         )
+    _log_checkout_checkpoint(
+        "create_order_before_reserve_stock",
+        username=user.get("username", ""),
+        cart_item_count=len(items),
+    )
     product_management.reserve_stock(items)
+    _log_checkout_checkpoint(
+        "create_order_after_reserve_stock",
+        username=user.get("username", ""),
+        cart_item_count=len(items),
+    )
     totals = checkout_pricing["totals"]
-    if _db_orders_enabled():
+    db_orders_enabled = _db_orders_enabled()
+    if db_orders_enabled:
         latest_order = OrderModel.objects.order_by("-id").only("id").first()
         next_id = latest_order.id + 1 if latest_order else 1
     else:
         json_orders = local_store.get_orders()
         next_id = max((int(order["id"]) for order in json_orders if order.get("id")), default=0) + 1
+    _log_checkout_checkpoint(
+        "create_order_next_id_resolved",
+        username=user.get("username", ""),
+        db_orders_enabled=db_orders_enabled,
+        next_order_id=next_id,
+    )
 
     user_record = auth_demo.get_user_by_username(user["username"]) or {}
     db_user = _ensure_db_user_from_username(
@@ -1282,6 +1363,12 @@ def create_order_from_cart(
         display_name=user.get("display_name", ""),
         email=user_record.get("email", ""),
         role="member",
+    )
+    _log_checkout_checkpoint(
+        "create_order_user_resolved",
+        username=user.get("username", ""),
+        has_db_user=bool(db_user),
+        buyer_email=(user_record.get("email", "") or (db_user.email if db_user else "")),
     )
 
     order = {
@@ -1334,8 +1421,29 @@ def create_order_from_cart(
         "created_at": timezone.localtime().isoformat(),
         "buyer_email": user_record.get("email", "") or (db_user.email if db_user else ""),
     }
+    _log_checkout_checkpoint(
+        "create_order_payload_built",
+        username=user.get("username", ""),
+        order_id=order["id"],
+        order_item_count=len(order["items"]),
+        payment_method=order["payment_method"],
+        shipping_method=order["shipping_method"],
+        pickup_store_code=order["pickup_store_code"],
+    )
     order = _persist_order_record(order)
+    _log_checkout_checkpoint(
+        "create_order_persisted",
+        username=user.get("username", ""),
+        order_id=order["id"],
+        payment_status=order.get("payment_status", ""),
+        item_count=len(order.get("items", [])),
+    )
     cart_service.clear(session)
+    _log_checkout_checkpoint(
+        "create_order_cart_cleared",
+        username=user.get("username", ""),
+        order_id=order["id"],
+    )
     return order
 
 
