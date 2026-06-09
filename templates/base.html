@@ -7,6 +7,7 @@
   3. 全站 footer
   4. Django messages 與 API flash 顯示區
   5. API-first 表單共用 JavaScript
+  6. 保留少量 Django 文件頁，其餘主要路徑會轉址到 Next.js 前端
 -->
 <!DOCTYPE html>
 <html lang="zh-Hant">
@@ -301,7 +302,7 @@
               <li><a href="/community/">社群論壇</a></li>
               <li><a href="/docs/api-routes/">API 路由紀錄</a></li>
               <li><a href="/docs/html-write-migrations/">HTML 寫入遷移</a></li>
-              <li><a href="/docs/no-db-infrastructure/">基礎設施文件</a></li>
+              <li><a href="/docs/no-db-infrastructure/">運行設定文件</a></li>
             </ul>
           </div>
         </div>
@@ -326,11 +327,13 @@
   ></script>
   <script>
     (function () {
+      // 從 Django hidden input 取出 CSRF token，供 fetch API 請求使用。
       function getCsrfToken(form) {
         const input = form.querySelector('input[name="csrfmiddlewaretoken"]');
         return input ? input.value : "";
       }
 
+      // 共用提示框，統一顯示 API 表單成功或失敗訊息。
       function showFlash(message, isError) {
         const box = document.getElementById("api-flash");
         if (!box) return;
@@ -343,6 +346,7 @@
         box.textContent = message;
       }
 
+      // 一般表單預設轉成 JSON；遇到檔案上傳則保留 multipart/form-data。
       function buildPayload(form) {
         const formData = new FormData(form);
         const hasFileInput = form.querySelector('input[type="file"]');
@@ -365,6 +369,7 @@
         return {body: JSON.stringify(objectPayload), isJson: true};
       }
 
+      // 依表單 data-* 設定決定成功後要導向哪裡。
       function resolveRedirect(form, payload) {
         if (form.dataset.redirectTemplate) {
           return form.dataset.redirectTemplate.replace(/\{([^}]+)\}/g, function (_, key) {
@@ -381,6 +386,7 @@
         return "";
       }
 
+      // 從 API response payload 中抽出最適合顯示給使用者的訊息。
       function extractMessage(payload) {
         if (!payload) return "";
         if (typeof payload.detail === "string") return payload.detail;
@@ -396,6 +402,7 @@
         return "";
       }
 
+      // 讓標記了 data-api-form 的 HTML form 直接對 DRF API 提交。
       async function submitApiForm(form) {
         showFlash("", false);
         const method = (form.dataset.apiMethod || form.dataset.method || form.method || "post").toUpperCase();
@@ -435,6 +442,7 @@
         showFlash(extractMessage(data) || "操作成功。", false);
       }
 
+      // 只攔截標記了 data-api-form 的表單，其餘表單維持原生提交。
       document.addEventListener("submit", function (event) {
         const form = event.target;
         if (!(form instanceof HTMLFormElement)) return;

@@ -1,12 +1,11 @@
-"""購物車 service。
+"""購物車服務模組。
 
-這個模組同時處理三種資料來源：
+目前正式資料來源如下：
 - 訪客購物車：存在 Django session
-- 已登入購物車：優先存在 ORM `Cart` / `CartItem`
-- 過渡期 legacy 資料：必要時從 `local_store` JSON 匯入
+- 已登入購物車：存在 ORM `Cart` / `CartItem`
 
-雖然登入後的主資料來源是 ORM，session 仍保留一份鏡像 bucket，
-用來維持目前前端與既有流程對 session cart 的相容性。
+即使登入後主資料在 ORM，session 仍保留一份鏡像 bucket，
+用來維持目前前端與既有流程對 session cart payload 的相容性。
 """
 
 from __future__ import annotations
@@ -21,7 +20,6 @@ from ..models import Cart as CartModel
 from ..models import CartItem as CartItemModel
 from ..models import Product as ProductModel
 from ..models import ProductVariant as ProductVariantModel
-from ..repositories import local_store
 
 CART_KEY = "cart"
 SESSION_USER_KEY = "demo_user"
@@ -44,7 +42,7 @@ def _default_cart() -> Dict[str, Any]:
 def _normalize_cart_payload(raw: Any) -> Dict[str, Any]:
     """把任意輸入正規化成 cart 標準結構。
 
-    無論來源是 session、ORM 還是 legacy JSON，最終都要長成：
+    無論來源是 session 或 ORM，最終都要長成：
     - `items`: dict
     - `coupon`: str | None
     """
@@ -134,9 +132,9 @@ def _db_cart_enabled() -> bool:
 
 
 def _get_or_bootstrap_db_user(username: str) -> Optional[AppUserModel]:
-    """取得對應的 ORM 會員；必要時從 legacy user 補建。
+    """取得對應的 ORM 會員；必要時自動補建。
 
-    購物車 ORM 需要先有 `AppUser` 列，所以這裡會在過渡期做 bootstrap。
+    購物車 ORM 需要先有 `AppUser` 列，所以這裡會確保對應會員存在。
     """
 
     clean_username = str(username or "").strip().lower()
@@ -265,17 +263,9 @@ def _get_or_create_db_cart(username: str) -> Optional[CartModel]:
 
 
 def _bootstrap_db_cart_from_legacy(username: str, db_cart: CartModel) -> None:
-    """在 ORM cart 仍為空時，單次匯入 legacy JSON cart。"""
+    """保留舊介面的相容 hook；目前不再從其他來源匯入購物車。"""
 
-    if db_cart.items.exists() or db_cart.coupon_code:
-        return
-    legacy_user = local_store.get_user_by_username(username)
-    if not legacy_user:
-        return
-    legacy_cart = _normalize_cart_payload(legacy_user.get("cart"))
-    if not legacy_cart.get("items") and not legacy_cart.get("coupon"):
-        return
-    _replace_db_cart_from_payload(db_cart, legacy_cart)
+    return
 
 
 def _get_persisted_user_cart(username: str) -> Dict[str, Any]:
@@ -283,22 +273,17 @@ def _get_persisted_user_cart(username: str) -> Dict[str, Any]:
 
     優先順序：
     - ORM cart
-    - legacy JSON cart
     - 空 cart
     """
 
     clean_username = str(username or "").strip().lower()
     if not clean_username:
         return _default_cart()
-    if _db_cart_enabled():
-        db_cart = _get_or_create_db_cart(clean_username)
-        if db_cart:
-            _bootstrap_db_cart_from_legacy(clean_username, db_cart)
-            return _db_cart_to_payload(db_cart)
-    user = local_store.get_user_by_username(clean_username)
-    if not user:
+    db_cart = _get_or_create_db_cart(clean_username)
+    if not db_cart:
         return _default_cart()
-    return _normalize_cart_payload(user.get("cart"))
+    _bootstrap_db_cart_from_legacy(clean_username, db_cart)
+    return _db_cart_to_payload(db_cart)
 
 
 def _save_persisted_user_cart(username: str, cart: Dict[str, Any]) -> Dict[str, Any]:
@@ -308,11 +293,10 @@ def _save_persisted_user_cart(username: str, cart: Dict[str, Any]) -> Dict[str, 
     normalized = _normalize_cart_payload(cart)
     if not clean_username:
         return normalized
-    if _db_cart_enabled():
-        db_cart = _get_or_create_db_cart(clean_username)
-        if db_cart:
-            return _replace_db_cart_from_payload(db_cart, normalized)
-    return normalized
+    db_cart = _get_or_create_db_cart(clean_username)
+    if not db_cart:
+        return normalized
+    return _replace_db_cart_from_payload(db_cart, normalized)
 
 
 def _sync_session_bucket(session, bucket_name: str, cart: Dict[str, Any]) -> None:

@@ -288,6 +288,8 @@ else:
 # request id / access log / rate limit 設定。
 REQUEST_ID_HEADER = "X-Request-ID"
 ACCESS_LOG_ENABLED = _env_bool("STORE_ACCESS_LOG_ENABLED", True)
+LOG_TO_FILE = _env_bool("STORE_LOG_TO_FILE", APP_ENV == "development" and not TESTING)
+ACCESS_LOG_TO_FILE = _env_bool("STORE_ACCESS_LOG_TO_FILE", LOG_TO_FILE)
 RATE_LIMIT_ENABLED = _env_bool("STORE_RATE_LIMIT_ENABLED", not TESTING)
 RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("STORE_RATE_LIMIT_WINDOW_SECONDS", "60"))
 RATE_LIMIT_AUTH_LIMIT = int(os.getenv("STORE_RATE_LIMIT_AUTH_LIMIT", "30"))
@@ -310,7 +312,17 @@ SPECTACULAR_SETTINGS = {
 }
 
 
-# logging 設定：分成一般應用 log 與 access log。
+# logging 設定：
+# - 開發環境預設可寫 rotating file，方便本機追查
+# - 正式環境預設只打 console，交給平台集中收集
+# - 測試環境預設不寫檔，避免 Windows file lock 干擾測試
+_default_app_handlers = ["console"]
+_default_access_handlers = ["console"]
+if LOG_TO_FILE:
+    _default_app_handlers.append("application_file")
+if ACCESS_LOG_TO_FILE:
+    _default_access_handlers.insert(0, "access_file")
+
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
@@ -343,21 +355,21 @@ LOGGING = {
     },
     "loggers": {
         "django": {
-            "handlers": ["console", "application_file"],
+            "handlers": _default_app_handlers,
             "level": os.getenv("DJANGO_LOG_LEVEL", "INFO"),
         },
         "store": {
-            "handlers": ["console", "application_file"],
+            "handlers": _default_app_handlers,
             "level": os.getenv("STORE_LOG_LEVEL", "INFO"),
             "propagate": False,
         },
         "myapp": {
-            "handlers": ["console", "application_file"],
+            "handlers": _default_app_handlers,
             "level": os.getenv("STORE_LOG_LEVEL", "INFO"),
             "propagate": False,
         },
         "store.access": {
-            "handlers": ["access_file", "console"],
+            "handlers": _default_access_handlers,
             "level": os.getenv("STORE_ACCESS_LOG_LEVEL", "INFO"),
             "propagate": False,
         },

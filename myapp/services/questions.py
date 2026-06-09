@@ -11,7 +11,6 @@ from ..models import AppUser as AppUserModel
 from ..models import Product as ProductModel
 from ..models import ProductQuestion as ProductQuestionModel
 from ..models import ProductQuestionAnswer as ProductQuestionAnswerModel
-from ..repositories import local_store
 from .privacy import anonymize_public_name
 MASKED_CONTENT = "****"
 
@@ -143,18 +142,15 @@ def _is_same_user(left: Dict[str, Any], right: Dict[str, Any]) -> bool:
 
 
 def _product_owner_identity(product_id: int) -> Dict[str, Any]:
-    if _db_questions_enabled():
-        product = ProductModel.objects.filter(id=int(product_id)).select_related("owner").first()
-        if product:
-            return {
-                "user_id": int(product.owner_id) if product.owner_id else None,
-                "username": str(product.owner.username or "").strip().lower() if product.owner_id and product.owner else None,
-            }
-    product = local_store.get_product_by_id(product_id) or {}
-    owner_user_id = product.get("owner_user_id")
+    product = ProductModel.objects.filter(id=int(product_id)).select_related("owner").first()
+    if not product:
+        return {
+            "user_id": None,
+            "username": None,
+        }
     return {
-        "user_id": int(owner_user_id) if owner_user_id else None,
-        "username": str(product.get("owner_username") or "").strip().lower() or None,
+        "user_id": int(product.owner_id) if product.owner_id else None,
+        "username": str(product.owner.username or "").strip().lower() if product.owner_id and product.owner else None,
     }
 
 
@@ -214,56 +210,24 @@ def list_questions(product_id: int, *, viewer_username: str | None = None, viewe
     # 商品頁問答區只讀單一商品資料，JSON fallback 也維持與 ORM 相同的輸出結構。
     viewer = _normalize_user_identity(user_id=viewer_user_id, username=viewer_username)
     seller = _product_owner_identity(product_id)
-    if _db_questions_enabled():
-        return [
-            _decorate_public_question(_db_question_to_record(question), viewer=viewer, seller=seller)
-            for question in ProductQuestionModel.objects.filter(product_id=product_id, is_visible=True)
-            .select_related("author", "product")
-            .prefetch_related("answers__author")
-            .order_by("-id")
-        ]
-
-    questions = []
-    for question in local_store.get_questions_by_product_id(product_id):
-        item = dict(question)
-        item["created_at_display"] = _format_created_at(str(item.get("created_at", "")))
-
-        answers = []
-        for answer in item.get("answers", []):
-            answer_item = dict(answer)
-            answer_item["created_at_display"] = _format_created_at(str(answer_item.get("created_at", "")))
-            answers.append(answer_item)
-        item["answers"] = answers
-        questions.append(_decorate_public_question(item, viewer=viewer, seller=seller))
-    return questions
+    return [
+        _decorate_public_question(_db_question_to_record(question), viewer=viewer, seller=seller)
+        for question in ProductQuestionModel.objects.filter(product_id=product_id, is_visible=True)
+        .select_related("author", "product")
+        .prefetch_related("answers__author")
+        .order_by("-id")
+    ]
 
 
 def list_all_questions() -> List[Dict[str, Any]]:
     # 後台內容管理需要跨商品檢視所有問答，這裡提供完整總表。
-    if _db_questions_enabled():
-        return [
-            _db_question_to_record(question)
-            for question in ProductQuestionModel.objects.filter(is_visible=True)
-            .select_related("author", "product")
-            .prefetch_related("answers__author")
-            .order_by("-id")
-        ]
-    items: List[Dict[str, Any]] = []
-    for question in local_store.get_questions():
-        item = dict(question)
-        item["created_at_display"] = _format_created_at(str(item.get("created_at", "")))
-        item["author"] = _display_account_name(item.get("author"), item.get("author_username"))
-
-        answers = []
-        for answer in item.get("answers", []):
-            answer_item = dict(answer)
-            answer_item["created_at_display"] = _format_created_at(str(answer_item.get("created_at", "")))
-            answer_item["author"] = _display_account_name(answer_item.get("author"), answer_item.get("author_username"))
-            answers.append(answer_item)
-        item["answers"] = answers
-        item["answer_count"] = len(answers)
-        items.append(item)
-    return items
+    return [
+        _db_question_to_record(question)
+        for question in ProductQuestionModel.objects.filter(is_visible=True)
+        .select_related("author", "product")
+        .prefetch_related("answers__author")
+        .order_by("-id")
+    ]
 
 
 def summarize_questions(product_id: int) -> Dict[str, int]:
@@ -298,55 +262,37 @@ def create_question(
 
     created_at = timezone.localtime().isoformat()
 
-    if _db_questions_enabled():
-        product = _product_model_by_id(product_id)
-        if not product:
-            raise ValueError("Product not found.")
-        db_author = _get_or_create_author(
-            author=author,
-            author_username=author_username,
-            author_user_id=author_user_id,
-            identifier=f"question-{product_id}",
-            prefix="questioner",
-        )
-        if not db_author:
-            raise ValueError("Author not found.")
-        db_question = ProductQuestionModel.objects.create(
-            product=product,
-            author=db_author,
-            author_display_name_snapshot=author,
-            title=title,
-            body=body,
-            is_visible=True,
-        )
-        return {
-            "id": int(db_question.id),
-            "product_id": product_id,
-            "author": author,
-            "author_username": str(db_author.username or author_username or ""),
-            "author_user_id": int(db_author.id),
-            "title": title,
-            "body": body,
-            "created_at": timezone.localtime(db_question.created_at).isoformat() if db_question.created_at else created_at,
-            "answers": [],
-        }
-
-    questions = local_store.get_questions()
-    next_id = max((question["id"] for question in questions), default=0) + 1
-    question = {
-        "id": next_id,
+    product = _product_model_by_id(product_id)
+    if not product:
+        raise ValueError("Product not found.")
+    db_author = _get_or_create_author(
+        author=author,
+        author_username=author_username,
+        author_user_id=author_user_id,
+        identifier=f"question-{product_id}",
+        prefix="questioner",
+    )
+    if not db_author:
+        raise ValueError("Author not found.")
+    db_question = ProductQuestionModel.objects.create(
+        product=product,
+        author=db_author,
+        author_display_name_snapshot=author,
+        title=title,
+        body=body,
+        is_visible=True,
+    )
+    return {
+        "id": int(db_question.id),
         "product_id": product_id,
         "author": author,
-        "author_username": author_username,
-        "author_user_id": author_user_id,
+        "author_username": str(db_author.username or author_username or ""),
+        "author_user_id": int(db_author.id),
         "title": title,
         "body": body,
-        "created_at": created_at,
+        "created_at": timezone.localtime(db_question.created_at).isoformat() if db_question.created_at else created_at,
         "answers": [],
     }
-    questions.append(question)
-    local_store.save_questions(questions)
-    return question
 
 
 def create_answer(
@@ -369,72 +315,44 @@ def create_answer(
 
     created_at = timezone.localtime().isoformat()
 
-    if _db_questions_enabled():
-        db_question = (
-            ProductQuestionModel.objects.filter(id=question_id, product_id=product_id, is_visible=True)
-            .select_related("author", "product")
-            .first()
-        )
-        if not db_question:
-            raise ValueError("Question not found.")
-        db_author = _get_or_create_author(
-            author=author,
-            author_username=author_username,
-            author_user_id=author_user_id,
-            identifier=f"answer-{question_id}",
-            prefix="responder",
-        )
-        if not db_author:
-            raise ValueError("Author not found.")
-        db_answer = ProductQuestionAnswerModel.objects.create(
-            question=db_question,
-            author=db_author,
-            author_display_name_snapshot=author,
-            body=body,
-            is_visible=True,
-        )
-        return {
-            "id": int(db_answer.id),
-            "author": author,
-            "author_username": str(db_author.username or author_username or ""),
-            "author_user_id": int(db_author.id),
-            "body": body,
-            "created_at": timezone.localtime(db_answer.created_at).isoformat() if db_answer.created_at else created_at,
-        }
-
-    questions = local_store.get_questions()
-    for question in questions:
-        if question.get("id") != question_id or question.get("product_id") != product_id:
-            continue
-        answers = question.setdefault("answers", [])
-        next_id = max((answer["id"] for answer in answers), default=0) + 1
-        answer = {
-            "id": next_id,
-            "author": author,
-            "author_username": author_username,
-            "author_user_id": author_user_id,
-            "body": body,
-            "created_at": created_at,
-        }
-        answers.append(answer)
-        local_store.save_questions(questions)
-        return answer
-
-    raise ValueError("Question not found.")
+    db_question = (
+        ProductQuestionModel.objects.filter(id=question_id, product_id=product_id, is_visible=True)
+        .select_related("author", "product")
+        .first()
+    )
+    if not db_question:
+        raise ValueError("Question not found.")
+    db_author = _get_or_create_author(
+        author=author,
+        author_username=author_username,
+        author_user_id=author_user_id,
+        identifier=f"answer-{question_id}",
+        prefix="responder",
+    )
+    if not db_author:
+        raise ValueError("Author not found.")
+    db_answer = ProductQuestionAnswerModel.objects.create(
+        question=db_question,
+        author=db_author,
+        author_display_name_snapshot=author,
+        body=body,
+        is_visible=True,
+    )
+    return {
+        "id": int(db_answer.id),
+        "author": author,
+        "author_username": str(db_author.username or author_username or ""),
+        "author_user_id": int(db_author.id),
+        "body": body,
+        "created_at": timezone.localtime(db_answer.created_at).isoformat() if db_answer.created_at else created_at,
+    }
 
 
 def delete_question(question_id: int) -> None:
     # 刪除問題時一併刪掉其回答由底層資料源處理，這裡只負責一致的錯誤語意。
     found = False
-    if _db_questions_enabled():
-        deleted, _ = ProductQuestionModel.objects.filter(id=question_id).delete()
-        found = bool(deleted)
-    else:
-        questions = list(local_store.get_questions())
-        remaining = [item for item in questions if int(item.get("id", 0) or 0) != int(question_id)]
-        if len(remaining) != len(questions):
-            local_store.save_questions(remaining)
-            found = True
+    deleted, _ = ProductQuestionModel.objects.filter(id=question_id).delete()
+    found = bool(deleted)
 
     if not found:
         raise ValueError("Question not found.")

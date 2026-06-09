@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from copy import deepcopy
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
@@ -9,7 +8,6 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
 from myapp.models import Banner, CommunityPost, CommunityReply, MediaAsset, ProductImage, ProductVariant
-from myapp.repositories import local_store
 from myapp.services import cloud_storage as cloud_storage_service
 
 
@@ -86,7 +84,6 @@ class Command(BaseCommand):
         self.uploaded_count = 0
         self.updated_records = 0
 
-        json_changes = self._migrate_local_json(dry_run=dry_run)
         orm_changes = self._migrate_orm_records(dry_run=dry_run)
 
         if self.missing_paths:
@@ -97,7 +94,7 @@ class Command(BaseCommand):
         self.stdout.write(
             self.style.SUCCESS(
                 f"{mode_label}. Uploaded {self.uploaded_count} unique file(s), "
-                f"updated {self.updated_records} record(s), changed {json_changes + orm_changes} value(s)."
+                f"updated {self.updated_records} record(s), changed {orm_changes} value(s)."
             )
         )
 
@@ -130,67 +127,6 @@ class Command(BaseCommand):
             self.uploaded_count += 1
         self.path_mapping[legacy_path] = public_url
         return public_url
-
-    def _migrate_local_json(self, *, dry_run: bool) -> int:
-        changed_values = 0
-
-        products = deepcopy(local_store.get_products())
-        for product in products:
-            images = list(product.get("images") or [])
-            next_images = []
-            touched = False
-            for image_path in images:
-                new_url = self._ensure_gcs_url(image_path, dry_run=dry_run)
-                next_images.append(new_url or image_path)
-                touched = touched or bool(new_url and new_url != image_path)
-            if touched:
-                product["images"] = next_images
-                changed_values += 1
-
-            variants = list(product.get("variants") or [])
-            for variant in variants:
-                image_path = str(variant.get("image") or "").strip()
-                new_url = self._ensure_gcs_url(image_path, dry_run=dry_run)
-                if new_url and new_url != image_path:
-                    variant["image"] = new_url
-                    if variant.get("image_path_snapshot"):
-                        variant["image_path_snapshot"] = new_url
-                    changed_values += 1
-        if changed_values and not dry_run:
-            local_store.save_products(products)
-            self.updated_records += 1
-
-        banner_changes = 0
-        banners = deepcopy(local_store.get_banners())
-        for banner in banners:
-            image_path = str(banner.get("image_path") or "").strip()
-            new_url = self._ensure_gcs_url(image_path, dry_run=dry_run)
-            if new_url and new_url != image_path:
-                banner["image_path"] = new_url
-                banner_changes += 1
-        if banner_changes and not dry_run:
-            local_store.save_banners(banners)
-            self.updated_records += 1
-        changed_values += banner_changes
-
-        post_changes = 0
-        posts = deepcopy(local_store.get_posts())
-        for post in posts:
-            body = str(post.get("body") or "")
-            new_body = replace_media_references(body, self._preview_mapping(body, dry_run=dry_run))
-            if new_body != body:
-                post["body"] = new_body
-                post_changes += 1
-            for reply in list(post.get("replies") or []):
-                reply_body = str(reply.get("body") or "")
-                new_reply_body = replace_media_references(reply_body, self._preview_mapping(reply_body, dry_run=dry_run))
-                if new_reply_body != reply_body:
-                    reply["body"] = new_reply_body
-                    post_changes += 1
-        if post_changes and not dry_run:
-            local_store.save_posts(posts)
-            self.updated_records += 1
-        return changed_values + post_changes
 
     def _preview_mapping(self, text: str, *, dry_run: bool) -> dict[str, str]:
         mapping: dict[str, str] = {}

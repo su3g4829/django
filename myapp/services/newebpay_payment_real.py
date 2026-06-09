@@ -1,4 +1,4 @@
-"""藍新金流 sandbox 支付服務。
+﻿"""藍新金流 sandbox 支付服務。
 
 這支 service 負責：
 - 讀取 MerchantID / HashKey / HashIV 等 runtime 設定
@@ -30,7 +30,6 @@ from ..models import PaymentCallbackLog as PaymentCallbackLogModel
 from ..models import PaymentSource as PaymentSourceModel
 from ..models import PaymentStatus as PaymentStatusModel
 from ..models import PaymentTransaction as PaymentTransactionModel
-from ..repositories import local_store
 from . import orders as order_service
 
 logger = logging.getLogger(__name__)
@@ -72,7 +71,7 @@ STORE_TYPE_TO_BRAND = {
 
 def _db_payments_enabled() -> bool:
     """Return whether payment ORM tables are available for read/write."""
-    # 新版 payment tables 存在時優先走 ORM；否則退回 local_store 的 JSON log。
+    # 正式環境一律優先使用 payment ORM tables。
     try:
         PaymentTransactionModel.objects.count()
         PaymentCallbackLogModel.objects.count()
@@ -184,32 +183,7 @@ def _record_from_transaction(record: PaymentTransactionModel) -> Dict[str, Any]:
 
 
 def _sync_local_payment_log(record: Dict[str, Any]) -> Dict[str, Any]:
-    # 在 JSON fallback 模式下，以 merchant_order_no 為主鍵覆寫最新狀態；
-    # 若還沒有藍新單號，就退回用本地 order_id 對應。
-    if _db_payments_enabled():
-        return dict(record)
-    logs = list(local_store.get_newebpay_payment_logs())
-    merchant_order_no = str(record.get("merchant_order_no", "")).strip()
-    order_id = int(record.get("order_id") or 0)
-    existing = next(
-        (
-            item
-            for item in logs
-            if merchant_order_no and str(item.get("merchant_order_no", "")).strip() == merchant_order_no
-        ),
-        None,
-    )
-    if existing is None:
-        existing = next((item for item in logs if int(item.get("order_id") or 0) == order_id), None)
-    canonical = dict(record)
-    if existing is None:
-        logs.append(canonical)
-    else:
-        existing.clear()
-        existing.update(canonical)
-        canonical = existing
-    local_store.save_newebpay_payment_logs(logs)
-    return dict(canonical)
+    return dict(record)
 
 
 def _latest_transaction(order_id: int, username: str | None = None) -> PaymentTransactionModel | None:
@@ -615,32 +589,12 @@ def _request_query_trade_info(config: NewebpayRuntimeConfig, *, merchant_order_n
 def _latest_payment_record(order_id: int, username: str) -> Dict[str, Any] | None:
     # 同一張訂單可能有多次 prepare / retry，這裡固定回最新一筆支付紀錄。
     transaction = _latest_transaction(order_id, username)
-    if transaction is not None:
-        return _record_from_transaction(transaction)
-    records = [
-        item
-        for item in local_store.get_newebpay_payment_logs()
-        if item.get('mode') == MODE_NAME and item.get('order_id') == order_id and item.get('buyer_username') == username
-    ]
-    if not records:
-        return None
-    records.sort(key=lambda item: (item.get('updated_at', ''), item.get('created_at', '')), reverse=True)
-    return dict(records[0])
+    return _record_from_transaction(transaction) if transaction is not None else None
 
 
 def _latest_payment_record_for_order(order_id: int) -> Dict[str, Any] | None:
     transaction = _latest_transaction(order_id)
-    if transaction is not None:
-        return _record_from_transaction(transaction)
-    records = [
-        item
-        for item in local_store.get_newebpay_payment_logs()
-        if item.get('mode') == MODE_NAME and item.get('order_id') == order_id
-    ]
-    if not records:
-        return None
-    records.sort(key=lambda item: (item.get('updated_at', ''), item.get('created_at', '')), reverse=True)
-    return dict(records[0])
+    return _record_from_transaction(transaction) if transaction is not None else None
 
 
 def _record_query_diagnostic(order_id: int, **values: Any) -> None:
@@ -665,19 +619,7 @@ def _record_query_diagnostic(order_id: int, **values: Any) -> None:
         )
         _sync_local_payment_log(_record_from_transaction(transaction))
         return
-    if _db_payments_enabled():
-        return
-    logs = list(local_store.get_newebpay_payment_logs())
-    records = [item for item in logs if item.get('mode') == MODE_NAME and item.get('order_id') == order_id]
-    if not records:
-        return
-    records.sort(key=lambda item: (item.get('updated_at', ''), item.get('created_at', '')), reverse=True)
-    target = records[0]
-    raw_payload = dict(target.get('raw_payload') or {})
-    raw_payload.update(values)
-    raw_payload['last_query_at'] = _now_iso()
-    target['raw_payload'] = raw_payload
-    local_store.save_newebpay_payment_logs(logs)
+    return
 
 
 def _should_sync_from_query(order: Dict[str, Any], latest_record: Dict[str, Any] | None) -> bool:
@@ -701,7 +643,7 @@ def _should_sync_from_query(order: Dict[str, Any], latest_record: Dict[str, Any]
 
 def sync_order_payment_state(order_id: int) -> Dict[str, Any] | None:
     # 訂單詳情頁打開前，先試著用 query 把藍新狀態補齊，避免 callback 遺漏造成前台停在 pending。
-    order = local_store.get_order_by_id(order_id)
+    order = order_service._db_order_record_by_id(order_id)
     if not order:
         order_model = _order_for_payment(order_id)
         if order_model is not None:
@@ -761,7 +703,7 @@ def sync_order_payment_state(order_id: int) -> Dict[str, Any] | None:
         last_query_merchant_order_no=merchant_order_no,
         last_query_response=decoded_payload,
     )
-    # query 回來後沿用 callback 的 persist 流程，確保 ORM / JSON / 訂單同步只有一套邏輯。
+    # query 回來後沿用 callback 的 persist 流程，確保支付與訂單同步只有一套邏輯。
     persist_callback_record(
         {
             'provider': PROVIDER_NAME,
@@ -774,7 +716,7 @@ def sync_order_payment_state(order_id: int) -> Dict[str, Any] | None:
             'received_at': _now_iso(),
         }
     )
-    refreshed_order = local_store.get_order_by_id(order_id) or order
+    refreshed_order = order_service._db_order_record_by_id(order_id) or order
     buyer_username = str(refreshed_order.get('username', '')).strip()
     if buyer_username:
         return _latest_payment_record(order_id, buyer_username)
@@ -794,28 +736,20 @@ def get_payment_record(order_id: int, username: str) -> Dict[str, Any] | None:
 
 def get_payment_debug(order_id: int) -> Dict[str, Any]:
     # debug 端點需要同時看到 runtime 與所有支付事件，因此這裡直接回完整 records list。
-    order = local_store.get_order_by_id(order_id)
+    order = order_service._db_order_record_by_id(order_id)
     if not order:
         order_model = _order_for_payment(order_id)
         if order_model is None:
             raise ValueError('Order not found.')
         order = {"id": order_model.id}
     sync_order_payment_state(order_id)
-    if _db_payments_enabled():
-        records = [
-            _record_from_transaction(item)
-            for item in PaymentTransactionModel.objects.select_related("order", "order__buyer")
-            .prefetch_related("callback_logs")
-            .filter(order_id=order_id)
-            .order_by("-updated_at", "-created_at", "-id")
-        ]
-    else:
-        records = [
-            dict(item)
-            for item in local_store.get_newebpay_payment_logs()
-            if item.get('mode') == MODE_NAME and item.get('order_id') == order_id
-        ]
-        records.sort(key=lambda item: (item.get('updated_at', ''), item.get('created_at', '')), reverse=True)
+    records = [
+        _record_from_transaction(item)
+        for item in PaymentTransactionModel.objects.select_related("order", "order__buyer")
+        .prefetch_related("callback_logs")
+        .filter(order_id=order_id)
+        .order_by("-updated_at", "-created_at", "-id")
+    ]
     return {
         'runtime': get_runtime_summary(order_id=order_id),
         'records': records,
@@ -1087,9 +1021,9 @@ def persist_callback_record(record: Dict[str, Any]) -> Dict[str, Any]:
 
     order_id = parse_order_id_from_merchant_order_no(merchant_order_no)
     buyer_username = ''
-    # 先從本地訂單或 ORM 訂單找 buyer，讓紀錄可以回掛到正確帳號。
+    # 先從 ORM 訂單找 buyer，讓紀錄可以回掛到正確帳號。
     if order_id is not None:
-        order = local_store.get_order_by_id(order_id)
+        order = order_service._db_order_record_by_id(order_id)
         if order:
             buyer_username = str(order.get('username', '')).strip()
     if not buyer_username and order_id is not None:

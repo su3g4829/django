@@ -12,7 +12,6 @@ from typing import Any, Dict
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
-from ..repositories import local_store
 from . import auth_demo
 from . import community as community_service
 from . import orders

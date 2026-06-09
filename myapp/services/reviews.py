@@ -11,7 +11,6 @@ from django.utils.text import slugify
 from ..models import AppUser as AppUserModel
 from ..models import Product as ProductModel
 from ..models import ProductReview as ProductReviewModel
-from ..repositories import local_store
 from .privacy import anonymize_public_name
 
 
@@ -110,37 +109,20 @@ def anonymize_review_author(name: str) -> str:
 
 def list_reviews(product_id: int) -> List[Dict[str, Any]]:
     # 商品詳情頁只看單一商品評論；無論資料源是 ORM 還是 JSON，都回相同欄位。
-    if _db_reviews_enabled():
-        return [
-            _db_review_to_record(review)
-            for review in ProductReviewModel.objects.filter(product_id=product_id, is_visible=True)
-            .select_related("author", "product")
-            .order_by("-id")
-        ]
-
-    reviews = []
-    for review in local_store.get_reviews_by_product_id(product_id):
-        item = dict(review)
-        item["created_at_display"] = _format_created_at(str(item.get("created_at", "")))
-        item["author"] = anonymize_review_author(str(item.get("author", "")))
-        reviews.append(item)
-    return reviews
+    return [
+        _db_review_to_record(review)
+        for review in ProductReviewModel.objects.filter(product_id=product_id, is_visible=True)
+        .select_related("author", "product")
+        .order_by("-id")
+    ]
 
 
 def list_all_reviews() -> List[Dict[str, Any]]:
     # 後台內容管理需要跨商品評論總表，所以這裡提供不限制 product_id 的版本。
-    if _db_reviews_enabled():
-        return [
-            _db_review_to_record(review)
-            for review in ProductReviewModel.objects.filter(is_visible=True).select_related("author", "product").order_by("-id")
-        ]
-    items: List[Dict[str, Any]] = []
-    for review in local_store.get_reviews():
-        item = dict(review)
-        item["created_at_display"] = _format_created_at(str(item.get("created_at", "")))
-        item["author"] = anonymize_review_author(str(item.get("author", "")))
-        items.append(item)
-    return items
+    return [
+        _db_review_to_record(review)
+        for review in ProductReviewModel.objects.filter(is_visible=True).select_related("author", "product").order_by("-id")
+    ]
 
 
 def summarize_reviews(product_id: int) -> Dict[str, Any]:
@@ -180,69 +162,44 @@ def create_review(
 
     created_at = timezone.localtime().isoformat()
 
-    if _db_reviews_enabled():
-        product = _product_model_by_id(product_id)
-        if not product:
-            raise ValueError("Product not found.")
-        db_author = _get_or_create_author(
-            author=author,
-            author_username=author_username,
-            author_user_id=author_user_id,
-            identifier=f"review-{product_id}",
-        )
-        if not db_author:
-            raise ValueError("Author not found.")
-        db_review = ProductReviewModel.objects.create(
-            product=product,
-            author=db_author,
-            author_display_name_snapshot=author,
-            rating=rating,
-            title=title,
-            body=body,
-            is_visible=True,
-        )
-        return {
-            "id": int(db_review.id),
-            "product_id": product_id,
-            "author": author,
-            "author_username": str(db_author.username or author_username or ""),
-            "author_user_id": int(db_author.id),
-            "rating": rating,
-            "title": title,
-            "body": body,
-            "created_at": timezone.localtime(db_review.created_at).isoformat() if db_review.created_at else created_at,
-        }
-
-    reviews = local_store.get_reviews()
-    next_id = max((review["id"] for review in reviews), default=0) + 1
-    review = {
-        "id": next_id,
+    product = _product_model_by_id(product_id)
+    if not product:
+        raise ValueError("Product not found.")
+    db_author = _get_or_create_author(
+        author=author,
+        author_username=author_username,
+        author_user_id=author_user_id,
+        identifier=f"review-{product_id}",
+    )
+    if not db_author:
+        raise ValueError("Author not found.")
+    db_review = ProductReviewModel.objects.create(
+        product=product,
+        author=db_author,
+        author_display_name_snapshot=author,
+        rating=rating,
+        title=title,
+        body=body,
+        is_visible=True,
+    )
+    return {
+        "id": int(db_review.id),
         "product_id": product_id,
         "author": author,
-        "author_username": author_username,
-        "author_user_id": author_user_id,
+        "author_username": str(db_author.username or author_username or ""),
+        "author_user_id": int(db_author.id),
         "rating": rating,
         "title": title,
         "body": body,
-        "created_at": created_at,
+        "created_at": timezone.localtime(db_review.created_at).isoformat() if db_review.created_at else created_at,
     }
-    reviews.append(review)
-    local_store.save_reviews(reviews)
-    return review
 
 
 def delete_review(review_id: int) -> None:
     # 後台與其他管理入口都會走到這裡；找不到目標時維持明確例外訊息。
     found = False
-    if _db_reviews_enabled():
-        deleted, _ = ProductReviewModel.objects.filter(id=review_id).delete()
-        found = bool(deleted)
-    else:
-        reviews = list(local_store.get_reviews())
-        remaining = [item for item in reviews if int(item.get("id", 0) or 0) != int(review_id)]
-        if len(remaining) != len(reviews):
-            local_store.save_reviews(remaining)
-            found = True
+    deleted, _ = ProductReviewModel.objects.filter(id=review_id).delete()
+    found = bool(deleted)
 
     if not found:
         raise ValueError("Review not found.")

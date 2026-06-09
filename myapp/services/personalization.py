@@ -19,7 +19,6 @@ from ..models import CompareItem as CompareItemModel
 from ..models import Product as ProductModel
 from ..models import RecentView as RecentViewModel
 from ..models import UserFavorite as UserFavoriteModel
-from ..repositories import local_store
 
 FAVORITES_KEY = "favorite_products"
 RECENT_VIEWS_KEY = "recent_products"
@@ -314,7 +313,7 @@ def get_favorite_products(session) -> List[Dict[str, object]]:
     # 收藏頁需要完整商品資料，這裡把 slug 清單轉回可見商品 payload。
     products: List[Dict[str, object]] = []
     for slug in get_favorite_slugs(session):
-        product = _visible_product_by_slug(slug) or local_store.get_product_by_slug(slug)
+        product = _visible_product_by_slug(slug)
         if product:
             products.append(product)
     return products
@@ -357,7 +356,7 @@ def get_recent_products(session) -> List[Dict[str, object]]:
         slugs = list(_ensure_bucket(session, RECENT_VIEWS_KEY))
 
     for slug in slugs:
-        product = _visible_product_by_slug(slug) or local_store.get_product_by_slug(slug)
+        product = _visible_product_by_slug(slug)
         if product:
             products.append(product)
     return products
@@ -429,7 +428,7 @@ def get_compare_products(session) -> List[Dict[str, object]]:
     # 比較頁需要完整商品內容，這裡把比較桶內的 slug 依順序轉成商品 payload。
     products: List[Dict[str, object]] = []
     for slug in get_compare_slugs(session):
-        product = _visible_product_by_slug(slug) or local_store.get_product_by_slug(slug)
+        product = _visible_product_by_slug(slug)
         if product:
             products.append(product)
     return products

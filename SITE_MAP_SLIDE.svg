@@ -1,0 +1,161 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1880" height="1220" viewBox="0 0 1880 1220">
+  <defs>
+    <style>
+      .bg { fill: #f4efe8; }
+      .title { font: 700 46px "Microsoft JhengHei", "Noto Sans TC", sans-serif; fill: #1f1f1f; }
+      .subtitle { font: 500 18px "Microsoft JhengHei", "Noto Sans TC", sans-serif; fill: #666666; }
+      .line-main { stroke: #98a6ce; stroke-width: 3; fill: none; }
+      .line-sub { stroke: #bcc5df; stroke-width: 2; fill: none; }
+      .box-home { fill: #5b6c9f; stroke: #ffffff; stroke-width: 3; }
+      .box-group { fill: #6f7fb3; stroke: #ffffff; stroke-width: 3; }
+      .box-leaf { fill: #8f9dc8; stroke: #ffffff; stroke-width: 3; }
+      .box-note { fill: #a8b3d6; stroke: #ffffff; stroke-width: 3; }
+      .label-lg { font: 700 25px "Microsoft JhengHei", "Noto Sans TC", sans-serif; fill: #ffffff; text-anchor: middle; dominant-baseline: middle; }
+      .label-md { font: 700 21px "Microsoft JhengHei", "Noto Sans TC", sans-serif; fill: #ffffff; text-anchor: middle; dominant-baseline: middle; }
+      .label-sm { font: 700 17px "Microsoft JhengHei", "Noto Sans TC", sans-serif; fill: #ffffff; text-anchor: middle; dominant-baseline: middle; }
+    </style>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1880" height="1220" />
+  <text class="title" x="940" y="72" text-anchor="middle">網站架構</text>
+  <text class="subtitle" x="940" y="108" text-anchor="middle">依目前 Next.js 頁面與 Django 入口整理</text>
+  <line x1="80" y1="138" x2="1800" y2="138" stroke="#b21b40" stroke-width="4" />
+
+  <rect class="box-home" x="855" y="170" width="170" height="84" rx="12" ry="12" />
+  <text class="label-lg" x="940" y="212">首頁</text>
+  <path class="line-main" d="M940 254 L940 300" />
+  <path class="line-main" d="M160 300 L1720 300" />
+
+  <path class="line-main" d="M160 300 L160 330" />
+  <path class="line-main" d="M380 300 L380 330" />
+  <path class="line-main" d="M600 300 L600 330" />
+  <path class="line-main" d="M820 300 L820 330" />
+  <path class="line-main" d="M1040 300 L1040 330" />
+  <path class="line-main" d="M1260 300 L1260 330" />
+  <path class="line-main" d="M1480 300 L1480 330" />
+  <path class="line-main" d="M1700 300 L1700 330" />
+
+  <rect class="box-group" x="70" y="330" width="180" height="70" rx="12" ry="12" />
+  <text class="label-md" x="160" y="365">會員驗證</text>
+
+  <rect class="box-group" x="290" y="330" width="180" height="70" rx="12" ry="12" />
+  <text class="label-md" x="380" y="365">商品瀏覽</text>
+
+  <rect class="box-group" x="510" y="330" width="180" height="70" rx="12" ry="12" />
+  <text class="label-md" x="600" y="365">購物流程</text>
+
+  <rect class="box-group" x="730" y="330" width="180" height="70" rx="12" ry="12" />
+  <text class="label-md" x="820" y="365">會員中心</text>
+
+  <rect class="box-group" x="950" y="330" width="180" height="70" rx="12" ry="12" />
+  <text class="label-md" x="1040" y="365">賣家中心</text>
+
+  <rect class="box-group" x="1170" y="330" width="180" height="70" rx="12" ry="12" />
+  <text class="label-md" x="1260" y="365">社群論壇</text>
+
+  <rect class="box-group" x="1390" y="330" width="180" height="70" rx="12" ry="12" />
+  <text class="label-md" x="1480" y="365">管理後台</text>
+
+  <rect class="box-group" x="1610" y="330" width="180" height="70" rx="12" ry="12" />
+  <text class="label-md" x="1700" y="365">文件工具</text>
+
+  <path class="line-sub" d="M160 400 L160 430" />
+  <rect class="box-leaf" x="70" y="430" width="180" height="56" rx="10" ry="10" />
+  <text class="label-sm" x="160" y="458">登入 /login</text>
+  <path class="line-sub" d="M160 486 L160 500" />
+  <rect class="box-leaf" x="70" y="500" width="180" height="56" rx="10" ry="10" />
+  <text class="label-sm" x="160" y="528">註冊 /register</text>
+  <path class="line-sub" d="M160 556 L160 570" />
+  <rect class="box-leaf" x="70" y="570" width="180" height="56" rx="10" ry="10" />
+  <text class="label-sm" x="160" y="598">忘記 / 重設密碼</text>
+
+  <path class="line-sub" d="M380 400 L380 430" />
+  <rect class="box-leaf" x="290" y="430" width="180" height="56" rx="10" ry="10" />
+  <text class="label-sm" x="380" y="458">商品列表 /products</text>
+  <path class="line-sub" d="M380 486 L380 500" />
+  <rect class="box-leaf" x="290" y="500" width="180" height="56" rx="10" ry="10" />
+  <text class="label-sm" x="380" y="528">商品詳情 /products/[slug]</text>
+  <path class="line-sub" d="M380 556 L380 570" />
+  <rect class="box-leaf" x="290" y="570" width="180" height="56" rx="10" ry="10" />
+  <text class="label-sm" x="380" y="598">品牌 / 分類 / 比較</text>
+  <path class="line-sub" d="M380 626 L380 640" />
+  <rect class="box-note" x="290" y="640" width="180" height="66" rx="10" ry="10" />
+  <text class="label-sm" x="380" y="665">評論 / 提問</text>
+  <text class="label-sm" x="380" y="688">推薦 / 比價</text>
+
+  <path class="line-sub" d="M600 400 L600 430" />
+  <rect class="box-leaf" x="510" y="430" width="180" height="56" rx="10" ry="10" />
+  <text class="label-sm" x="600" y="458">購物車 /cart</text>
+  <path class="line-sub" d="M600 486 L600 500" />
+  <rect class="box-leaf" x="510" y="500" width="180" height="56" rx="10" ry="10" />
+  <text class="label-sm" x="600" y="528">結帳 /checkout</text>
+  <path class="line-sub" d="M600 556 L600 570" />
+  <rect class="box-leaf" x="510" y="570" width="180" height="56" rx="10" ry="10" />
+  <text class="label-sm" x="600" y="598">我的訂單 /orders</text>
+  <path class="line-sub" d="M600 626 L600 640" />
+  <rect class="box-note" x="510" y="640" width="180" height="66" rx="10" ry="10" />
+  <text class="label-sm" x="600" y="665">訂單詳情 /orders/[id]</text>
+  <text class="label-sm" x="600" y="688">付款與物流流程</text>
+
+  <path class="line-sub" d="M820 400 L820 430" />
+  <rect class="box-leaf" x="730" y="430" width="180" height="56" rx="10" ry="10" />
+  <text class="label-sm" x="820" y="458">會員資料 /me/profile</text>
+  <path class="line-sub" d="M820 486 L820 500" />
+  <rect class="box-leaf" x="730" y="500" width="180" height="56" rx="10" ry="10" />
+  <text class="label-sm" x="820" y="528">地址簿 /me/addresses</text>
+  <path class="line-sub" d="M820 556 L820 570" />
+  <rect class="box-leaf" x="730" y="570" width="180" height="56" rx="10" ry="10" />
+  <text class="label-sm" x="820" y="598">發票資料 /me/invoice</text>
+  <path class="line-sub" d="M820 626 L820 640" />
+  <rect class="box-note" x="730" y="640" width="180" height="66" rx="10" ry="10" />
+  <text class="label-sm" x="820" y="665">會員中心 /me/dashboard</text>
+  <text class="label-sm" x="820" y="688">Banner 申請 /me/promotions</text>
+
+  <path class="line-sub" d="M1040 400 L1040 430" />
+  <rect class="box-leaf" x="950" y="430" width="180" height="56" rx="10" ry="10" />
+  <text class="label-sm" x="1040" y="458">我的商品 /me/products</text>
+  <path class="line-sub" d="M1040 486 L1040 500" />
+  <rect class="box-leaf" x="950" y="500" width="180" height="56" rx="10" ry="10" />
+  <text class="label-sm" x="1040" y="528">賣家訂單 /me/sales</text>
+  <path class="line-sub" d="M1040 556 L1040 570" />
+  <rect class="box-leaf" x="950" y="570" width="180" height="56" rx="10" ry="10" />
+  <text class="label-sm" x="1040" y="598">運費設定 / 銷售報表</text>
+  <path class="line-sub" d="M1040 626 L1040 640" />
+  <rect class="box-note" x="950" y="640" width="180" height="66" rx="10" ry="10" />
+  <text class="label-sm" x="1040" y="665">新增商品 /me/products/new</text>
+  <text class="label-sm" x="1040" y="688">編輯商品 / 賣家訂單詳情</text>
+
+  <path class="line-sub" d="M1260 400 L1260 430" />
+  <rect class="box-leaf" x="1170" y="430" width="180" height="56" rx="10" ry="10" />
+  <text class="label-sm" x="1260" y="458">論壇列表 /community</text>
+  <path class="line-sub" d="M1260 486 L1260 500" />
+  <rect class="box-leaf" x="1170" y="500" width="180" height="56" rx="10" ry="10" />
+  <text class="label-sm" x="1260" y="528">文章頁 /community/[id]</text>
+  <path class="line-sub" d="M1260 556 L1260 570" />
+  <rect class="box-note" x="1170" y="570" width="180" height="66" rx="10" ry="10" />
+  <text class="label-sm" x="1260" y="595">回覆 / 編輯</text>
+  <text class="label-sm" x="1260" y="618">投票互動</text>
+
+  <path class="line-sub" d="M1480 400 L1480 430" />
+  <rect class="box-leaf" x="1390" y="430" width="180" height="56" rx="10" ry="10" />
+  <text class="label-sm" x="1480" y="458">管理儀表板</text>
+  <path class="line-sub" d="M1480 486 L1480 500" />
+  <rect class="box-leaf" x="1390" y="500" width="180" height="56" rx="10" ry="10" />
+  <text class="label-sm" x="1480" y="528">商品 / 訂單管理</text>
+  <path class="line-sub" d="M1480 556 L1480 570" />
+  <rect class="box-leaf" x="1390" y="570" width="180" height="56" rx="10" ry="10" />
+  <text class="label-sm" x="1480" y="598">會員 / Banner 管理</text>
+  <path class="line-sub" d="M1480 626 L1480 640" />
+  <rect class="box-note" x="1390" y="640" width="180" height="66" rx="10" ry="10" />
+  <text class="label-sm" x="1480" y="665">評論 / 提問 / 文章審核</text>
+  <text class="label-sm" x="1480" y="688">訂單詳情 / 審核操作</text>
+
+  <path class="line-sub" d="M1700 400 L1700 430" />
+  <rect class="box-leaf" x="1610" y="430" width="180" height="56" rx="10" ry="10" />
+  <text class="label-sm" x="1700" y="458">路由文件 /docs/routes</text>
+  <path class="line-sub" d="M1700 486 L1700 500" />
+  <rect class="box-leaf" x="1610" y="500" width="180" height="56" rx="10" ry="10" />
+  <text class="label-sm" x="1700" y="528">開發信箱 /dev/mailbox</text>
+
+  <text class="subtitle" x="940" y="1160" text-anchor="middle">檔案：SITE_MAP_SLIDE.svg</text>
+</svg>

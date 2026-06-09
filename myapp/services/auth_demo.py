@@ -23,7 +23,6 @@ from django.utils import timezone
 from ..models import AppUser as AppUserModel
 from ..models import SellerRequest as SellerRequestModel
 from ..models import UserShippingRule as UserShippingRuleModel
-from ..repositories import local_store
 
 # 會員系統目前仍在 JSON -> ORM 過渡期。
 # 這個 service 統一處理註冊、登入、賣家申請、帳號狀態與 session 同步。
@@ -222,13 +221,6 @@ def _is_hashed_password(value: str) -> bool:
 def _save_user_patch(username: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     # JSON fallback 模式下，集中處理單筆使用者局部更新。
     """更新單一會員欄位並寫回 JSON。"""
-    users = deepcopy(local_store.get_users())
-    for item in users:
-        if item.get("username") != username:
-            continue
-        item.update(patch)
-        local_store.save_users(users)
-        return local_store.get_user_by_username(username)
     return None
 
 
@@ -247,65 +239,32 @@ def _persist_user_record(record: Dict[str, Any]) -> Dict[str, Any]:
     payload.setdefault("role", "member")
     payload.setdefault("account_status", ACCOUNT_STATUS_ACTIVE)
     payload.setdefault("seller_request_status", "")
-    if _db_auth_enabled():
-        return payload
-
-    users = deepcopy(local_store.get_users())
-
-    for index, item in enumerate(users):
-        if str(item.get("username") or "").strip().lower() != clean_username:
-            continue
-        existing = deepcopy(item)
-        existing.update(payload)
-        users[index] = existing
-        local_store.save_users(users)
-        return local_store.get_user_by_username(clean_username) or existing
-
-    users.append(payload)
-    local_store.save_users(users)
-    return local_store.get_user_by_username(clean_username) or payload
+    return payload
 
 
 def _upgrade_legacy_password(user: Dict[str, Any], raw_password: str) -> None:
     # 使用者若仍以舊明碼密碼登入，成功後立刻升級成 Django password hash。
     """若舊資料仍保存明文密碼，首次登入時升級成 hash。"""
-    patched = deepcopy(user)
-    patched["password_hash"] = make_password(raw_password)
-    patched.pop("password", None)
-    patched["updated_at"] = timezone.now().isoformat()
-    if _db_auth_enabled():
-        _sync_user_to_orm(patched)
+    db_user = _get_or_bootstrap_db_user(str(user.get("username") or ""))
+    if not db_user:
         return
-    users = deepcopy(local_store.get_users())
-    for item in users:
-        if item.get("username") != user["username"]:
-            continue
-        item["password_hash"] = patched["password_hash"]
-        item.pop("password", None)
-        item["updated_at"] = patched["updated_at"]
-        local_store.save_users(users)
-        _sync_user_to_orm(item)
-        return
+    db_user.password_hash = make_password(raw_password)
+    db_user.save(update_fields=["password_hash", "updated_at"])
 
 
 def _mark_login(username: str) -> Optional[Dict[str, Any]]:
     # 更新最後登入時間，並回傳最新 canonical user payload 給 session 寫入。
     """記錄最後登入時間，方便未來轉資料庫。"""
     now = timezone.now().isoformat()
-    if _db_auth_enabled():
-        AppUserModel.objects.filter(username=username).update(last_login_at=_parse_dt(now))
-        db_user = _get_or_bootstrap_db_user(username)
-        if db_user:
-            db_user.refresh_from_db()
-            return {
-                **_db_user_to_record(db_user),
-                "shipping_rules": get_seller_shipping_rules(username),
-            }
-        return None
-    updated = _save_user_patch(username, {"last_login_at": now, "updated_at": now})
-    if updated:
-        _sync_user_to_orm(updated)
-    return updated
+    AppUserModel.objects.filter(username=username).update(last_login_at=_parse_dt(now))
+    db_user = _get_or_bootstrap_db_user(username)
+    if db_user:
+        db_user.refresh_from_db()
+        return {
+            **_db_user_to_record(db_user),
+            "shipping_rules": get_seller_shipping_rules(username),
+        }
+    return None
 
 
 def is_admin(user: Dict[str, Any] | None) -> bool:
@@ -330,15 +289,10 @@ def authenticate(username: str, password: str) -> Optional[Dict[str, Any]]:
     # 登入優先驗證 ORM 帳號；若仍在 JSON-only 模式，則兼容 hash 與舊明碼密碼。
     """驗證會員帳密，成功時回傳 session 用使用者快照。"""
     clean_username = username.strip().lower()
-    db_enabled = _db_auth_enabled()
-    db_user = _get_or_bootstrap_db_user(clean_username) if db_enabled else None
-    user = None if db_enabled else local_store.get_user_by_username(clean_username)
+    db_user = _get_or_bootstrap_db_user(clean_username)
 
     if db_user and db_user.account_status != ACCOUNT_STATUS_ACTIVE:
         return None
-    if user and user.get("account_status", ACCOUNT_STATUS_ACTIVE) != ACCOUNT_STATUS_ACTIVE:
-        return None
-
     if db_user and str(db_user.password_hash or "").strip():
         if check_password(password, db_user.password_hash):
             now = timezone.now()
@@ -352,26 +306,7 @@ def authenticate(username: str, password: str) -> Optional[Dict[str, Any]]:
                 }
             )
 
-    if db_enabled:
-        return None
-
-    if not user:
-        return None
-
-    password_hash = str(user.get("password_hash", "")).strip()
-    if password_hash and _is_hashed_password(password_hash):
-        if not check_password(password, password_hash):
-            return None
-        refreshed = _mark_login(clean_username) or user
-        return _user_snapshot(refreshed)
-
-    legacy_password = str(user.get("password", ""))
-    if legacy_password != password:
-        return None
-
-    _upgrade_legacy_password(user, password)
-    refreshed = _mark_login(clean_username) or local_store.get_user_by_username(clean_username) or user
-    return _user_snapshot(refreshed)
+    return None
 
 
 def register_user(username: str, display_name: str, password: str, email: str = "") -> Dict[str, Any]:
@@ -386,13 +321,10 @@ def register_user(username: str, display_name: str, password: str, email: str = 
         raise ValueError("Username must be at least 3 characters.")
     if not clean_username.replace("_", "").replace("-", "").isalnum():
         raise ValueError("Username may only use letters, numbers, hyphens, and underscores.")
-    if not _db_auth_enabled() and local_store.get_user_by_username(clean_username):
+    if AppUserModel.objects.filter(username=clean_username).exists():
         raise ValueError("This username is already taken.")
-    if _db_auth_enabled():
-        if AppUserModel.objects.filter(username=clean_username).exists():
-            raise ValueError("This username is already taken.")
-        if clean_email and AppUserModel.objects.filter(email=clean_email).exists():
-            raise ValueError("This email is already taken.")
+    if clean_email and AppUserModel.objects.filter(email=clean_email).exists():
+        raise ValueError("This email is already taken.")
     if not clean_display_name:
         raise ValueError("Display name is required.")
     if len(password) < 6:
@@ -417,43 +349,35 @@ def register_user(username: str, display_name: str, password: str, email: str = 
         "seller_reviewed_at": "",
         "account_status_updated_at": "",
     }
-    if _db_auth_enabled():
-        db_user = AppUserModel.objects.create(
-            username=clean_username,
-            email=clean_email or f"{clean_username}@seed.local",
-            password_hash=user["password_hash"],
-            display_name=clean_display_name,
-            role="member",
-            account_status=ACCOUNT_STATUS_ACTIVE,
-            seller_request_status="none",
-        )
-        UserShippingRuleModel.objects.get_or_create(
-            user=db_user,
-            defaults={
-                "home_delivery_enabled": bool(DEFAULT_SHIPPING_RULES["home_delivery_enabled"]),
-                "home_delivery_fee": DEFAULT_SHIPPING_RULES["home_delivery_fee"],
-                "convenience_store_enabled": bool(DEFAULT_SHIPPING_RULES["convenience_store_enabled"]),
-                "convenience_store_fee": DEFAULT_SHIPPING_RULES["convenience_store_fee"],
-                "free_shipping_threshold": DEFAULT_SHIPPING_RULES["free_shipping_threshold"],
-            },
-        )
-        return _user_snapshot(
-            {
-                **_db_user_to_record(db_user),
-                "password_hash": user["password_hash"],
-                "shipping_rules": get_seller_shipping_rules(clean_username),
-                "addresses": [],
-                "default_address_id": None,
-                "invoice_profile": {},
-            }
-        )
-
-    users = deepcopy(local_store.get_users())
-    next_id = max([int(item.get("id", 0)) for item in users] or [0]) + 1
-    user["id"] = next_id
-    users.append(user)
-    local_store.save_users(users)
-    return _user_snapshot(user)
+    db_user = AppUserModel.objects.create(
+        username=clean_username,
+        email=clean_email or f"{clean_username}@seed.local",
+        password_hash=user["password_hash"],
+        display_name=clean_display_name,
+        role="member",
+        account_status=ACCOUNT_STATUS_ACTIVE,
+        seller_request_status="none",
+    )
+    UserShippingRuleModel.objects.get_or_create(
+        user=db_user,
+        defaults={
+            "home_delivery_enabled": bool(DEFAULT_SHIPPING_RULES["home_delivery_enabled"]),
+            "home_delivery_fee": DEFAULT_SHIPPING_RULES["home_delivery_fee"],
+            "convenience_store_enabled": bool(DEFAULT_SHIPPING_RULES["convenience_store_enabled"]),
+            "convenience_store_fee": DEFAULT_SHIPPING_RULES["convenience_store_fee"],
+            "free_shipping_threshold": DEFAULT_SHIPPING_RULES["free_shipping_threshold"],
+        },
+    )
+    return _user_snapshot(
+        {
+            **_db_user_to_record(db_user),
+            "password_hash": user["password_hash"],
+            "shipping_rules": get_seller_shipping_rules(clean_username),
+            "addresses": [],
+            "default_address_id": None,
+            "invoice_profile": {},
+        }
+    )
 
 
 def update_profile(username: str, display_name: str, new_password: str = "", email: str = "") -> Dict[str, Any]:
@@ -466,39 +390,25 @@ def update_profile(username: str, display_name: str, new_password: str = "", ema
         raise ValueError("Display name is required.")
     if new_password and len(new_password) < 6:
         raise ValueError("New password must be at least 6 characters.")
-    if _db_auth_enabled() and clean_email:
+    if clean_email:
         email_owner = AppUserModel.objects.filter(email=clean_email).exclude(username=clean_username).exists()
         if email_owner:
             raise ValueError("This email is already taken.")
 
-    if _db_auth_enabled():
-        db_user = _get_or_bootstrap_db_user(clean_username)
-        if db_user:
-            db_user.display_name = clean_display_name
-            db_user.email = clean_email
-            if new_password:
-                db_user.password_hash = make_password(new_password)
-            db_user.save()
-            return _user_snapshot(
-                {
-                    **_db_user_to_record(db_user),
-                    "password_hash": db_user.password_hash,
-                    "shipping_rules": get_seller_shipping_rules(clean_username),
-                }
-            )
-        raise ValueError("User not found.")
-    users = deepcopy(local_store.get_users())
-    for item in users:
-        if item.get("username") != clean_username:
-            continue
-        item["display_name"] = clean_display_name
-        item["email"] = clean_email
-        item["updated_at"] = timezone.now().isoformat()
+    db_user = _get_or_bootstrap_db_user(clean_username)
+    if db_user:
+        db_user.display_name = clean_display_name
+        db_user.email = clean_email
         if new_password:
-            item["password_hash"] = make_password(new_password)
-            item.pop("password", None)
-        local_store.save_users(users)
-        return _user_snapshot(item)
+            db_user.password_hash = make_password(new_password)
+        db_user.save()
+        return _user_snapshot(
+            {
+                **_db_user_to_record(db_user),
+                "password_hash": db_user.password_hash,
+                "shipping_rules": get_seller_shipping_rules(clean_username),
+            }
+        )
     raise ValueError("User not found.")
 
 
@@ -506,26 +416,21 @@ def get_seller_shipping_rules(username: str) -> Dict[str, Any]:
     # 商品運費與結帳運費計算都依賴這份規則；若 ORM 尚未有資料，這裡會補建預設值。
     """Return seller-level shipping rules with normalized defaults."""
     clean_username = username.strip().lower()
-    if _db_auth_enabled():
-        db_user = _get_or_bootstrap_db_user(clean_username)
-        if db_user:
-            db_rules = UserShippingRuleModel.objects.filter(user=db_user).first()
-            if db_rules:
-                return _shipping_rules_from_model(db_rules)
-            db_rules = UserShippingRuleModel.objects.create(
-                user=db_user,
-                home_delivery_enabled=bool(DEFAULT_SHIPPING_RULES["home_delivery_enabled"]),
-                home_delivery_fee=DEFAULT_SHIPPING_RULES["home_delivery_fee"],
-                convenience_store_enabled=bool(DEFAULT_SHIPPING_RULES["convenience_store_enabled"]),
-                convenience_store_fee=DEFAULT_SHIPPING_RULES["convenience_store_fee"],
-                free_shipping_threshold=DEFAULT_SHIPPING_RULES["free_shipping_threshold"],
-            )
+    db_user = _get_or_bootstrap_db_user(clean_username)
+    if db_user:
+        db_rules = UserShippingRuleModel.objects.filter(user=db_user).first()
+        if db_rules:
             return _shipping_rules_from_model(db_rules)
-        raise ValueError("User not found.")
-    user = local_store.get_user_by_username(clean_username)
-    if not user:
-        raise ValueError("User not found.")
-    return _normalize_shipping_rules(user.get("shipping_rules"))
+        db_rules = UserShippingRuleModel.objects.create(
+            user=db_user,
+            home_delivery_enabled=bool(DEFAULT_SHIPPING_RULES["home_delivery_enabled"]),
+            home_delivery_fee=DEFAULT_SHIPPING_RULES["home_delivery_fee"],
+            convenience_store_enabled=bool(DEFAULT_SHIPPING_RULES["convenience_store_enabled"]),
+            convenience_store_fee=DEFAULT_SHIPPING_RULES["convenience_store_fee"],
+            free_shipping_threshold=DEFAULT_SHIPPING_RULES["free_shipping_threshold"],
+        )
+        return _shipping_rules_from_model(db_rules)
+    raise ValueError("User not found.")
 
 
 def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
@@ -534,20 +439,15 @@ def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
     clean_username = str(username or "").strip().lower()
     if not clean_username:
         return None
-    if _db_auth_enabled():
-        db_user = _get_or_bootstrap_db_user(clean_username)
-        if db_user:
-            return _user_snapshot(
-                {
-                    **_db_user_to_record(db_user),
-                    "shipping_rules": get_seller_shipping_rules(clean_username),
-                }
-            )
-        return None
-    user = local_store.get_user_by_username(clean_username)
-    if not user:
-        return None
-    return _user_snapshot(user)
+    db_user = _get_or_bootstrap_db_user(clean_username)
+    if db_user:
+        return _user_snapshot(
+            {
+                **_db_user_to_record(db_user),
+                "shipping_rules": get_seller_shipping_rules(clean_username),
+            }
+        )
+    return None
 
 
 def get_user_by_email(email: str) -> Optional[Dict[str, Any]]:
@@ -555,20 +455,15 @@ def get_user_by_email(email: str) -> Optional[Dict[str, Any]]:
     clean_email = str(email or "").strip().lower()
     if not clean_email:
         return None
-    if _db_auth_enabled():
-        db_user = AppUserModel.objects.filter(email=clean_email).first()
-        if not db_user:
-            return None
-        return _user_snapshot(
-            {
-                **_db_user_to_record(db_user),
-                "shipping_rules": get_seller_shipping_rules(db_user.username),
-            }
-        )
-    for user in local_store.get_users():
-        if str(user.get("email") or "").strip().lower() == clean_email:
-            return _user_snapshot(user)
-    return None
+    db_user = AppUserModel.objects.filter(email=clean_email).first()
+    if not db_user:
+        return None
+    return _user_snapshot(
+        {
+            **_db_user_to_record(db_user),
+            "shipping_rules": get_seller_shipping_rules(db_user.username),
+        }
+    )
 
 
 def set_password(username: str, new_password: str) -> Dict[str, Any]:
@@ -579,30 +474,18 @@ def set_password(username: str, new_password: str) -> Dict[str, Any]:
     if len(new_password) < 6:
         raise ValueError("New password must be at least 6 characters.")
 
-    if _db_auth_enabled():
-        db_user = _get_or_bootstrap_db_user(clean_username)
-        if not db_user:
-            raise ValueError("User not found.")
-        db_user.password_hash = make_password(new_password)
-        db_user.save(update_fields=["password_hash", "updated_at"])
-        return _user_snapshot(
-            {
-                **_db_user_to_record(db_user),
-                "password_hash": db_user.password_hash,
-                "shipping_rules": get_seller_shipping_rules(clean_username),
-            }
-        )
-
-    users = deepcopy(local_store.get_users())
-    for item in users:
-        if item.get("username") != clean_username:
-            continue
-        item["password_hash"] = make_password(new_password)
-        item.pop("password", None)
-        item["updated_at"] = timezone.now().isoformat()
-        local_store.save_users(users)
-        return _user_snapshot(item)
-    raise ValueError("User not found.")
+    db_user = _get_or_bootstrap_db_user(clean_username)
+    if not db_user:
+        raise ValueError("User not found.")
+    db_user.password_hash = make_password(new_password)
+    db_user.save(update_fields=["password_hash", "updated_at"])
+    return _user_snapshot(
+        {
+            **_db_user_to_record(db_user),
+            "password_hash": db_user.password_hash,
+            "shipping_rules": get_seller_shipping_rules(clean_username),
+        }
+    )
 
 
 def update_seller_shipping_rules(
@@ -639,133 +522,86 @@ def update_seller_shipping_rules(
         "free_shipping_threshold": _clean_amount(free_shipping_threshold, "Free-shipping threshold"),
     }
     clean_username = username.strip().lower()
-    db_rules = None
-    if _db_auth_enabled():
-        db_user = _get_or_bootstrap_db_user(clean_username)
-        if db_user:
-            db_rules, _ = UserShippingRuleModel.objects.update_or_create(
-                user=db_user,
-                defaults={
-                    "home_delivery_enabled": bool(rules["home_delivery_enabled"]),
-                    "home_delivery_fee": rules["home_delivery_fee"],
-                    "convenience_store_enabled": bool(rules["convenience_store_enabled"]),
-                    "convenience_store_fee": rules["convenience_store_fee"],
-                    "free_shipping_threshold": rules["free_shipping_threshold"],
-                },
-            )
-            return _shipping_rules_from_model(db_rules)
+    db_user = _get_or_bootstrap_db_user(clean_username)
+    if not db_user:
         raise ValueError("User not found.")
-    updated = _save_user_patch(
-        clean_username,
-        {
-            "shipping_rules": rules,
-            "updated_at": timezone.now().isoformat(),
+    db_rules, _ = UserShippingRuleModel.objects.update_or_create(
+        user=db_user,
+        defaults={
+            "home_delivery_enabled": bool(rules["home_delivery_enabled"]),
+            "home_delivery_fee": rules["home_delivery_fee"],
+            "convenience_store_enabled": bool(rules["convenience_store_enabled"]),
+            "convenience_store_fee": rules["convenience_store_fee"],
+            "free_shipping_threshold": rules["free_shipping_threshold"],
         },
     )
-    if not updated:
-        raise ValueError("User not found.")
-    return _normalize_shipping_rules(updated.get("shipping_rules"))
+    return _shipping_rules_from_model(db_rules)
 
 
 def request_seller_role(username: str) -> Dict[str, Any]:
     # 一般會員送出賣家申請後，狀態會切成 pending，等待管理端審核。
     """提出賣家資格申請。"""
     clean_username = username.strip().lower()
-    if _db_auth_enabled():
-        db_user = _get_or_bootstrap_db_user(clean_username)
-        if db_user:
-            if db_user.role in SELLER_ROLES:
-                raise ValueError("You already have seller access.")
-            now = timezone.now()
-            db_user.seller_request_status = SELLER_REQUEST_PENDING
-            db_user.seller_requested_at = now
-            db_user.save()
-            SellerRequestModel.objects.filter(user=db_user, is_current=True).update(is_current=False)
-            SellerRequestModel.objects.update_or_create(
-                user=db_user,
-                status=SELLER_REQUEST_PENDING,
-                is_current=True,
-                defaults={"reviewed_at": None, "reviewed_by": None, "note": ""},
-            )
-            return _user_snapshot(
-                {
-                    **_db_user_to_record(db_user),
-                    "shipping_rules": get_seller_shipping_rules(clean_username),
-                }
-            )
-        raise ValueError("User not found.")
-    users = deepcopy(local_store.get_users())
-    for item in users:
-        if item.get("username") != clean_username:
-            continue
-        if item.get("role") in SELLER_ROLES:
+    db_user = _get_or_bootstrap_db_user(clean_username)
+    if db_user:
+        if db_user.role in SELLER_ROLES:
             raise ValueError("You already have seller access.")
-        now = timezone.now().isoformat()
-        item["seller_request_status"] = SELLER_REQUEST_PENDING
-        item["seller_requested_at"] = now
-        item["updated_at"] = now
-        local_store.save_users(users)
-        _sync_user_to_orm(item)
-        return _user_snapshot(item)
+        now = timezone.now()
+        db_user.seller_request_status = SELLER_REQUEST_PENDING
+        db_user.seller_requested_at = now
+        db_user.save()
+        SellerRequestModel.objects.filter(user=db_user, is_current=True).update(is_current=False)
+        SellerRequestModel.objects.update_or_create(
+            user=db_user,
+            status=SELLER_REQUEST_PENDING,
+            is_current=True,
+            defaults={"reviewed_at": None, "reviewed_by": None, "note": ""},
+        )
+        return _user_snapshot(
+            {
+                **_db_user_to_record(db_user),
+                "shipping_rules": get_seller_shipping_rules(clean_username),
+            }
+        )
     raise ValueError("User not found.")
 
 
 def list_seller_requests() -> list[Dict[str, Any]]:
     # 管理端審核頁只需要待審申請，依申請時間倒序列出。
     """列出待審核的賣家申請。"""
-    if _db_auth_enabled():
-        db_requests = list(
-            AppUserModel.objects.filter(seller_request_status=SELLER_REQUEST_PENDING).order_by("-seller_requested_at", "username")
-        )
-        return [_db_user_to_record(item) for item in db_requests]
-    requests = [user for user in local_store.get_users() if user.get("seller_request_status") == SELLER_REQUEST_PENDING]
-    return sorted(requests, key=lambda item: item.get("seller_requested_at", ""), reverse=True)
+    db_requests = list(
+        AppUserModel.objects.filter(seller_request_status=SELLER_REQUEST_PENDING).order_by("-seller_requested_at", "username")
+    )
+    return [_db_user_to_record(item) for item in db_requests]
 
 
 def review_seller_request(username: str, approved: bool) -> Dict[str, Any]:
     # 審核通過會直接升成 seller；駁回則保留原角色，只更新申請狀態。
     """審核賣家申請。"""
     clean_username = username.strip().lower()
-    if _db_auth_enabled():
-        db_user = _get_or_bootstrap_db_user(clean_username)
-        if db_user:
-            now = timezone.now()
-            db_user.seller_reviewed_at = now
-            if approved:
-                db_user.role = "seller"
-                db_user.seller_request_status = SELLER_REQUEST_APPROVED
-            else:
-                db_user.seller_request_status = SELLER_REQUEST_REJECTED
-            db_user.save()
-            SellerRequestModel.objects.filter(user=db_user, is_current=True).update(is_current=False)
-            SellerRequestModel.objects.update_or_create(
-                user=db_user,
-                status=db_user.seller_request_status,
-                is_current=True,
-                defaults={"reviewed_at": now, "reviewed_by": None, "note": ""},
-            )
-            return _user_snapshot(
-                {
-                    **_db_user_to_record(db_user),
-                    "shipping_rules": get_seller_shipping_rules(clean_username),
-                }
-            )
-        raise ValueError("User not found.")
-    users = deepcopy(local_store.get_users())
-    for item in users:
-        if item.get("username") != clean_username:
-            continue
-        now = timezone.now().isoformat()
-        item["seller_reviewed_at"] = now
-        item["updated_at"] = now
+    db_user = _get_or_bootstrap_db_user(clean_username)
+    if db_user:
+        now = timezone.now()
+        db_user.seller_reviewed_at = now
         if approved:
-            item["role"] = "seller"
-            item["seller_request_status"] = SELLER_REQUEST_APPROVED
+            db_user.role = "seller"
+            db_user.seller_request_status = SELLER_REQUEST_APPROVED
         else:
-            item["seller_request_status"] = SELLER_REQUEST_REJECTED
-        local_store.save_users(users)
-        _sync_user_to_orm(item)
-        return _user_snapshot(item)
+            db_user.seller_request_status = SELLER_REQUEST_REJECTED
+        db_user.save()
+        SellerRequestModel.objects.filter(user=db_user, is_current=True).update(is_current=False)
+        SellerRequestModel.objects.update_or_create(
+            user=db_user,
+            status=db_user.seller_request_status,
+            is_current=True,
+            defaults={"reviewed_at": now, "reviewed_by": None, "note": ""},
+        )
+        return _user_snapshot(
+            {
+                **_db_user_to_record(db_user),
+                "shipping_rules": get_seller_shipping_rules(clean_username),
+            }
+        )
     raise ValueError("User not found.")
 
 
@@ -775,28 +611,17 @@ def list_users(search: str = "", role: str = "", account_status: str = "") -> li
     search_value = search.strip().lower()
     role_value = role.strip().lower()
     status_value = account_status.strip().lower()
-    if _db_auth_enabled():
-        queryset = AppUserModel.objects.all()
-        if search_value:
-            queryset = queryset.filter(
-                models.Q(username__icontains=search_value) | models.Q(display_name__icontains=search_value)
-            )
-        if role_value:
-            queryset = queryset.filter(role=role_value)
-        if status_value:
-            queryset = queryset.filter(account_status=status_value)
-        db_users = list(queryset.order_by("role", "username"))
-        return [_db_user_to_record(user) for user in db_users]
-    users: list[Dict[str, Any]] = []
-    for user in local_store.get_users():
-        if search_value and search_value not in str(user.get("username", "")).lower() and search_value not in str(user.get("display_name", "")).lower():
-            continue
-        if role_value and str(user.get("role", "")).lower() != role_value:
-            continue
-        if status_value and str(user.get("account_status", ACCOUNT_STATUS_ACTIVE)).lower() != status_value:
-            continue
-        users.append(user)
-    return sorted(users, key=lambda item: (item.get("role", ""), item.get("username", "")))
+    queryset = AppUserModel.objects.all()
+    if search_value:
+        queryset = queryset.filter(
+            models.Q(username__icontains=search_value) | models.Q(display_name__icontains=search_value)
+        )
+    if role_value:
+        queryset = queryset.filter(role=role_value)
+    if status_value:
+        queryset = queryset.filter(account_status=status_value)
+    db_users = list(queryset.order_by("role", "username"))
+    return [_db_user_to_record(user) for user in db_users]
 
 
 def update_account_status(username: str, account_status: str) -> Dict[str, Any]:
@@ -806,31 +631,18 @@ def update_account_status(username: str, account_status: str) -> Dict[str, Any]:
     clean_status = account_status.strip().lower()
     if clean_status not in {ACCOUNT_STATUS_ACTIVE, ACCOUNT_STATUS_SUSPENDED}:
         raise ValueError("Invalid account status.")
-    if _db_auth_enabled():
-        db_user = _get_or_bootstrap_db_user(clean_username)
-        if db_user:
-            now = timezone.now()
-            db_user.account_status = clean_status
-            db_user.account_status_updated_at = now
-            db_user.save()
-            return _user_snapshot(
-                {
-                    **_db_user_to_record(db_user),
-                    "shipping_rules": get_seller_shipping_rules(clean_username),
-                }
-            )
-        raise ValueError("User not found.")
-    users = deepcopy(local_store.get_users())
-    for item in users:
-        if item.get("username") != clean_username:
-            continue
-        now = timezone.now().isoformat()
-        item["account_status"] = clean_status
-        item["account_status_updated_at"] = now
-        item["updated_at"] = now
-        local_store.save_users(users)
-        _sync_user_to_orm(item)
-        return _user_snapshot(item)
+    db_user = _get_or_bootstrap_db_user(clean_username)
+    if db_user:
+        now = timezone.now()
+        db_user.account_status = clean_status
+        db_user.account_status_updated_at = now
+        db_user.save()
+        return _user_snapshot(
+            {
+                **_db_user_to_record(db_user),
+                "shipping_rules": get_seller_shipping_rules(clean_username),
+            }
+        )
     raise ValueError("User not found.")
 
 
@@ -866,35 +678,23 @@ def get_current_user(session) -> Optional[Dict[str, Any]]:
     username = user.get("username")
     if not username:
         return None
-    if _db_auth_enabled():
-        db_user = _get_or_bootstrap_db_user(str(username))
-        if db_user:
-            if db_user.account_status != ACCOUNT_STATUS_ACTIVE:
-                logout(session)
-                return None
-            fresh_user = _user_snapshot(
-                {
-                    **_db_user_to_record(db_user),
-                    "shipping_rules": get_seller_shipping_rules(str(username)),
-                }
-            )
-            if fresh_user != user:
-                session[SESSION_USER_KEY] = fresh_user
-                session.modified = True
-            return fresh_user
-        logout(session)
-        return None
-    current_record = local_store.get_user_by_username(str(username))
-    if not current_record:
-        return user
-    if current_record.get("account_status", ACCOUNT_STATUS_ACTIVE) != ACCOUNT_STATUS_ACTIVE:
-        logout(session)
-        return None
-    fresh_user = _user_snapshot(current_record)
-    if fresh_user != user:
-        session[SESSION_USER_KEY] = fresh_user
-        session.modified = True
-    return fresh_user
+    db_user = _get_or_bootstrap_db_user(str(username))
+    if db_user:
+        if db_user.account_status != ACCOUNT_STATUS_ACTIVE:
+            logout(session)
+            return None
+        fresh_user = _user_snapshot(
+            {
+                **_db_user_to_record(db_user),
+                "shipping_rules": get_seller_shipping_rules(str(username)),
+            }
+        )
+        if fresh_user != user:
+            session[SESSION_USER_KEY] = fresh_user
+            session.modified = True
+        return fresh_user
+    logout(session)
+    return None
 
 
 def require_user(session) -> Dict[str, Any]:

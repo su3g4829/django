@@ -26,13 +26,12 @@ from ..models import ProductImage as ProductImageModel
 from ..models import ProductTagRelation as ProductTagRelationModel
 from ..models import ProductVariant as ProductVariantModel
 from ..models import Tag as TagModel
-from ..repositories import local_store
 from . import auth_demo
 from . import cloud_storage as cloud_storage_service
 
 # 商品 service 是整個商城後端的核心資料層。
 # 這裡統一處理分類、商品、變體、圖片、標籤、運費設定與權限判斷，
-# 並在 JSON / ORM 過渡期維持前端可直接使用的統一 payload。
+# 並維持前端可直接使用的統一 payload。
 
 # 這支 service 同時負責：
 # - 商品分類主表
@@ -189,7 +188,7 @@ def _product_variant_record_from_model(variant: ProductVariantModel) -> Dict[str
 
 def _product_record_from_model(product: ProductModel) -> Dict[str, Any]:
     # ORM 商品 row 轉成 canonical product payload，圖片、變體與標籤在這裡一併展開。
-    """Serialize ORM product rows into the same dict payload shape used by JSON-backed services."""
+    """Serialize ORM product rows into the canonical product payload shape."""
     images = [
         image.file_path
         for image in sorted(product.images.all(), key=lambda item: (item.sort_order, item.id))
@@ -248,8 +247,8 @@ def _merge_product_records(
     preferred_record: Dict[str, Any],
     fallback_record: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
-    # ORM 與 JSON 同時存在時，優先採用 ORM 欄位，但保留過渡期只存在 JSON 的設定資料。
-    """Merge ORM-backed product data with legacy JSON-only fields during the transition."""
+    # 以主要資料為準，必要時只補上缺少的相容欄位。
+    """Merge product payloads while keeping the preferred record authoritative."""
     merged = deepcopy(fallback_record or {})
     merged.update(deepcopy(preferred_record))
     if fallback_record and fallback_record.get("shipping_profile") is not None:
@@ -277,113 +276,60 @@ def _db_products_queryset():
 
 
 def _merged_category_records(*, include_inactive: bool) -> List[Dict[str, Any]]:
-    # 分類目前若 ORM 可用就直接視為主資料源；JSON 只在 fallback 模式下接手。
-    """Merge ORM and JSON category sources while preferring ORM rows for the same slug."""
-    merged: Dict[str, Dict[str, Any]] = {}
-    if _db_categories_enabled():
-        queryset = CategoryModel.objects.all().order_by("name")
-        if not include_inactive:
-            queryset = queryset.filter(is_active=True)
-        for category in queryset:
-            record = _category_record_from_model(category)
-            merged[record["slug"]] = record
-        return sorted(merged.values(), key=_category_sort_key)
-    for raw_category in local_store.get_categories():
-        record = {
-            "id": int(raw_category.get("id") or 0),
-            "slug": str(raw_category.get("slug") or "").strip().lower(),
-            "name": str(raw_category.get("name") or "").strip(),
-            "label": str(raw_category.get("name") or "").strip(),
-            "description": str(raw_category.get("description") or "").strip(),
-            "is_active": bool(raw_category.get("is_active", True)),
-            "sort_order": int(raw_category.get("sort_order") or 0),
-            "created_at": str(raw_category.get("created_at") or ""),
-            "updated_at": str(raw_category.get("updated_at") or ""),
-        }
-        if not record["slug"] or not record["name"]:
-            continue
-        if not include_inactive and not record["is_active"]:
-            continue
-        merged.setdefault(record["slug"], record)
-    return sorted(merged.values(), key=_category_sort_key)
+    # 分類目前直接以 ORM 為主資料源。
+    """Return category payloads from ORM, optionally including inactive rows."""
+    queryset = CategoryModel.objects.all().order_by("name")
+    if not include_inactive:
+        queryset = queryset.filter(is_active=True)
+    return sorted([_category_record_from_model(category) for category in queryset], key=_category_sort_key)
 
 
 def _merged_public_product_records() -> List[Dict[str, Any]]:
     # 商城前台只讀可公開商品，這裡回傳已 prepare 過、可直接給商品卡與列表頁的資料。
-    """Merge ORM and JSON product sources for storefront reads, preferring ORM by slug."""
-    if _db_products_enabled():
-        records: List[Dict[str, Any]] = []
-        for product in _db_products_queryset():
-            record = _product_record_from_model(product)
-            if is_public_product(record):
-                records.append(record)
-        return [prepare_product_for_display(product) for product in records]
-    json_records: Dict[str, Dict[str, Any]] = {}
-    for product in local_store.get_products():
-        slug = str(product.get("slug") or "").strip()
-        if slug and is_public_product(product):
-            json_records[slug] = product
-    return [prepare_product_for_display(product) for product in json_records.values()]
+    """Return public product payloads for storefront reads."""
+    records: List[Dict[str, Any]] = []
+    for product in _db_products_queryset():
+        record = _product_record_from_model(product)
+        if is_public_product(record):
+            records.append(record)
+    return [prepare_product_for_display(product) for product in records]
 
 
 def _all_product_records_for_slug_generation() -> List[Dict[str, Any]]:
-    # 建立新 slug 前先蒐集所有既有 slug，避免和 ORM / JSON 任一來源撞名。
-    """Collect current slugs from both JSON and ORM sources before generating a new slug."""
-    if _db_products_enabled():
-        return [{"slug": product.slug, "id": product.id} for product in ProductModel.objects.only("id", "slug")]
-    return list(local_store.get_products())
+    # 建立新 slug 前先蒐集所有既有 slug，避免撞名。
+    """Collect current product slugs before generating a new one."""
+    return [{"slug": product.slug, "id": product.id} for product in ProductModel.objects.only("id", "slug")]
 
 
 def _db_products_for_owner(username: str) -> List[Dict[str, Any]]:
     # 賣家中心列表讀自己名下商品時，這裡提供 ORM -> legacy payload 的統一入口。
     """Return ORM-backed seller products serialized into the legacy dict shape."""
-    if not _db_products_enabled():
-        return []
     queryset = _db_products_queryset().filter(owner__username=username)
     return [_product_record_from_model(product) for product in queryset]
 
 
 def _json_product_by_slug(slug: str) -> Dict[str, Any] | None:
-    # JSON fallback 下依 slug 讀單一商品。
-    """Return the legacy JSON product payload for a slug when it exists."""
-    return local_store.get_product_by_slug(slug)
+    # 保留舊命名的相容入口，實際上仍回傳 canonical product payload。
+    """Return the canonical product payload for a slug."""
+    return _db_product_record_by_slug(slug)
 
 
 def _db_product_record_by_slug(slug: str) -> Dict[str, Any] | None:
     # ORM 模式下依 slug 讀單一商品，回傳 canonical payload 給上層共用。
     """Return the ORM-backed product payload for a slug when the database is enabled."""
-    if not _db_products_enabled():
-        return None
     product = _db_products_queryset().filter(slug=slug).first()
     return _product_record_from_model(product) if product else None
 
 
 def _merged_product_record_by_slug(slug: str) -> Dict[str, Any] | None:
     # 單商品查詢的統一入口；前台詳情、後台管理與比較功能都會用到。
-    """Return one canonical product payload by merging ORM data with JSON-only legacy fields."""
-    db_record = _db_product_record_by_slug(slug)
-    if _db_products_enabled():
-        return db_record
-    json_record = _json_product_by_slug(slug)
-    if db_record and json_record:
-        return _merge_product_records(db_record, json_record)
-    return db_record or json_record
+    """Return one canonical product payload by slug."""
+    return _db_product_record_by_slug(slug)
 
 
 def _save_product_record_to_json(product: Dict[str, Any]) -> Dict[str, Any]:
-    # 在 JSON fallback 模式下，用 slug 當主鍵覆蓋或新增商品記錄。
-    """Persist one canonical product payload back into products.json for compatibility."""
-    products = deepcopy(local_store.get_products())
-    slug = str(product.get("slug") or "").strip()
-    replaced = False
-    for index, current in enumerate(products):
-        if str(current.get("slug") or "").strip() == slug:
-            products[index] = deepcopy(product)
-            replaced = True
-            break
-    if not replaced:
-        products.append(deepcopy(product))
-    local_store.save_products(products)
+    # 保留舊介面的相容 hook；目前正式資料不會回寫本地 JSON。
+    """Keep the compatibility hook as an in-memory no-op."""
     return deepcopy(product)
 
 
@@ -403,25 +349,19 @@ def _persist_product_record(
             or ""
         ),
     }
-    if _db_products_enabled():
-        orm_payload = _sync_product_record_to_orm(
-            orm_payload,
-            owner_snapshot=owner_snapshot,
-            previous_slug=previous_slug or str(product.get("slug") or ""),
-        )
-        canonical = _merge_product_records(orm_payload, product)
-    else:
-        canonical = deepcopy(product)
+    orm_payload = _sync_product_record_to_orm(
+        orm_payload,
+        owner_snapshot=owner_snapshot,
+        previous_slug=previous_slug or str(product.get("slug") or ""),
+    )
+    canonical = _merge_product_records(orm_payload, product)
     previous_slug = str(previous_slug or "").strip()
     current_slug = str(canonical.get("slug") or "").strip()
     if previous_slug and current_slug and previous_slug != current_slug:
         from . import banners as banner_service
 
         banner_service.update_product_banner_links(previous_slug, current_slug)
-    if _db_products_enabled():
-        return prepare_product_for_display(canonical)
-    saved = _save_product_record_to_json(canonical)
-    return prepare_product_for_display(saved)
+    return prepare_product_for_display(canonical)
 
 
 def list_product_categories(*, include_inactive: bool = False) -> List[Dict[str, Any]]:
@@ -508,7 +448,7 @@ def _require_product_category(category_value: str) -> Dict[str, Any]:
 
 
 def _next_category_id(categories: List[Dict[str, Any]]) -> int:
-    # JSON fallback 建分類時，需要自己算下一個 id。
+    # 以記憶體 payload 操作分類時，仍需要穩定遞增 id。
     return max((int(item.get("id") or 0) for item in categories), default=0) + 1
 
 
@@ -555,20 +495,15 @@ def create_product_category(
         "created_at": now,
         "updated_at": now,
     }
-    if _db_categories_enabled():
-        category_model = CategoryModel.objects.create(
-            slug=slug_value,
-            name=clean_name,
-            description=str(description or "").strip(),
-            is_active=bool(is_active),
-        )
-        category["id"] = category_model.id
-        category["created_at"] = category_model.created_at.isoformat() if category_model.created_at else now
-        category["updated_at"] = category_model.updated_at.isoformat() if category_model.updated_at else now
-        return get_product_category_by_slug(category["slug"], include_inactive=True) or category
-    json_categories = deepcopy(local_store.get_categories())
-    json_categories.append(category)
-    local_store.save_categories(json_categories)
+    category_model = CategoryModel.objects.create(
+        slug=slug_value,
+        name=clean_name,
+        description=str(description or "").strip(),
+        is_active=bool(is_active),
+    )
+    category["id"] = category_model.id
+    category["created_at"] = category_model.created_at.isoformat() if category_model.created_at else now
+    category["updated_at"] = category_model.updated_at.isoformat() if category_model.updated_at else now
     return get_product_category_by_slug(category["slug"], include_inactive=True) or category
 
 
@@ -672,19 +607,11 @@ def list_products_for_user(username: str) -> List[Dict[str, Any]]:
     回傳:
         列表資料，可直接提供給頁面或 API 進一步使用。
     """
-    if _db_products_enabled():
-        ordered = sorted(
-            _db_products_for_owner(username),
-            key=lambda item: item.get("updated_at", item.get("created_at", "")),
-            reverse=True,
-        )
-        return [prepare_product_for_display(product) for product in ordered]
-    json_products = {
-        str(product.get("slug") or "").strip(): product
-        for product in local_store.get_products()
-        if product.get("owner_username") == username and str(product.get("slug") or "").strip()
-    }
-    ordered = sorted(json_products.values(), key=lambda item: item.get("updated_at", item.get("created_at", "")), reverse=True)
+    ordered = sorted(
+        _db_products_for_owner(username),
+        key=lambda item: item.get("updated_at", item.get("created_at", "")),
+        reverse=True,
+    )
     return [prepare_product_for_display(product) for product in ordered]
 
 
@@ -696,10 +623,7 @@ def list_pending_products() -> List[Dict[str, Any]]:
     回傳:
         列表資料，可直接提供給頁面或 API 進一步使用。
     """
-    if _db_products_enabled():
-        products = [_product_record_from_model(product) for product in _db_products_queryset().filter(status=PENDING_STATUS)]
-    else:
-        products = [product for product in local_store.get_products() if _canonical_status(product.get("status")) == PENDING_STATUS]
+    products = [_product_record_from_model(product) for product in _db_products_queryset().filter(status=PENDING_STATUS)]
     ordered = sorted(products, key=lambda item: item.get("updated_at", item.get("created_at", "")), reverse=True)
     return [prepare_product_for_display(product) for product in ordered]
 
@@ -708,10 +632,7 @@ def list_moderation_products() -> List[Dict[str, Any]]:
     # 已公開商品也可能需要審核 / 管理檢視，這裡回傳 active 商品總表。
     """列出後台審核中心需要關注的商品。"""
     """列出目前已上架的商品，供管理者進行強制下架。"""
-    if _db_products_enabled():
-        products = [_product_record_from_model(product) for product in _db_products_queryset().filter(status=ACTIVE_STATUS)]
-    else:
-        products = [product for product in local_store.get_products() if _canonical_status(product.get("status")) == ACTIVE_STATUS]
+    products = [_product_record_from_model(product) for product in _db_products_queryset().filter(status=ACTIVE_STATUS)]
     ordered = sorted(products, key=lambda item: item.get("updated_at", item.get("created_at", "")), reverse=True)
     return [prepare_product_for_display(product) for product in ordered]
 
@@ -719,24 +640,8 @@ def list_moderation_products() -> List[Dict[str, Any]]:
 def list_products_for_admin() -> List[Dict[str, Any]]:
     # 後台商品總表不做可見性過濾，需看得到所有狀態的商品。
     """列出管理端可見的全站商品，讀取時以 ORM 為主、JSON 為相容補充。"""
-    if _db_products_enabled():
-        products = [_product_record_from_model(product) for product in _db_products_queryset()]
-        return [prepare_product_for_display(product) for product in products]
-    products = sorted(
-        _all_product_records_for_slug_generation(),
-        key=lambda item: item.get("updated_at", item.get("created_at", "")),
-        reverse=True,
-    )
-    merged: Dict[str, Dict[str, Any]] = {}
-    for product in products:
-        slug = str(product.get("slug") or "").strip()
-        if not slug:
-            continue
-        if slug in merged:
-            merged[slug] = _merge_product_records(merged[slug], product)
-        else:
-            merged[slug] = deepcopy(product)
-    return [prepare_product_for_display(product) for product in merged.values()]
+    products = [_product_record_from_model(product) for product in _db_products_queryset()]
+    return [prepare_product_for_display(product) for product in products]
 
 
 def get_user_product(username: str, slug: str) -> Dict[str, Any] | None:
@@ -751,14 +656,9 @@ def get_user_product(username: str, slug: str) -> Dict[str, Any] | None:
     回傳:
         整理後的資料字典；若查無資料，部分函式可能回傳 `None`。
     """
-    if _db_products_enabled():
-        db_product = _db_products_queryset().filter(owner__username=username, slug=slug).first()
-        if db_product:
-            return prepare_product_for_display(_product_record_from_model(db_product))
-        return None
-    for product in local_store.get_products():
-        if product.get("owner_username") == username and product.get("slug") == slug:
-            return prepare_product_for_display(product)
+    db_product = _db_products_queryset().filter(owner__username=username, slug=slug).first()
+    if db_product:
+        return prepare_product_for_display(_product_record_from_model(db_product))
     return None
 
 
@@ -774,15 +674,8 @@ def get_visible_product(slug: str, user: Dict[str, str] | None = None) -> Dict[s
     回傳:
         整理後的資料字典；若查無資料，部分函式可能回傳 `None`。
     """
-    if _db_products_enabled():
-        db_product = _db_products_queryset().filter(slug=slug).first()
-        if db_product:
-            product = _product_record_from_model(db_product)
-            if not can_view_product(user, product):
-                return None
-            return prepare_product_for_display(product)
-        return None
-    product = local_store.get_product_by_slug(slug)
+    db_product = _db_products_queryset().filter(slug=slug).first()
+    product = _product_record_from_model(db_product) if db_product else None
     if not product or not can_view_product(user, product):
         return None
     return prepare_product_for_display(product)
@@ -798,28 +691,13 @@ def get_product_for_admin(slug: str) -> Dict[str, Any] | None:
 def get_product_for_review(slug: str) -> Dict[str, Any] | None:
     # 商品審核頁與 admin 取用相同資料，只是語意上分成 review 專用入口。
     """讀取審核流程用的單一商品。"""
-    """取得 商品管理 流程中指定條件的資料。
-
-    參數:
-        slug: 商品或頁面使用的網址識別字串。
-
-    回傳:
-        整理後的資料字典；若查無資料，部分函式可能回傳 `None`。
-    """
     product = _merged_product_record_by_slug(slug)
     return prepare_product_for_display(product) if product else None
 
 
 def _next_product_id(products: List[Dict[str, Any]]) -> int:
-    # JSON fallback 建商品時，仍需手動維護遞增 id。
-    """處理 商品管理 相關流程。
-
-    參數:
-        products: 商品資料列表。
-
-    回傳:
-        數值結果，供後續金額或庫存流程使用。
-    """
+    # 以記憶體 payload 操作商品時，仍需要穩定遞增 id。
+    """計算下一個可用的商品 id。"""
     return max([int(item.get("id", 0)) for item in products] or [0]) + 1
 
 
@@ -1578,7 +1456,9 @@ def _split_filter_values(value: Any) -> List[str]:
     if isinstance(value, list):
         raw_parts = value
     else:
-        normalized = str(value).replace("?", ",").replace("?", ",").replace("?", "/")
+        normalized = str(value)
+        for delimiter in ("、", "，", "／", "|", ";", "；"):
+            normalized = normalized.replace(delimiter, "," if delimiter != "／" else "/")
         raw_parts = normalized.split(",")
     values: List[str] = []
     for part in raw_parts:
@@ -2041,8 +1921,8 @@ def create_product(owner: Dict[str, str], form_data: Dict[str, str], uploaded_fi
     product = {
         "id": (
             (ProductModel.objects.order_by("-id").only("id").first().id + 1)
-            if _db_products_enabled() and ProductModel.objects.exists()
-            else (_next_product_id(local_store.get_products()) if not _db_products_enabled() else 1)
+            if ProductModel.objects.exists()
+            else 1
         ),
         "slug": slug,
         "name": name,
@@ -2067,12 +1947,7 @@ def create_product(owner: Dict[str, str], form_data: Dict[str, str], uploaded_fi
         "created_at": now,
         "updated_at": now,
     }
-    if _db_products_enabled():
-        return prepare_product_for_display(_persist_product_record(product))
-    products = deepcopy(local_store.get_products())
-    products.append(product)
-    local_store.save_products(products)
-    return prepare_product_for_display(product)
+    return prepare_product_for_display(_persist_product_record(product))
 
 
 def update_product(owner: Dict[str, str], slug: str, form_data: Dict[str, str], uploaded_files: Iterable[UploadedFile] = ()) -> Dict[str, Any]:
@@ -2131,16 +2006,7 @@ def update_product(owner: Dict[str, str], slug: str, form_data: Dict[str, str], 
     item["images"] = _merge_image_changes(item, form_data, uploaded_files, next_slug)
     item["variants"] = _bind_variant_images(variants, item["images"])
     item["updated_at"] = timezone.now().isoformat()
-    if _db_products_enabled():
-        return prepare_product_for_display(_persist_product_record(item, previous_slug=previous_slug))
-
-    products = deepcopy(local_store.get_products())
-    for index, current in enumerate(products):
-        if current.get("slug") == slug and current.get("owner_username") == owner["username"]:
-            products[index] = deepcopy(item)
-            break
-    local_store.save_products(products)
-    return prepare_product_for_display(item)
+    return prepare_product_for_display(_persist_product_record(item, previous_slug=previous_slug))
 
 
 def admin_update_product(
@@ -2151,27 +2017,10 @@ def admin_update_product(
 ) -> Dict[str, Any]:
     # 管理端更新商品和賣家編輯類似，但不受 owner 限制，且可設定更完整的狀態集合。
     """由管理端更新指定商品。"""
-    if _db_products_enabled():
-        existing = _merged_product_record_by_slug(slug)
-        if not existing:
-            raise ValueError("Product not found.")
-        item = deepcopy(existing)
-    else:
-        products = deepcopy(local_store.get_products())
-        target_item = None
-        for item in products:
-            if item.get("slug") != slug:
-                continue
-            target_item = item
-            break
-        if target_item is None:
-            existing = _merged_product_record_by_slug(slug)
-            if not existing:
-                raise ValueError("Product not found.")
-            target_item = deepcopy(existing)
-            products.append(target_item)
-
-        item = target_item
+    existing = _merged_product_record_by_slug(slug)
+    if not existing:
+        raise ValueError("Product not found.")
+    item = deepcopy(existing)
     previous_slug = str(item.get("slug") or "")
     name = form_data.get("name", "").strip()
     brand = form_data.get("brand", "").strip()
@@ -2246,15 +2095,7 @@ def archive_product(owner: Dict[str, str], slug: str) -> Dict[str, Any]:
         raise ValueError("Product not found.")
     item["status"] = ARCHIVED_STATUS
     item["updated_at"] = timezone.now().isoformat()
-    if _db_products_enabled():
-        return prepare_product_for_display(_persist_product_record(item, previous_slug=slug))
-    products = deepcopy(local_store.get_products())
-    for index, current in enumerate(products):
-        if current.get("slug") == slug and current.get("owner_username") == owner["username"]:
-            products[index] = deepcopy(item)
-            break
-    local_store.save_products(products)
-    return prepare_product_for_display(item)
+    return prepare_product_for_display(_persist_product_record(item, previous_slug=slug))
 
 
 def delete_product(owner: Dict[str, str], slug: str) -> None:
@@ -2272,54 +2113,19 @@ def delete_product(owner: Dict[str, str], slug: str) -> None:
     existing = get_user_product(owner["username"], slug)
     if not existing:
         raise ValueError("Product not found.")
-    if _db_products_enabled():
-        for image in existing.get("images", []):
-            _delete_product_image(image)
-        _delete_product_from_orm(slug)
-        return
-    products = deepcopy(local_store.get_products())
-    next_products = []
-    for item in products:
-        if item.get("slug") == slug and item.get("owner_username") == owner["username"]:
-            for image in item.get("images", []):
-                _delete_product_image(image)
-            continue
-        next_products.append(item)
-    if not products or all(not (item.get("slug") == slug and item.get("owner_username") == owner["username"]) for item in products):
-        for image in existing.get("images", []):
-            _delete_product_image(image)
-    local_store.save_products(next_products)
+    for image in existing.get("images", []):
+        _delete_product_image(image)
     _delete_product_from_orm(slug)
 
 
 def admin_delete_product(slug: str) -> None:
     # 管理端可不經 owner 驗證直接刪除商品，刪除前同樣先清圖片檔。
     """由管理端直接刪除商品。"""
-    if _db_products_enabled():
-        fallback = _merged_product_record_by_slug(slug)
-        if not fallback:
-            raise ValueError("Product not found.")
-        for image in fallback.get("images", []):
-            _delete_product_image(image)
-        _delete_product_from_orm(slug)
-        return
-    products = deepcopy(local_store.get_products())
-    next_products = []
-    deleted = False
     fallback = _merged_product_record_by_slug(slug)
-    for item in products:
-        if item.get("slug") == slug:
-            deleted = True
-            for image in item.get("images", []):
-                _delete_product_image(image)
-            continue
-        next_products.append(item)
-    if not deleted and not fallback:
+    if not fallback:
         raise ValueError("Product not found.")
-    if not deleted and fallback:
-        for image in fallback.get("images", []):
-            _delete_product_image(image)
-    local_store.save_products(next_products)
+    for image in fallback.get("images", []):
+        _delete_product_image(image)
     _delete_product_from_orm(slug)
 
 
@@ -2340,23 +2146,15 @@ def duplicate_product_as_draft(owner: Dict[str, str], slug: str) -> Dict[str, An
         raise ValueError("Product not found.")
 
     now = timezone.now().isoformat()
-    if _db_products_enabled():
-        latest = ProductModel.objects.order_by("-id").only("id").first()
-        source["id"] = latest.id + 1 if latest else 1
-    else:
-        source["id"] = _next_product_id(local_store.get_products())
+    latest = ProductModel.objects.order_by("-id").only("id").first()
+    source["id"] = latest.id + 1 if latest else 1
     source["slug"] = _generate_unique_slug(f"{source['name']} copy", _all_product_records_for_slug_generation())
     source["name"] = f"{source['name']} Copy"
     source["status"] = DRAFT_STATUS
     source["review_note"] = ""
     source["created_at"] = now
     source["updated_at"] = now
-    if _db_products_enabled():
-        return prepare_product_for_display(_persist_product_record(source))
-    products = deepcopy(local_store.get_products())
-    products.append(source)
-    local_store.save_products(products)
-    return prepare_product_for_display(source)
+    return prepare_product_for_display(_persist_product_record(source))
 
 
 def review_product(slug: str, approved: bool, note: str = "") -> Dict[str, Any]:
@@ -2439,11 +2237,7 @@ def reserve_stock(items: List[Dict[str, Any]]) -> None:
     回傳:
         無回傳值；函式會直接修改 session、檔案或傳入資料。
     """
-    if _db_products_enabled():
-        indexed = {str(line.get("slug") or ""): _merged_product_record_by_slug(str(line.get("slug") or "")) for line in items}
-    else:
-        products = deepcopy(local_store.get_products())
-        indexed = {item.get("slug"): item for item in products}
+    indexed = {str(line.get("slug") or ""): _merged_product_record_by_slug(str(line.get("slug") or "")) for line in items}
 
     for line in items:
         product = indexed.get(line["slug"])
@@ -2469,12 +2263,9 @@ def reserve_stock(items: List[Dict[str, Any]]) -> None:
         else:
             product["stock"] = stock - int(line["qty"])
 
-    if _db_products_enabled():
-        for product in indexed.values():
-            if product:
-                _persist_product_record(product, previous_slug=str(product.get("slug") or ""))
-    else:
-        local_store.save_products(products)
+    for product in indexed.values():
+        if product:
+            _persist_product_record(product, previous_slug=str(product.get("slug") or ""))
 
 
 def restock_items(items: List[Dict[str, Any]]) -> None:
@@ -2488,11 +2279,7 @@ def restock_items(items: List[Dict[str, Any]]) -> None:
     回傳:
         無回傳值；函式會直接修改 session、檔案或傳入資料。
     """
-    if _db_products_enabled():
-        indexed = {str(line.get("slug") or ""): _merged_product_record_by_slug(str(line.get("slug") or "")) for line in items}
-    else:
-        products = deepcopy(local_store.get_products())
-        indexed = {item.get("slug"): item for item in products}
+    indexed = {str(line.get("slug") or ""): _merged_product_record_by_slug(str(line.get("slug") or "")) for line in items}
     for line in items:
         product = indexed.get(line.get("slug"))
         if not product:
@@ -2505,9 +2292,6 @@ def restock_items(items: List[Dict[str, Any]]) -> None:
             product["stock"] = available_stock(product)
         else:
             product["stock"] = stock + int(line.get("qty", 0))
-    if _db_products_enabled():
-        for product in indexed.values():
-            if product:
-                _persist_product_record(product, previous_slug=str(product.get("slug") or ""))
-    else:
-        local_store.save_products(products)
+    for product in indexed.values():
+        if product:
+            _persist_product_record(product, previous_slug=str(product.get("slug") or ""))

@@ -1,14 +1,13 @@
-"""
-資料庫 schema 規劃模型。
+"""專案正式使用的 Django ORM 模型定義。
 
-這份 `models.py` 的目的是把目前 JSON 檔與 session 中的資料結構，
-先整理成 Django ORM 可表達的資料表草案，供後續正式導入資料庫時使用。
+這份 `models.py` 現在已不只是 schema 草案，而是實際承載：
+- 會員與權限
+- 商品、分類、品牌、變體
+- 購物車、訂單、物流、售後
+- 內容、Banner、推薦、金流與稽核紀錄
 
-目前注意事項：
-- 這次只有規劃 schema，沒有建立 migration。
-- 專案現行流程仍以 JSON repository 與 signed-cookie session 為主。
-- 若未來真的要啟用這份 schema，應在第一個正式 migration 前設定
-  `AUTH_USER_MODEL = "myapp.AppUser"`，避免外鍵綁到 Django 內建 `auth.User`。
+若未來再調整使用者主表，仍應維持
+`AUTH_USER_MODEL = "myapp.AppUser"`，避免外鍵綁到 Django 內建 `auth.User`。
 """
 
 from django.db import models
@@ -207,7 +206,7 @@ class AppUser(TimestampedModel):
     """
     平台使用者主表。
 
-    對應目前 `users.json` 的核心欄位，包含：
+    這張表保存帳號主資料，包含：
     - 登入識別：username / email / password_hash
     - 顯示資訊：display_name
     - 權限身份：member / seller / admin
@@ -495,7 +494,7 @@ class Product(TimestampedModel):
     owner_display_name_snapshot = models.CharField(max_length=150, blank=True)
 
     class Meta:
-        # 商品主表預設依 `id` 排序，方便與既有 JSON fixture / 舊邏輯對齊。
+        # 商品主表預設依 `id` 排序，方便與既有測試資料與舊查詢習慣對齊。
         db_table = "products"
         ordering = ["id"]
 
@@ -802,9 +801,8 @@ class NewebpayStoreMapSelection(TimestampedModel):
     """
     藍新超商選店暫存紀錄表。
 
-    這張表對應目前 store-map flow 在 JSON 內保存的 record，
-    之後 `newebpay_logistics_real.py` 轉 ORM 時會以此取代
-    `newebpay_store_map_selections.json`。
+    這張表用來保存超商選店流程中的暫存狀態，
+    包含 prepare 階段的表單參數、callback 回填資料與門市資訊。
     """
 
     buyer = models.ForeignKey(
@@ -863,22 +861,6 @@ class AdminAuditLog(TimestampedModel):
     class Meta:
         db_table = "admin_audit_logs"
         ordering = ["-id"]
-
-
-#
-# ??? / ????????????? migration
-#
-# ???????
-# - ?? / ?? / ?? / ????
-# - ?? / ?? / ?? / ?? / tag
-# - ?? / ???? / ?? / ????
-# - ???? / callback log
-#
-# ??????????????JSON repository ??? ORM ?????
-# - ??? / ?? / ?? / ????
-# - ?? / ?? / ??
-# - Banner / ???? / ????
-# - ?? / ??
 
 
 #

@@ -11,8 +11,6 @@ from typing import Any, Dict, List, Optional
 
 from django.conf import settings
 from django.core.files.uploadedfile import UploadedFile
-from django.db import OperationalError, ProgrammingError
-from django.test.testcases import DatabaseOperationForbidden
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
@@ -20,15 +18,11 @@ from ..models import AppUser as AppUserModel
 from ..models import CommunityPost as CommunityPostModel
 from ..models import CommunityReply as CommunityReplyModel
 from ..models import CommunityVote as CommunityVoteModel
-from ..repositories import local_store
 from . import cloud_storage as cloud_storage_service
 from .privacy import anonymize_public_name
 
 MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024
 ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
-_LEGACY_FALLBACK_EXCEPTIONS = (DatabaseOperationForbidden, OperationalError, ProgrammingError)
-
-
 def _format_created_at(value: str) -> str:
     # 前台社群列表只需要固定的本地時間字串，這裡統一處理舊 ISO timestamp。
     parsed = parse_datetime(value) if value else None
@@ -44,15 +38,8 @@ def _resolve_author_user_id(author_user_id: int | None, author_username: str | N
     clean_username = str(author_username).strip().lower()
     if not clean_username:
         return None
-    try:
-        user_id = AppUserModel.objects.filter(username=clean_username).values_list("id", flat=True).first()
-        return int(user_id) if user_id else None
-    except _LEGACY_FALLBACK_EXCEPTIONS:
-        legacy_user = local_store.get_user_by_username(clean_username)
-        if not legacy_user:
-            return None
-        legacy_id = legacy_user.get("id")
-        return int(legacy_id) if legacy_id else None
+    user_id = AppUserModel.objects.filter(username=clean_username).values_list("id", flat=True).first()
+    return int(user_id) if user_id else None
 
 
 def _community_upload_dir() -> Path:
@@ -192,24 +179,21 @@ def _decorate_public_post(post: Dict[str, Any]) -> Dict[str, Any]:
 
 def list_voted_post_ids(*, username: str | None = None, user_id: int | None = None) -> set[int]:
     # 讓 API 可標示目前使用者已投過票的文章，避免前端只能依賴重新整理判斷狀態。
-    try:
-        if user_id:
-            return {
-                int(post_id)
-                for post_id in CommunityVoteModel.objects.filter(user_id=user_id).values_list("post_id", flat=True)
-            }
-        clean_username = str(username or "").strip().lower()
-        if not clean_username:
-            return set()
-        voter = AppUserModel.objects.filter(username=clean_username).only("id").first()
-        if not voter:
-            return set()
+    if user_id:
         return {
             int(post_id)
-            for post_id in CommunityVoteModel.objects.filter(user_id=voter.id).values_list("post_id", flat=True)
+            for post_id in CommunityVoteModel.objects.filter(user_id=user_id).values_list("post_id", flat=True)
         }
-    except _LEGACY_FALLBACK_EXCEPTIONS:
+    clean_username = str(username or "").strip().lower()
+    if not clean_username:
         return set()
+    voter = AppUserModel.objects.filter(username=clean_username).only("id").first()
+    if not voter:
+        return set()
+    return {
+        int(post_id)
+        for post_id in CommunityVoteModel.objects.filter(user_id=voter.id).values_list("post_id", flat=True)
+    }
 
 
 def _persist_post_record(post_record: Dict[str, Any]) -> Dict[str, Any]:
@@ -272,52 +256,34 @@ def save_editor_image(uploaded_file: UploadedFile) -> str:
 
 def list_posts(topic: Optional[str] = None) -> List[Dict[str, Any]]:
     # 社群首頁讀公開貼文列表；ORM 不可用時才退回 local JSON。
-    try:
-        queryset = CommunityPostModel.objects.filter(is_visible=True).select_related("author").prefetch_related("replies__author")
-        if topic:
-            queryset = queryset.filter(topic=topic)
-        items = []
-        for post in queryset.order_by("-id"):
-            items.append(_decorate_public_post(_db_post_to_record(post)))
-        return items
-    except _LEGACY_FALLBACK_EXCEPTIONS:
-        posts = local_store.get_posts()
-        if topic:
-            posts = [post for post in posts if str(post.get("topic") or "").strip().lower() == topic]
-        return [_decorate_public_post(_legacy_post_to_record(post)) for post in posts]
+    queryset = CommunityPostModel.objects.filter(is_visible=True).select_related("author").prefetch_related("replies__author")
+    if topic:
+        queryset = queryset.filter(topic=topic)
+    items = []
+    for post in queryset.order_by("-id"):
+        items.append(_decorate_public_post(_db_post_to_record(post)))
+    return items
 
 
 def list_all_posts(topic: Optional[str] = None) -> List[Dict[str, Any]]:
     # 管理端與會員中心需要未匿名化的 canonical payload，所以不走 public decorator。
-    try:
-        queryset = CommunityPostModel.objects.filter(is_visible=True).select_related("author").prefetch_related("replies__author")
-        if topic:
-            queryset = queryset.filter(topic=topic)
-        return [_db_post_to_record(post) for post in queryset.order_by("-id")]
-    except _LEGACY_FALLBACK_EXCEPTIONS:
-        posts = local_store.get_posts()
-        if topic:
-            posts = [post for post in posts if str(post.get("topic") or "").strip().lower() == topic]
-        return [_legacy_post_to_record(post) for post in posts]
+    queryset = CommunityPostModel.objects.filter(is_visible=True).select_related("author").prefetch_related("replies__author")
+    if topic:
+        queryset = queryset.filter(topic=topic)
+    return [_db_post_to_record(post) for post in queryset.order_by("-id")]
 
 
 def get_post_detail(post_id: int) -> Optional[Dict[str, Any]]:
     # 貼文詳情頁回傳單篇公開貼文，包含回覆與匿名化後的作者資訊。
-    try:
-        post = (
-            CommunityPostModel.objects.filter(id=post_id, is_visible=True)
-            .select_related("author")
-            .prefetch_related("replies__author")
-            .first()
-        )
-        if not post:
-            return None
-        return _decorate_public_post(_db_post_to_record(post))
-    except _LEGACY_FALLBACK_EXCEPTIONS:
-        post = local_store.get_post_by_id(post_id)
-        if not post:
-            return None
-        return _decorate_public_post(_legacy_post_to_record(post))
+    post = (
+        CommunityPostModel.objects.filter(id=post_id, is_visible=True)
+        .select_related("author")
+        .prefetch_related("replies__author")
+        .first()
+    )
+    if not post:
+        return None
+    return _decorate_public_post(_db_post_to_record(post))
 
 
 def summarize_posts(topic: Optional[str] = None) -> Dict[str, int]:
@@ -353,45 +319,18 @@ def create_post(
         raise ValueError("Please enter your post content.")
 
     tag_list = [tag.strip().lower() for tag in tags.split(",") if tag.strip()]
-    clean_username = str(author_username or "").strip().lower() or None
-    resolved_user_id = _resolve_author_user_id(author_user_id, clean_username)
-
-    try:
-        db_author = _get_or_create_author(author_username, author)
-        post = CommunityPostModel.objects.create(
-            author=db_author,
-            author_display_name_snapshot=author,
-            topic=topic,
-            title=title,
-            body_html=body,
-            votes_count=0,
-            is_visible=True,
-        )
-        post._legacy_tags_csv = ",".join(tag_list)
-        return _persist_post_record(_db_post_to_record(post))
-    except _LEGACY_FALLBACK_EXCEPTIONS:
-        posts = list(local_store.get_posts())
-        next_id = max((int(item.get("id", 0) or 0) for item in posts), default=0) + 1
-        now_iso = timezone.now().isoformat()
-        record = _persist_post_record(
-            {
-                "id": next_id,
-                "topic": topic,
-                "author": author,
-                "author_username": clean_username,
-                "author_user_id": resolved_user_id,
-                "title": title,
-                "body": body,
-                "tags": tag_list,
-                "votes": 0,
-                "created_at": now_iso,
-                "updated_at": now_iso,
-                "replies": [],
-            }
-        )
-        posts.append(record)
-        local_store.save_posts(posts)
-        return record
+    db_author = _get_or_create_author(author_username, author)
+    post = CommunityPostModel.objects.create(
+        author=db_author,
+        author_display_name_snapshot=author,
+        topic=topic,
+        title=title,
+        body_html=body,
+        votes_count=0,
+        is_visible=True,
+    )
+    post._legacy_tags_csv = ",".join(tag_list)
+    return _persist_post_record(_db_post_to_record(post))
 
 
 def _is_post_owner(post: Dict[str, Any], *, username: str | None = None, user_id: int | None = None) -> bool:
@@ -440,45 +379,23 @@ def update_post(
     # 只允許貼文作者更新內容；ORM / JSON 兩條路都回傳同一份標準化結果。
     normalized = _normalize_post_input(topic=topic, title=title, body=body, tags=tags)
 
-    try:
-        post = (
-            CommunityPostModel.objects.filter(id=post_id, is_visible=True)
-            .select_related("author")
-            .prefetch_related("replies__author")
-            .first()
-        )
-        if not post:
-            raise ValueError("Post not found.")
-        record = _db_post_to_record(post)
-        if not _is_post_owner(record, username=username, user_id=user_id):
-            raise PermissionError("You can only edit your own post.")
-        post.topic = normalized["topic"]
-        post.title = normalized["title"]
-        post.body_html = normalized["body"]
-        post.save()
-        post._legacy_tags_csv = ",".join(normalized["tags"])
-        return _persist_post_record(_db_post_to_record(post))
-    except _LEGACY_FALLBACK_EXCEPTIONS:
-        posts = list(local_store.get_posts())
-        updated_record = None
-        for index, item in enumerate(posts):
-            if int(item.get("id", 0) or 0) != int(post_id):
-                continue
-            record = _legacy_post_to_record(item)
-            if not _is_post_owner(record, username=username, user_id=user_id):
-                raise PermissionError("You can only edit your own post.")
-            item["topic"] = normalized["topic"]
-            item["title"] = normalized["title"]
-            item["body"] = normalized["body"]
-            item["tags"] = normalized["tags"]
-            item["updated_at"] = timezone.now().isoformat()
-            updated_record = _persist_post_record(item)
-            posts[index] = updated_record
-            break
-        if updated_record is None:
-            raise ValueError("Post not found.")
-        local_store.save_posts(posts)
-        return updated_record
+    post = (
+        CommunityPostModel.objects.filter(id=post_id, is_visible=True)
+        .select_related("author")
+        .prefetch_related("replies__author")
+        .first()
+    )
+    if not post:
+        raise ValueError("Post not found.")
+    record = _db_post_to_record(post)
+    if not _is_post_owner(record, username=username, user_id=user_id):
+        raise PermissionError("You can only edit your own post.")
+    post.topic = normalized["topic"]
+    post.title = normalized["title"]
+    post.body_html = normalized["body"]
+    post.save()
+    post._legacy_tags_csv = ",".join(normalized["tags"])
+    return _persist_post_record(_db_post_to_record(post))
 
 
 def delete_post(
@@ -489,28 +406,13 @@ def delete_post(
     enforce_owner: bool = True,
 ) -> None:
     # 刪文預設會檢查作者身分；管理端可透過 `enforce_owner=False` 略過這層限制。
-    try:
-        post = CommunityPostModel.objects.filter(id=post_id).select_related("author").first()
-        if not post:
-            raise ValueError("Post not found.")
-        record = _db_post_to_record(post)
-        if enforce_owner and not _is_post_owner(record, username=username, user_id=user_id):
-            raise PermissionError("You can only delete your own post.")
-        post.delete()
-    except _LEGACY_FALLBACK_EXCEPTIONS:
-        posts = list(local_store.get_posts())
-        remaining = []
-        removed = None
-        for item in posts:
-            if int(item.get("id", 0) or 0) == int(post_id):
-                removed = _legacy_post_to_record(item)
-                continue
-            remaining.append(item)
-        if removed is None:
-            raise ValueError("Post not found.")
-        if enforce_owner and not _is_post_owner(removed, username=username, user_id=user_id):
-            raise PermissionError("You can only delete your own post.")
-        local_store.save_posts(remaining)
+    post = CommunityPostModel.objects.filter(id=post_id).select_related("author").first()
+    if not post:
+        raise ValueError("Post not found.")
+    record = _db_post_to_record(post)
+    if enforce_owner and not _is_post_owner(record, username=username, user_id=user_id):
+        raise PermissionError("You can only delete your own post.")
+    post.delete()
 
 
 def create_reply(
@@ -530,87 +432,44 @@ def create_reply(
     if not body:
         raise ValueError("Please enter your reply.")
 
-    clean_username = str(author_username or "").strip().lower() or None
-    resolved_user_id = _resolve_author_user_id(author_user_id, clean_username)
-
-    try:
-        post = CommunityPostModel.objects.filter(id=post_id, is_visible=True).select_related("author").first()
-        if not post:
-            raise ValueError("Post not found.")
-        db_author = _get_or_create_author(author_username, author)
-        reply = CommunityReplyModel.objects.create(
-            post=post,
-            author=db_author,
-            author_display_name_snapshot=author,
-            body=body,
-            is_visible=True,
-        )
-        persisted = _persist_post_record(_db_post_to_record(post))
-        for item in persisted.get("replies", []):
-            if int(item.get("id", 0) or 0) == int(reply.id):
-                return item
-        return _db_reply_to_record(reply)
-    except _LEGACY_FALLBACK_EXCEPTIONS:
-        posts = list(local_store.get_posts())
-        created_reply = None
-        for item in posts:
-            if int(item.get("id", 0) or 0) != int(post_id):
-                continue
-            replies = list(item.get("replies", []) or [])
-            next_id = max((int(reply.get("id", 0) or 0) for reply in replies), default=0) + 1
-            created_reply = {
-                "id": next_id,
-                "author": author,
-                "author_username": clean_username,
-                "author_user_id": resolved_user_id,
-                "body": body,
-                "created_at": timezone.now().isoformat(),
-            }
-            replies.append(created_reply)
-            item["replies"] = replies
-            item["updated_at"] = timezone.now().isoformat()
-            break
-        if created_reply is None:
-            raise ValueError("Post not found.")
-        local_store.save_posts(posts)
-        return _persist_post_record({"replies": [created_reply]}).get("replies", [created_reply])[0]
+    post = CommunityPostModel.objects.filter(id=post_id, is_visible=True).select_related("author").first()
+    if not post:
+        raise ValueError("Post not found.")
+    db_author = _get_or_create_author(author_username, author)
+    reply = CommunityReplyModel.objects.create(
+        post=post,
+        author=db_author,
+        author_display_name_snapshot=author,
+        body=body,
+        is_visible=True,
+    )
+    persisted = _persist_post_record(_db_post_to_record(post))
+    for item in persisted.get("replies", []):
+        if int(item.get("id", 0) or 0) == int(reply.id):
+            return item
+    return _db_reply_to_record(reply)
 
 
 def upvote_post(post_id: int, *, username: str | None = None, user_id: int | None = None) -> Dict[str, Any]:
     # 已登入使用者在 ORM 下會去重複投票；訪客或 fallback JSON 則採單純累加。
-    try:
-        post = CommunityPostModel.objects.filter(id=post_id, is_visible=True).select_related("author").first()
-        if not post:
-            raise ValueError("Post not found.")
-        if username or user_id:
-            voter = None
-            if user_id:
-                voter = AppUserModel.objects.filter(id=user_id).first()
-            if not voter and username:
-                voter = _get_or_create_author(username, username)
-            if voter:
-                _, created = CommunityVoteModel.objects.get_or_create(post=post, user=voter, defaults={"value": 1})
-                if created:
-                    post.votes_count = int(post.votes_count or 0) + 1
-                    post.save(update_fields=["votes_count", "updated_at"])
-            else:
+    post = CommunityPostModel.objects.filter(id=post_id, is_visible=True).select_related("author").first()
+    if not post:
+        raise ValueError("Post not found.")
+    if username or user_id:
+        voter = None
+        if user_id:
+            voter = AppUserModel.objects.filter(id=user_id).first()
+        if not voter and username:
+            voter = _get_or_create_author(username, username)
+        if voter:
+            _, created = CommunityVoteModel.objects.get_or_create(post=post, user=voter, defaults={"value": 1})
+            if created:
                 post.votes_count = int(post.votes_count or 0) + 1
                 post.save(update_fields=["votes_count", "updated_at"])
         else:
             post.votes_count = int(post.votes_count or 0) + 1
             post.save(update_fields=["votes_count", "updated_at"])
-        return _persist_post_record(_db_post_to_record(post))
-    except _LEGACY_FALLBACK_EXCEPTIONS:
-        posts = list(local_store.get_posts())
-        updated = None
-        for item in posts:
-            if int(item.get("id", 0) or 0) != int(post_id):
-                continue
-            item["votes"] = int(item.get("votes", 0) or 0) + 1
-            item["updated_at"] = timezone.now().isoformat()
-            updated = _persist_post_record(item)
-            break
-        if updated is None:
-            raise ValueError("Post not found.")
-        local_store.save_posts(posts)
-        return updated
+    else:
+        post.votes_count = int(post.votes_count or 0) + 1
+        post.save(update_fields=["votes_count", "updated_at"])
+    return _persist_post_record(_db_post_to_record(post))

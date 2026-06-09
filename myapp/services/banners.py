@@ -13,7 +13,6 @@ from django.utils import timezone
 from ..models import AppUser as AppUserModel
 from ..models import Banner as BannerModel
 from ..models import MediaAsset as MediaAssetModel
-from ..repositories import local_store
 from . import cloud_storage as cloud_storage_service
 
 # Banner service 負責前台輪播、會員申請投放與後台審核管理。
@@ -343,24 +342,12 @@ def _is_banner_visible(item: Dict[str, Any]) -> bool:
 
 def _persist_banner_record(record: Dict[str, Any]) -> None:
     # JSON fallback 模式下，單筆 Banner 寫回 local snapshot。
-    if _db_banners_enabled():
-        return
-    banners = [_normalize_banner(item) for item in local_store.get_banners()]
-    target_id = int(record["id"])
-    for index, item in enumerate(banners):
-        if int(item.get("id", 0)) == target_id:
-            banners[index] = _normalize_banner(record)
-            break
-    else:
-        banners.append(_normalize_banner(record))
-    local_store.save_banners(_sort_user_applications(banners))
+    return
 
 
 def _persist_banners_snapshot(records: List[Dict[str, Any]]) -> None:
     # 需要整批重排 sort_order 時，集中從這裡覆蓋 JSON 快照。
-    if _db_banners_enabled():
-        return
-    local_store.save_banners(_sort_user_applications(records))
+    return
 
 
 def _sync_banner_record_to_orm(record: Dict[str, Any]) -> BannerModel:
@@ -427,10 +414,7 @@ def _list_db_banners() -> List[Dict[str, Any]]:
 
 def _find_banner(banner_id: int) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
     # 後台編輯 / 審核 / 刪除 Banner 前，先透過這個 helper 找到目標與當前列表。
-    if _db_banners_enabled():
-        banners = _list_db_banners()
-    else:
-        banners = [_normalize_banner(item) for item in local_store.get_banners()]
+    banners = _list_db_banners()
     for banner in banners:
         if banner["id"] == banner_id:
             return banners, banner
@@ -439,31 +423,23 @@ def _find_banner(banner_id: int) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
 
 def list_public_banners() -> List[Dict[str, Any]]:
     # 前台首頁輪播只取目前可見的 Banner。
-    if _db_banners_enabled():
-        banners = _list_db_banners()
-        return [item for item in _sort_banners(banners) if item.get("is_currently_visible")]
-    return [item for item in _sort_banners(local_store.get_banners()) if item.get("is_currently_visible")]
+    banners = _list_db_banners()
+    return [item for item in _sort_banners(banners) if item.get("is_currently_visible")]
 
 
 def list_user_applications(username: str) -> List[Dict[str, Any]]:
     # 會員中心只顯示某位使用者自己提交的 Banner 申請。
     clean_username = str(username or "").strip().lower()
-    if _db_banners_enabled():
-        banners = _list_db_banners()
-        return _sort_user_applications(
-            item for item in banners if str(item.get("applicant_username", "")).strip().lower() == clean_username
-        )
+    banners = _list_db_banners()
     return _sort_user_applications(
-        item for item in local_store.get_banners() if str(item.get("applicant_username", "")).strip().lower() == clean_username
+        item for item in banners if str(item.get("applicant_username", "")).strip().lower() == clean_username
     )
 
 
 def list_admin_banners() -> List[Dict[str, Any]]:
     # 後台需要看到所有 Banner，不論狀態是否可見。
-    if _db_banners_enabled():
-        banners = _list_db_banners()
-        return _sort_user_applications(banners)
-    return _sort_user_applications(local_store.get_banners())
+    banners = _list_db_banners()
+    return _sort_user_applications(banners)
 
 
 def submit_banner_application(

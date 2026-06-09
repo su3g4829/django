@@ -26,7 +26,6 @@ from ..models import ServiceRequestStatus as ServiceRequestStatusModel
 from ..models import ServiceRequestType as ServiceRequestTypeModel
 from ..models import ShipmentEvent as ShipmentEventModel
 from ..models import ShipmentEventType as ShipmentEventTypeModel
-from ..repositories import local_store
 from . import auth_demo
 from . import cart as cart_service
 from . import customer_center
@@ -34,7 +33,7 @@ from . import product_management
 
 logger = logging.getLogger(__name__)
 
-# 這個模組同時負責 checkout、訂單查詢、售後流程，以及 JSON/ORM 過渡期同步。
+# 這個模組負責 checkout、訂單查詢、售後流程與金流狀態同步。
 # 下方常數會被買家、賣家、管理端與金流整合流程重用。
 
 ORDER_STATUS_CONFIRMED = "confirmed"
@@ -142,7 +141,7 @@ def _log_checkout_checkpoint(stage: str, **extra: Any) -> None:
 
 
 def _db_orders_enabled() -> bool:
-    # 檢查訂單相關 ORM 表是否已可用，用來決定後續要走 ORM 還是 legacy JSON 路徑。
+    # 檢查訂單相關 ORM 表是否已可用。
     """確認第一波訂單表已可讀寫。
 
     這裡只檢查資料表是否存在，不用 `.exists()`，避免空表被誤判成 ORM 不可用。
@@ -163,11 +162,11 @@ def _ensure_db_user_from_username(
     role: str = "",
 ) -> AppUserModel | None:
     # 訂單 ORM 需要 buyer / seller 外鍵，這裡會依 username 確保對應 `AppUser` 存在。
-    """依照現有 JSON snapshot 補齊 ORM 使用者。
+    """依照現有資料補齊 ORM 使用者。
 
     訂單同步會需要 buyer / seller FK；這裡採最保守策略：
     - 先找 ORM 既有使用者
-    - 沒有再從 local_store 補建最小資料
+    - 沒有則建立最小可用使用者資料
     """
     clean_username = (username or "").strip()
     if not clean_username or not _db_orders_enabled():
@@ -203,8 +202,8 @@ def _ensure_db_user_from_username(
 
 
 def _format_money_str(value: Decimal | str | int | float) -> str:
-    # 統一輸出為兩位小數字串，供 API payload 與 JSON snapshot 共用。
-    """統一把金額格式化成現有 JSON/API 使用的兩位小數字串。"""
+    # 統一輸出為兩位小數字串，供 API payload 與資料快照共用。
+    """統一把金額格式化成現有 API 使用的兩位小數字串。"""
     return format(Decimal(str(value)).quantize(Decimal("0.01")), ".2f")
 
 
@@ -364,8 +363,8 @@ def _order_record_from_model(order: OrderModel) -> Dict[str, Any]:
 
 
 def _merge_order_records(preferred_record: Dict[str, Any], fallback_record: Dict[str, Any] | None = None) -> Dict[str, Any]:
-    # ORM 與 JSON 並行期間，盡量以 preferred 為主，但保留 fallback 裡仍有價值的欄位。
-    """合併 ORM 與 JSON 訂單資料，保留 JSON 尚未落表的欄位。"""
+    # 盡量以 preferred 為主，但保留 fallback 裡仍有價值的欄位。
+    """合併兩份訂單 payload，並以 preferred 資料為準。"""
     merged = deepcopy(fallback_record or {})
     preferred = deepcopy(preferred_record)
     for key, value in preferred.items():
@@ -390,8 +389,8 @@ def _db_orders_queryset():
 
 
 def _json_order_by_id(order_id: int) -> Dict[str, Any] | None:
-    """Return one legacy JSON order payload by id when it still exists locally."""
-    return next((deepcopy(item) for item in local_store.get_orders() if int(item.get("id") or 0) == order_id), None)
+    """Return the canonical ORM-backed order payload by id."""
+    return _db_order_record_by_id(order_id)
 
 
 def _db_order_record_by_id(order_id: int) -> Dict[str, Any] | None:
@@ -405,56 +404,30 @@ def _db_order_record_by_id(order_id: int) -> Dict[str, Any] | None:
 
 
 def _merged_order_record_by_id(order_id: int) -> Dict[str, Any] | None:
-    """Return one order payload with ORM preferred and JSON-only fields preserved."""
-    orm_record = _db_order_record_by_id(order_id)
-    if _db_orders_enabled():
-        return orm_record
-    json_record = _json_order_by_id(order_id)
-    if orm_record and json_record:
-        return _merge_order_records(orm_record, json_record)
-    return orm_record or json_record
+    """Return one canonical ORM-backed order payload by id."""
+    return _db_order_record_by_id(order_id)
 
 
 def _save_order_record_to_json(order_record: Dict[str, Any]) -> Dict[str, Any]:
-    """Persist one legacy order payload back into `orders.json` for compatibility."""
-    orders = list(local_store.get_orders())
-    order_id = int(order_record.get("id") or 0)
-    existing = next((deepcopy(item) for item in orders if int(item.get("id") or 0) == order_id), None)
-    merged = _merge_order_records(order_record, existing)
-
-    replaced = False
-    for index, item in enumerate(orders):
-        if int(item.get("id") or 0) != order_id:
-            continue
-        orders[index] = merged
-        replaced = True
-        break
-    if not replaced:
-        orders.append(merged)
-    local_store.save_orders(orders)
-    return merged
+    """Keep the legacy compatibility hook as an in-memory no-op."""
+    return deepcopy(order_record)
 
 
 def _persist_order_record(order_record: Dict[str, Any]) -> Dict[str, Any]:
-    """Write one order through ORM first, then sync the canonical payload back to JSON."""
+    """Persist one order through ORM and return the canonical payload."""
     order_model = _sync_order_record_to_orm(order_record)
     if order_model is not None:
         canonical = _merge_order_records(_order_record_from_model(order_model), order_record)
     else:
         canonical = deepcopy(order_record)
-    if _db_orders_enabled():
-        return canonical
-    return _save_order_record_to_json(canonical)
+    return canonical
 
 
 def _merged_order_records() -> List[Dict[str, Any]]:
-    # 取得目前可用的完整訂單清單；ORM 啟用後優先走 ORM，否則退回 JSON。
-    """回傳 ORM 優先、JSON fallback 的訂單清單。"""
-    if _db_orders_enabled():
-        records = [_order_record_from_model(order) for order in _db_orders_queryset()]
-        return sorted(records, key=lambda item: item.get("created_at", ""), reverse=True)
-    json_records = {int(order.get("id", 0)): deepcopy(order) for order in local_store.get_orders() if order.get("id")}
-    return list(json_records.values())
+    # 取得目前可用的完整訂單清單。
+    """回傳目前 ORM 中的訂單清單。"""
+    records = [_order_record_from_model(order) for order in _db_orders_queryset()]
+    return sorted(records, key=lambda item: item.get("created_at", ""), reverse=True)
 
 
 def _sync_payment_record_to_orm(order_model: OrderModel, order_record: Dict[str, Any]) -> None:
@@ -1243,7 +1216,7 @@ def _enrich_order_common(order: Dict[str, Any]) -> Dict[str, Any]:
 # 1. 驗證 cart、地址、配送方式、付款方式
 # 2. 重算 totals 與 seller shipping groups，避免直接信任前端 snapshot
 # 3. 扣庫存並建立訂單 item snapshot
-# 4. 將同一份訂單結果同步寫入 ORM 與 JSON fallback
+# 4. 將同一份訂單結果寫入 ORM，並回傳統一 payload
 def create_order_from_cart(
     session,
     user: Dict[str, str],
@@ -1343,17 +1316,12 @@ def create_order_from_cart(
         cart_item_count=len(items),
     )
     totals = checkout_pricing["totals"]
-    db_orders_enabled = _db_orders_enabled()
-    if db_orders_enabled:
-        latest_order = OrderModel.objects.order_by("-id").only("id").first()
-        next_id = latest_order.id + 1 if latest_order else 1
-    else:
-        json_orders = local_store.get_orders()
-        next_id = max((int(order["id"]) for order in json_orders if order.get("id")), default=0) + 1
+    latest_order = OrderModel.objects.order_by("-id").only("id").first()
+    next_id = latest_order.id + 1 if latest_order else 1
     _log_checkout_checkpoint(
         "create_order_next_id_resolved",
         username=user.get("username", ""),
-        db_orders_enabled=db_orders_enabled,
+        db_orders_enabled=_db_orders_enabled(),
         next_order_id=next_id,
     )
 
@@ -1767,11 +1735,11 @@ def update_seller_order(
 # - 給賣家報表頁使用
 # - 統計訂單數、銷量、營收與熱賣商品
 def build_sales_report(username: str, *, date_from: str = "", date_to: str = "") -> Dict[str, Any]:
-    # 報表目前完全從賣家可見訂單推導，不另外建立聚合表，方便先維持 JSON/ORM 雙軌相容。
+    # 報表目前完全從賣家可見訂單推導，不另外建立聚合表。
     """依賣家與日期區間彙整銷售報表資料。
 
     參數:
-        username: 會員帳號，通常也是 JSON 資料中的唯一識別鍵。
+        username: 會員帳號。
         date_from: 查詢區間起日，格式通常為 YYYY-MM-DD。
         date_to: 查詢區間迄日，格式通常為 YYYY-MM-DD。
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 from datetime import datetime, timedelta
 import secrets
 from typing import Any, Dict, List
@@ -13,7 +12,6 @@ from django.utils import timezone
 
 from ..models import AppUser as AppUserModel
 from ..models import PasswordResetToken as PasswordResetTokenModel
-from ..repositories import local_store
 from . import auth_demo
 
 TOKEN_TTL_MINUTES = 30
@@ -109,9 +107,9 @@ def _mailbox_item(record: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _list_json_records() -> List[Dict[str, Any]]:
-    records = [_normalize_record(item) for item in local_store.get_password_reset_tokens()]
-    return sorted(records, key=lambda item: item.get("created_at", ""), reverse=True)
+def _list_db_records() -> List[Dict[str, Any]]:
+    queryset = PasswordResetTokenModel.objects.select_related("user").all().order_by("-created_at")
+    return [_db_record_to_dict(item) for item in queryset]
 
 
 def request_password_reset(email: str) -> Dict[str, Any]:
@@ -136,33 +134,20 @@ def request_password_reset(email: str) -> Dict[str, Any]:
         "reset_url": _build_reset_url(token),
     }
 
-    if _db_enabled():
-        db_user = AppUserModel.objects.get(username=user["username"])
-        PasswordResetTokenModel.objects.create(
-            user=db_user,
-            email=clean_email,
-            token=token,
-            expires_at=now + timedelta(minutes=TOKEN_TTL_MINUTES),
-        )
-    else:
-        records = deepcopy(local_store.get_password_reset_tokens())
-        next_id = max([int(item.get("id", 0)) for item in records] or [0]) + 1
-        record["id"] = next_id
-        records.append(record)
-        local_store.save_password_reset_tokens(records)
+    db_user = AppUserModel.objects.get(username=user["username"])
+    PasswordResetTokenModel.objects.create(
+        user=db_user,
+        email=clean_email,
+        token=token,
+        expires_at=now + timedelta(minutes=TOKEN_TTL_MINUTES),
+    )
 
     return {"detail": "If the email exists, a reset link has been prepared in the dev mailbox.", "created": True}
 
 
 def list_dev_mailbox(email: str = "") -> List[Dict[str, Any]]:
     clean_email = str(email or "").strip().lower()
-    if _db_enabled():
-        queryset = PasswordResetTokenModel.objects.select_related("user").all().order_by("-created_at")
-        if clean_email:
-            queryset = queryset.filter(email=clean_email)
-        return [_mailbox_item(_db_record_to_dict(item)) for item in queryset[:MAILBOX_LIMIT]]
-
-    records = _list_json_records()
+    records = _list_db_records()
     if clean_email:
         records = [item for item in records if item.get("email") == clean_email]
     return [_mailbox_item(item) for item in records[:MAILBOX_LIMIT]]
@@ -181,16 +166,10 @@ def get_token_status(token: str) -> Dict[str, Any]:
     if not clean_token:
         raise ValueError(INVALID_TOKEN_MESSAGE)
 
-    if _db_enabled():
-        record = PasswordResetTokenModel.objects.select_related("user").filter(token=clean_token).first()
-        if not record:
-            raise ValueError(INVALID_TOKEN_MESSAGE)
-        payload = _mailbox_item(_db_record_to_dict(record))
-    else:
-        record = next((item for item in _list_json_records() if item.get("token") == clean_token), None)
-        if not record:
-            raise ValueError(INVALID_TOKEN_MESSAGE)
-        payload = _mailbox_item(record)
+    record = PasswordResetTokenModel.objects.select_related("user").filter(token=clean_token).first()
+    if not record:
+        raise ValueError(INVALID_TOKEN_MESSAGE)
+    payload = _mailbox_item(_db_record_to_dict(record))
 
     if payload["is_used"] or payload["is_expired"]:
         raise ValueError(INVALID_TOKEN_MESSAGE)
@@ -199,17 +178,7 @@ def get_token_status(token: str) -> Dict[str, Any]:
 
 def _mark_token_used(token: str) -> None:
     used_at = timezone.now()
-    if _db_enabled():
-        PasswordResetTokenModel.objects.filter(token=token, used_at__isnull=True).update(used_at=used_at)
-        return
-
-    records = deepcopy(local_store.get_password_reset_tokens())
-    for item in records:
-        if str(item.get("token") or "") != token:
-            continue
-        item["used_at"] = used_at.isoformat()
-        local_store.save_password_reset_tokens(records)
-        return
+    PasswordResetTokenModel.objects.filter(token=token, used_at__isnull=True).update(used_at=used_at)
 
 
 def confirm_password_reset(token: str, new_password: str) -> Dict[str, Any]:

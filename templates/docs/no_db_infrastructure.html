@@ -1,18 +1,25 @@
 {% extends "base.html" %}
 <!--
   頁面說明：
-  1. 彙整目前在不使用資料庫前提下導入的上線級基礎設施。
-  2. 包含環境設定、快取、限流、健康檢查與 logging。
+  1. 說明目前正式環境仍會依賴的基礎設施設定。
+  2. 雖然路徑名稱保留 no-db 歷史命名，但內容已更新為 DB-first 架構。
+  3. 主要涵蓋環境變數、快取、限流、健康檢查、session 與 logging。
 -->
 
-{% block title %}No-DB 基礎設施{% endblock %}
+{% block title %}基礎設施與運行設定{% endblock %}
 
 {% block content %}
 <div class="mb-4">
-  <h1 class="h3 mb-2">No-DB 基礎設施</h1>
+  <h1 class="h3 mb-2">基礎設施與運行設定</h1>
   <p class="text-secondary mb-0">
-    這份頁面用來說明在尚未導入 ORM / 資料庫前，專案已補上的 production-oriented 基礎能力。
+    這份頁面整理目前正式環境仍需要的基礎能力。專案主資料已經改由 Django ORM 與 MySQL 管理，
+    但快取、session、健康檢查、限流與 logging 仍是獨立的重要運行元件。
   </p>
+</div>
+
+<div class="alert alert-light border mb-4" role="alert">
+  路徑 <code>/docs/no-db-infrastructure/</code> 仍保留給舊連結與文件使用，
+  但本頁內容已不再代表「無資料庫架構」，而是目前 DB-first 專案的營運設定摘要。
 </div>
 
 <div class="row g-4 mb-4">

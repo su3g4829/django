@@ -1,7 +1,13 @@
 ﻿"""專案測試集合。
 
-這裡主要使用 `SimpleTestCase` 搭配本地 JSON fixture，
-驗證頁面流程、DRF API、購物車、訂單、賣家中心與管理後台功能。
+測試內容涵蓋：
+- 頁面流程與文件頁
+- DRF API
+- 商品、購物車、訂單、會員中心
+- 賣家中心、社群、Banner 與管理後台
+
+目前多數整合測試會先 seed ORM 資料，再透過 API 或 service 驗證
+DB-first 架構下的實際行為。
 """
 
 import json
@@ -17,6 +23,7 @@ from django.conf import settings
 from django.contrib.auth.hashers import check_password, make_password
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, SimpleTestCase, TestCase, override_settings
+from django.utils.dateparse import parse_datetime
 from django.utils import timezone
 
 from .models import AppUser as AppUserModel
@@ -46,11 +53,11 @@ from .models import UserFavorite as UserFavoriteModel
 from .models import UserAddress as UserAddressModel
 from .models import UserInvoiceProfile as UserInvoiceProfileModel
 from .models import UserShippingRule as UserShippingRuleModel
-from .repositories import local_store
 from .services import auth_demo
 from .services import banners as banner_service
 from .services import cloud_storage as cloud_storage_service
 from .services import community as community_service
+from .services import customer_center
 from .services import newebpay_payment_real as newebpay_payment_real_service
 from .services import orders as orders_service
 from .services import password_reset as password_reset_service
@@ -457,6 +464,331 @@ USERS_FIXTURE = [
 ]
 
 
+def _fixture_datetime(value: str):
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    parsed = parse_datetime(raw)
+    if parsed is not None:
+        return parsed
+    if len(raw) == 10:
+        parsed = timezone.datetime.fromisoformat(f"{raw}T00:00:00")
+        return timezone.make_aware(parsed, timezone.get_current_timezone())
+    return None
+
+
+def _seed_users(records=None):
+    for user in records or USERS_FIXTURE:
+        auth_demo._sync_user_to_orm(dict(user))
+
+
+def _seed_categories(records=None):
+    for category in records or CATEGORIES_FIXTURE:
+        CategoryModel.objects.update_or_create(
+            id=int(category["id"]),
+            defaults={
+                "slug": str(category.get("slug") or "").strip(),
+                "name": str(category.get("name") or category.get("label") or "").strip(),
+                "description": str(category.get("description") or "").strip(),
+                "is_active": bool(category.get("is_active", True)),
+            },
+        )
+
+
+def _seed_products(records=None):
+    category_slugs = {str(item.get("slug") or "").strip().lower() for item in CATEGORIES_FIXTURE}
+    for product_record in records or PRODUCTS_FIXTURE:
+        seeded_record = dict(product_record)
+        category_slug = str(seeded_record.get("category") or seeded_record.get("category_slug") or "").strip().lower()
+        if category_slug:
+            seeded_record.setdefault("category_slug", category_slug)
+            if category_slug not in category_slugs:
+                CategoryModel.objects.get_or_create(
+                    slug=category_slug,
+                    defaults={"name": category_slug.replace("-", " ").title(), "is_active": True},
+                )
+                category_slugs.add(category_slug)
+        owner_username = str(seeded_record.get("owner_username") or "").strip().lower()
+        owner_snapshot = auth_demo.get_user_by_username(owner_username) if owner_username else None
+        if not owner_snapshot:
+            owner_snapshot = {
+                "username": owner_username or "alice",
+                "display_name": str(seeded_record.get("owner_display_name") or owner_username or "Alice").strip(),
+                "role": "seller",
+            }
+        product_management._sync_product_record_to_orm(seeded_record, owner_snapshot=owner_snapshot)
+
+
+def _seed_reviews(records=None):
+    ProductReviewModel.objects.all().delete()
+    for review in records or REVIEWS_FIXTURE:
+        product = ProductModel.objects.filter(id=int(review["product_id"])).first()
+        if product is None:
+            continue
+        author_name = str(review.get("author") or "").strip() or "Reviewer"
+        username = author_name.lower().replace(" ", "")
+        author_snapshot = auth_demo.get_user_by_username(username)
+        if not author_snapshot:
+            auth_demo._sync_user_to_orm({"username": username, "password": "demo123", "display_name": author_name, "role": "member"})
+            author_snapshot = auth_demo.get_user_by_username(username)
+        author = AppUserModel.objects.get(username=username)
+        obj, _ = ProductReviewModel.objects.update_or_create(
+            id=int(review["id"]),
+            defaults={
+                "product": product,
+                "author": author,
+                "author_display_name_snapshot": author_name,
+                "rating": int(review.get("rating", 5)),
+                "title": str(review.get("title") or ""),
+                "body": str(review.get("body") or ""),
+                "is_visible": True,
+            },
+        )
+        created_at = _fixture_datetime(str(review.get("created_at") or ""))
+        if created_at:
+            ProductReviewModel.objects.filter(id=obj.id).update(created_at=created_at, updated_at=created_at)
+
+
+def _seed_questions(records=None):
+    ProductQuestionAnswerModel.objects.all().delete()
+    ProductQuestionModel.objects.all().delete()
+    for question in records or QUESTIONS_FIXTURE:
+        product = ProductModel.objects.filter(id=int(question["product_id"])).first()
+        if product is None:
+            continue
+        author_name = str(question.get("author") or "").strip() or "Question User"
+        username = author_name.lower().replace(" ", "")
+        if not auth_demo.get_user_by_username(username):
+            auth_demo._sync_user_to_orm({"username": username, "password": "demo123", "display_name": author_name, "role": "member"})
+        author = AppUserModel.objects.get(username=username)
+        obj, _ = ProductQuestionModel.objects.update_or_create(
+            id=int(question["id"]),
+            defaults={
+                "product": product,
+                "author": author,
+                "author_display_name_snapshot": author_name,
+                "title": str(question.get("title") or ""),
+                "body": str(question.get("body") or ""),
+                "is_visible": True,
+            },
+        )
+        created_at = _fixture_datetime(str(question.get("created_at") or ""))
+        if created_at:
+            ProductQuestionModel.objects.filter(id=obj.id).update(created_at=created_at, updated_at=created_at)
+        for answer in question.get("answers", []) or []:
+            answer_name = str(answer.get("author") or "").strip() or "Answer User"
+            answer_username = answer_name.lower().replace(" ", "")
+            if not auth_demo.get_user_by_username(answer_username):
+                auth_demo._sync_user_to_orm({"username": answer_username, "password": "demo123", "display_name": answer_name, "role": "member"})
+            answer_author = AppUserModel.objects.get(username=answer_username)
+            answer_obj, _ = ProductQuestionAnswerModel.objects.update_or_create(
+                id=int(answer["id"]),
+                defaults={
+                    "question": obj,
+                    "author": answer_author,
+                    "author_display_name_snapshot": answer_name,
+                    "body": str(answer.get("body") or ""),
+                    "is_visible": True,
+                },
+            )
+            answer_created_at = _fixture_datetime(str(answer.get("created_at") or ""))
+            if answer_created_at:
+                ProductQuestionAnswerModel.objects.filter(id=answer_obj.id).update(
+                    created_at=answer_created_at,
+                    updated_at=answer_created_at,
+                )
+
+
+def _seed_posts(records=None):
+    CommunityVoteModel.objects.all().delete()
+    CommunityReplyModel.objects.all().delete()
+    CommunityPostModel.objects.all().delete()
+    for post in records or POSTS_FIXTURE:
+        author_name = str(post.get("author") or "").strip() or "Community User"
+        author_username = str(post.get("author_username") or "").strip().lower() or author_name.lower().replace(" ", "")
+        if not auth_demo.get_user_by_username(author_username):
+            auth_demo._sync_user_to_orm({"username": author_username, "password": "demo123", "display_name": author_name, "role": "member"})
+        author = AppUserModel.objects.get(username=author_username)
+        obj, _ = CommunityPostModel.objects.update_or_create(
+            id=int(post["id"]),
+            defaults={
+                "author": author,
+                "author_display_name_snapshot": author_name,
+                "topic": str(post.get("topic") or "general"),
+                "title": str(post.get("title") or ""),
+                "body_html": str(post.get("body") or ""),
+                "votes_count": int(post.get("votes", 0) or 0),
+                "is_visible": True,
+            },
+        )
+        created_at = _fixture_datetime(str(post.get("created_at") or ""))
+        if created_at:
+            CommunityPostModel.objects.filter(id=obj.id).update(created_at=created_at, updated_at=created_at)
+        for reply in post.get("replies", []) or []:
+            reply_name = str(reply.get("author") or "").strip() or "Reply User"
+            reply_username = str(reply.get("author_username") or "").strip().lower() or reply_name.lower().replace(" ", "")
+            if not auth_demo.get_user_by_username(reply_username):
+                auth_demo._sync_user_to_orm({"username": reply_username, "password": "demo123", "display_name": reply_name, "role": "member"})
+            reply_author = AppUserModel.objects.get(username=reply_username)
+            reply_obj, _ = CommunityReplyModel.objects.update_or_create(
+                id=int(reply["id"]),
+                defaults={
+                    "post": obj,
+                    "author": reply_author,
+                    "author_display_name_snapshot": reply_name,
+                    "body": str(reply.get("body") or ""),
+                    "is_visible": True,
+                },
+            )
+            reply_created_at = _fixture_datetime(str(reply.get("created_at") or ""))
+            if reply_created_at:
+                CommunityReplyModel.objects.filter(id=reply_obj.id).update(
+                    created_at=reply_created_at,
+                    updated_at=reply_created_at,
+                )
+
+
+def _seed_banners(records=None):
+    BannerModel.objects.all().delete()
+    for banner in records or BANNERS_FIXTURE:
+        banner_service._sync_banner_record_to_orm(dict(banner))
+
+
+def _seed_recommendations(records=None):
+    ProductRecommendationModel.objects.all().delete()
+    for item in records or RECOMMENDATIONS_FIXTURE:
+        source = ProductModel.objects.filter(id=int(item["product_id"])).first()
+        if source is None:
+            continue
+        for rank, product_id in enumerate(item.get("similar_ids", []) or [], start=1):
+            recommended = ProductModel.objects.filter(id=int(product_id)).first()
+            if recommended is None:
+                continue
+            ProductRecommendationModel.objects.update_or_create(
+                source_product=source,
+                recommended_product=recommended,
+                defaults={"reason": "similar", "score": max(1, 100 - rank)},
+            )
+        for rank, product_id in enumerate(item.get("also_bought_ids", []) or [], start=1):
+            recommended = ProductModel.objects.filter(id=int(product_id)).first()
+            if recommended is None:
+                continue
+            ProductRecommendationModel.objects.update_or_create(
+                source_product=source,
+                recommended_product=recommended,
+                defaults={"reason": "also_bought", "score": max(1, 100 - rank)},
+            )
+
+
+def _seed_orders(records=None):
+    for order in records or ORDERS_FIXTURE:
+        orders_service._sync_order_record_to_orm(dict(order))
+
+
+def _seed_fixture_state(*, products=None, orders=None, reviews=None, questions=None, posts=None):
+    _seed_users()
+    _seed_categories()
+    _seed_products(products)
+    _seed_reviews(reviews)
+    _seed_questions(questions)
+    _seed_posts(posts)
+    _seed_banners()
+    _seed_recommendations()
+    _seed_orders(orders)
+
+
+class _OrmLocalStoreAdapter:
+    """測試期相容 adapter。
+
+    測試仍大量沿用 `local_store` 這個讀取介面名稱，
+    但實際資料都改由 ORM 與 service 組裝回傳。
+    """
+
+    @staticmethod
+    def clear_cache():
+        return None
+
+    @staticmethod
+    def get_user_by_username(username):
+        clean_username = str(username or "").strip().lower()
+        db_user = AppUserModel.objects.filter(username=clean_username).first()
+        if db_user is None:
+            return None
+        payload = auth_demo.get_user_by_username(clean_username) or {}
+        addresses = customer_center.list_addresses(clean_username)
+        default_address = next((item for item in addresses if item.get("is_default")), None)
+        payload["password_hash"] = db_user.password_hash
+        payload["addresses"] = addresses
+        payload["default_address_id"] = int(default_address["id"]) if default_address else None
+        payload["invoice_profile"] = customer_center.get_invoice_profile(clean_username)
+        payload["shipping_rules"] = auth_demo.get_seller_shipping_rules(clean_username)
+        return payload
+
+    @staticmethod
+    def get_product_by_slug(slug):
+        return product_management.get_product_for_admin(slug)
+
+    @staticmethod
+    def get_categories():
+        return product_management.list_product_categories(include_inactive=True)
+
+    @staticmethod
+    def get_order_by_id(order_id):
+        return orders_service._db_order_record_by_id(int(order_id))
+
+    @staticmethod
+    def get_orders():
+        return list(orders_service._merged_order_records())
+
+    @staticmethod
+    def save_orders(records):
+        for record in records:
+            orders_service._sync_order_record_to_orm(dict(record))
+
+    @staticmethod
+    def get_orders_by_username(username):
+        return orders_service.list_orders_for_seller(username)
+
+    @staticmethod
+    def get_reviews_by_product_id(product_id):
+        return review_service.list_reviews(int(product_id))
+
+    @staticmethod
+    def get_reviews():
+        return review_service.list_all_reviews()
+
+    @staticmethod
+    def get_questions_by_product_id(product_id):
+        return question_service.list_questions(int(product_id))
+
+    @staticmethod
+    def get_questions():
+        return question_service.list_all_questions()
+
+    @staticmethod
+    def get_post_by_id(post_id):
+        post = CommunityPostModel.objects.filter(id=int(post_id), is_visible=True).select_related("author").prefetch_related("replies__author").first()
+        if post is None:
+            return None
+        return community_service._db_post_to_record(post)
+
+    @staticmethod
+    def get_posts():
+        return community_service.list_all_posts()
+
+    @staticmethod
+    def get_newebpay_payment_logs():
+        return [
+            newebpay_payment_real_service._record_from_transaction(item)
+            for item in PaymentTransactionModel.objects.select_related("order", "order__buyer")
+            .prefetch_related("callback_logs")
+            .order_by("-updated_at", "-created_at", "-id")
+        ]
+
+
+local_store = _OrmLocalStoreAdapter()
+
+
 def build_extra_products():
     """建立額外商品 fixture。
 
@@ -746,7 +1078,7 @@ def build_attribute_products():
     ]
 
 
-class ProductFeatureTests(SimpleTestCase):
+class ProductFeatureTests(TestCase):
     """驗證商品、購物流程與 API 的主要整合行為。"""
     def setUp(self):
         """建立測試需要的 fixture 與 client。
@@ -772,6 +1104,7 @@ class ProductFeatureTests(SimpleTestCase):
         self.override = override_settings(BASE_DIR=base_dir)
         self.override.enable()
         local_store.clear_cache()
+        _seed_fixture_state()
         self.client = Client()
 
     def tearDown(self):
@@ -804,6 +1137,7 @@ class ProductFeatureTests(SimpleTestCase):
         data_dir = Path(self.temp_dir.name) / "data"
         self._write_json(data_dir / "products.json", products)
         local_store.clear_cache()
+        _seed_products(products)
 
     def _post_json(self, path, payload):
         """以 JSON request body 發出 POST 請求。
@@ -933,9 +1267,7 @@ class ProductFeatureTests(SimpleTestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["detail"], "Invalid username or password.")
 
-    def test_login_upgrades_legacy_plaintext_password(self):
-        self._login()
-
+    def test_seeded_user_password_is_hashed_in_orm(self):
         stored_user = local_store.get_user_by_username("alice")
         self.assertIn("password_hash", stored_user)
         self.assertNotIn("password", stored_user)
@@ -1604,7 +1936,7 @@ class ProductFeatureTests(SimpleTestCase):
             {
                 "id": 4,
                 "product_id": 1,
-                "author": "test@gmail.com",
+                "author": "test@example.com",
                 "rating": 3,
                 "title": "Email",
                 "body": "普通。",
@@ -3505,24 +3837,20 @@ class ProductFeatureTests(SimpleTestCase):
         self.assertIn("X-Request-ID", response)
         self.assertEqual(response.json()["status"], "ok")
 
-    def test_health_ready_endpoint_checks_cache_and_data_files(self):
+    def test_health_ready_endpoint_checks_cache_and_uploads_dir(self):
         response = self.client.get("/health/ready/")
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["status"], "ok")
         self.assertTrue(payload["checks"]["cache"]["ok"])
-        self.assertTrue(payload["checks"]["data_dir"]["ok"])
+        self.assertTrue(payload["checks"]["uploads_dir"]["ok"])
 
     def test_no_db_infrastructure_doc_page_loads(self):
         response = self.client.get("/docs/no-db-infrastructure/")
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "No-DB \u57fa\u790e\u8a2d\u65bd")
-        self.assertContains(response, "/health/live/")
-
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "No-DB \u57fa\u790e\u8a2d\u65bd")
+        self.assertContains(response, "\u57fa\u790e\u8a2d\u65bd\u8207\u904b\u884c\u8a2d\u5b9a")
         self.assertContains(response, "/health/live/")
 
     def test_newebpay_payment_api_returns_latest_sandbox_record(self):
@@ -4226,7 +4554,7 @@ class ProductFeatureTests(SimpleTestCase):
 
 
 class CustomerCenterOrmSyncTests(TestCase):
-    """驗證會員中心地址與發票更新時，JSON 與 ORM 會同步維護。"""
+    """驗證會員中心地址與發票資料可直接由 ORM 維護。"""
 
     def setUp(self):
         self.temp_dir = TemporaryDirectory()
@@ -4573,7 +4901,7 @@ class ProductManagementOrmSyncTests(TestCase):
 
 
 class OrdersOrmSyncTests(TestCase):
-    """驗證訂單建立與出貨更新會同步寫進 ORM，且讀取可在 JSON 缺席時回退到 DB。"""
+    """驗證訂單建立、出貨更新與讀取都可直接依賴 ORM。"""
 
     def setUp(self):
         self.temp_dir = TemporaryDirectory()
@@ -5055,6 +5383,8 @@ class AdminOrmSyncTests(TestCase):
         self.override = override_settings(BASE_DIR=base_dir)
         self.override.enable()
         local_store.clear_cache()
+        _seed_fixture_state()
+        self.assertIsNotNone(auth_demo.authenticate("alice", "demo123"))
         self.client = Client()
         for user in USERS_FIXTURE:
             auth_demo._sync_user_to_orm(dict(user))
@@ -5322,6 +5652,7 @@ class ContentOrmSyncTests(TestCase):
         self.override = override_settings(BASE_DIR=base_dir)
         self.override.enable()
         local_store.clear_cache()
+        _seed_fixture_state()
         self.client = Client()
 
         CategoryModel.objects.get_or_create(
@@ -5469,6 +5800,7 @@ class ProfileOrmSyncTests(TestCase):
         self.override = override_settings(BASE_DIR=base_dir)
         self.override.enable()
         local_store.clear_cache()
+        _seed_fixture_state()
         self.client = Client()
 
         CategoryModel.objects.get_or_create(
@@ -5597,6 +5929,7 @@ class CommunityOrmSyncTests(TestCase):
         self.override = override_settings(BASE_DIR=base_dir)
         self.override.enable()
         local_store.clear_cache()
+        _seed_fixture_state()
         self.client = Client()
         alice, _ = AppUserModel.objects.update_or_create(
             username="alice",
@@ -5709,6 +6042,7 @@ class BannerOrmSyncTests(TestCase):
         self.override = override_settings(BASE_DIR=base_dir)
         self.override.enable()
         local_store.clear_cache()
+        _seed_fixture_state()
         self.client = Client()
         self.storeteam = AppUserModel.objects.create(
             username="storeteam",
