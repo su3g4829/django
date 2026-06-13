@@ -86,6 +86,16 @@ export async function ensureCsrfCookie() {
 export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const method = (init.method ?? 'GET').toUpperCase()
   const headers = new Headers(init.headers)
+  const normalizedPath = (() => {
+    const trimmed = path.trim()
+    if (!trimmed) {
+      return ''
+    }
+    if (trimmed === '/') {
+      return ''
+    }
+    return trimmed.replace(/\/+$/, '')
+  })()
 
   if (!SAFE_METHODS.has(method)) {
     await ensureCsrfCookie()
@@ -96,7 +106,7 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
     headers.set('Content-Type', 'application/json')
   }
 
-  const response = await fetch(`/api/backend${path}`, {
+  const response = await fetch(`/api/backend${normalizedPath}`, {
     ...init,
     method,
     headers,
