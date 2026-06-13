@@ -154,7 +154,30 @@ export default function ProductDetailPage() {
     [product?.variants, selectedColor],
   )
 
-  const colorChoices = product?.color_options ?? []
+  const colorChoices = useMemo(() => {
+    const ordered: string[] = []
+    const seen = new Set<string>()
+
+    ;(product?.variants ?? []).forEach((variant) => {
+      const color = variant.attributes?.color?.trim() ?? ''
+      if (!color || seen.has(color)) {
+        return
+      }
+      seen.add(color)
+      ordered.push(color)
+    })
+
+    ;(product?.color_options ?? []).forEach((color) => {
+      const normalized = color.trim()
+      if (!normalized || seen.has(normalized)) {
+        return
+      }
+      seen.add(normalized)
+      ordered.push(normalized)
+    })
+
+    return ordered
+  }, [product?.color_options, product?.variants])
   // 規格文案會去除由系統自動管理的尺寸庫存片段，避免前端重複顯示。
   const detailSpecsText = useMemo(() => stripManagedSizeSpecs(product?.specs_text ?? ''), [product?.specs_text])
 
@@ -164,6 +187,19 @@ export default function ProductDetailPage() {
     }
 
     const normalizedSelectedColor = selectedColor.trim()
+    const imageMatchedByVariant =
+      product.variants?.find((variant) => {
+        const variantColor = variant.attributes?.color?.trim() ?? ''
+        if (variantColor !== normalizedSelectedColor) {
+          return false
+        }
+        return Boolean(variant.image || variant.image_path_snapshot)
+      }) ?? null
+
+    if (imageMatchedByVariant?.image || imageMatchedByVariant?.image_path_snapshot) {
+      return imageMatchedByVariant.image || imageMatchedByVariant.image_path_snapshot || ''
+    }
+
     const imageMatchedByName =
       product.images.find((image) => {
         try {

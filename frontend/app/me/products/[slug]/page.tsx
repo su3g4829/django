@@ -50,6 +50,7 @@ type ProductEditForm = {
   price: string
   compare_at_price: string
   baseColor: string
+  baseImageIndex: string
   stock: string
   brand: string
   category: string
@@ -69,6 +70,7 @@ const EMPTY_FORM: ProductEditForm = {
   price: '',
   compare_at_price: '',
   baseColor: '',
+  baseImageIndex: '',
   stock: '0',
   brand: '',
   category: '',
@@ -119,6 +121,7 @@ function buildFormFromProduct(product: EditableProduct): ProductEditForm {
     price: product.price != null ? String(product.price) : '',
     compare_at_price: product.compare_at_price != null ? String(product.compare_at_price) : '',
     baseColor: parsed.baseColor,
+    baseImageIndex: parsed.baseImageIndex,
     stock: String(product.stock ?? 0),
     brand: product.brand ?? '',
     category: product.category_slug ?? '',
@@ -490,9 +493,11 @@ export default function SellerProductEditPage() {
           form.name,
           form.price,
           form.compare_at_price,
+          form.baseImageIndex,
           form.baseColor,
         ),
       )
+      payload.append('primary_image_index', form.baseImageIndex)
       payload.append('status', targetStatus)
 
       existingImages.forEach((image) => {
@@ -584,6 +589,22 @@ export default function SellerProductEditPage() {
             onChange={(event) => setForm((current) => ({ ...current, baseColor: event.target.value }))}
             placeholder="例如：白"
           />
+        </label>
+        <label className="field">
+          <span>主商品對應圖片</span>
+          <select
+            disabled={!imageIndexOptions.length}
+            value={form.baseImageIndex}
+            onChange={(event) => setForm((current) => ({ ...current, baseImageIndex: event.target.value }))}
+          >
+            <option value="">未指定</option>
+            {imageIndexOptions.map((option) => (
+              <option key={option} value={option}>
+                第 {option} 張
+              </option>
+            ))}
+          </select>
+          <div className="muted">主商品卡片與沒有顏色變體時的預設圖片會優先使用這個編號。</div>
         </label>
         <label className="field">
           <span>總庫存</span>

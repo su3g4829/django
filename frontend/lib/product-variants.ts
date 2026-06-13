@@ -244,6 +244,7 @@ export function buildManagedVariantsText(
   productName: string,
   basePrice: string,
   baseCompareAtPrice: string,
+  baseImageIndex = '',
   baseColor = '',
 ) {
   const normalizedDefaultRows = sanitizeSizeRows(defaultSizeRows)
@@ -255,7 +256,7 @@ export function buildManagedVariantsText(
     const variantName = normalizedBaseColor ? `${productName}-${normalizedBaseColor}-${row.size}` : `${productName}-${row.size}`
     const sku = buildVariantSku(productName, normalizedBaseColor, row.size, index + 1)
     const stock = row.stock || '0'
-    lines.push(`${variantName}|${sku}|${basePrice}|${stock}|${normalizedBaseColor}|${row.size}||${baseCompareAtPrice}`)
+    lines.push(`${variantName}|${sku}|${basePrice}|${stock}|${normalizedBaseColor}|${row.size}|${baseImageIndex}|${baseCompareAtPrice}`)
   })
 
   normalizedColorGroups.forEach((group, groupIndex) => {
@@ -281,6 +282,7 @@ export function parseVariantConfigFromProduct(product: Product | null) {
     return {
       defaultSizeRows: [] as SizeStockRow[],
       colorGroups: [] as ColorVariantGroup[],
+      baseImageIndex: product?.primary_image_index != null ? String(product.primary_image_index) : '',
       baseColor: extractBaseColorFromSpecs(product?.specs_text ?? ''),
     }
   }
@@ -322,6 +324,12 @@ export function parseVariantConfigFromProduct(product: Product | null) {
         })),
       ),
       colorGroups: sanitizeColorVariantGroups(colorGroups),
+      baseImageIndex:
+        colorlessVariants[0]?.image_index != null
+          ? String(colorlessVariants[0].image_index)
+          : product.primary_image_index != null
+            ? String(product.primary_image_index)
+            : '',
       baseColor: extractBaseColorFromSpecs(product.specs_text ?? ''),
     }
   }
@@ -334,6 +342,12 @@ export function parseVariantConfigFromProduct(product: Product | null) {
       })),
     ),
     colorGroups: [] as ColorVariantGroup[],
+    baseImageIndex:
+      colorlessVariants[0]?.image_index != null
+        ? String(colorlessVariants[0].image_index)
+        : product.primary_image_index != null
+          ? String(product.primary_image_index)
+          : '',
     baseColor: extractBaseColorFromSpecs(product.specs_text ?? ''),
   }
 }

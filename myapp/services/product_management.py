@@ -183,6 +183,7 @@ def _product_variant_record_from_model(variant: ProductVariantModel) -> Dict[str
         "attributes": dict(variant.attributes or {}),
         "image": variant.image.file_path if variant.image_id and variant.image else "",
         "image_path_snapshot": variant.image_path_snapshot,
+        "image_index": variant.image.sort_order if variant.image_id and variant.image else None,
     }
 
 
@@ -235,6 +236,7 @@ def _product_record_from_model(product: ProductModel) -> Dict[str, Any]:
         "category": category_name,
         "category_slug": category_slug,
         "images": images,
+        "primary_image_index": product.primary_image_index,
         "variants": variants,
         "tags": tags,
         "shipping_profile": deepcopy(DEFAULT_PRODUCT_SHIPPING_PROFILE),
@@ -821,6 +823,14 @@ def _parse_optional_int(raw_value: str) -> int | None:
     return number
 
 
+def _normalize_primary_image_index(raw_value: Any, images: List[str]) -> int | None:
+    # 主商品預設圖索引必須落在目前圖片範圍內；超出時退回未指定，避免前台拿到壞索引。
+    number = _parse_optional_int(str(raw_value or ""))
+    if number is None:
+        return None
+    return number if 1 <= number <= len(images) else None
+
+
 def _parse_bool_flag(raw_value: Any, default: bool = False) -> bool:
     # HTML form checkbox / API bool 字串都在這裡轉成穩定布林值。
     """Normalize checkbox / form-data style boolean values."""
@@ -1330,6 +1340,7 @@ def _sync_product_record_to_orm(
         product.stock = int(product_record.get("stock") or 0)
         product.price_compare_enabled = bool(product_record.get("price_compare_enabled", False))
         product.price_compare_query = str(product_record.get("price_compare_query") or "").strip()
+        product.primary_image_index = _normalize_primary_image_index(product_record.get("primary_image_index"), list(product_record.get("images", [])))
         product.specs = dict(product_record.get("specs") or {})
         product.status = _canonical_status(product_record.get("status"))
         product.review_note = str(product_record.get("review_note") or "")
@@ -1345,7 +1356,7 @@ def _sync_product_record_to_orm(
                 file_path=str(image_path),
                 sort_order=index,
                 alt_text=product.name,
-                is_primary=index == 1,
+                is_primary=index == (product.primary_image_index or 1),
             )
             image_map[str(image_path)] = image
 
@@ -1842,7 +1853,9 @@ def prepare_product_for_display(product: Dict[str, Any]) -> Dict[str, Any]:
     item["filter_attributes"] = _extract_filter_attributes(item)
     item["color_options"] = item["filter_attributes"].get("color", [])
     item["size_options"] = item["filter_attributes"].get("size", [])
-    item["primary_image"] = item["images"][0] if item["images"] else ""
+    primary_image_index = _normalize_primary_image_index(item.get("primary_image_index"), item["images"])
+    item["primary_image_index"] = primary_image_index
+    item["primary_image"] = item["images"][primary_image_index - 1] if primary_image_index else (item["images"][0] if item["images"] else "")
     item["shipping_profile"] = _normalize_shipping_profile(item.get("shipping_profile"))
     item["price_compare_enabled"] = bool(item.get("price_compare_enabled", False))
     item["price_compare_query"] = str(item.get("price_compare_query") or "").strip()
@@ -1916,6 +1929,7 @@ def create_product(owner: Dict[str, str], form_data: Dict[str, str], uploaded_fi
         stock = _parse_stock(form_data.get("stock", "0"))
 
     images = _save_uploaded_images(slug, uploaded_files)
+    primary_image_index = _normalize_primary_image_index(form_data.get("primary_image_index", ""), images)
     variants = _bind_variant_images(variants, images)
 
     product = {
@@ -1933,6 +1947,7 @@ def create_product(owner: Dict[str, str], form_data: Dict[str, str], uploaded_fi
         "category_slug": category["slug"],
         "tags": _normalize_tags(form_data.get("tags", "")),
         "images": images,
+        "primary_image_index": primary_image_index,
         "specs": _normalize_specs(form_data.get("specs", "")),
         "stock": stock,
         "price_compare_enabled": False,
@@ -2004,6 +2019,7 @@ def update_product(owner: Dict[str, str], slug: str, form_data: Dict[str, str], 
     item["shipping_profile"] = _build_shipping_profile_from_form(form_data, item.get("shipping_profile"))
     item["status"] = _normalize_status(form_data.get("status", item.get("status", DRAFT_STATUS)), owner, item.get("status"))
     item["images"] = _merge_image_changes(item, form_data, uploaded_files, next_slug)
+    item["primary_image_index"] = _normalize_primary_image_index(form_data.get("primary_image_index", ""), item["images"])
     item["variants"] = _bind_variant_images(variants, item["images"])
     item["updated_at"] = timezone.now().isoformat()
     return prepare_product_for_display(_persist_product_record(item, previous_slug=previous_slug))

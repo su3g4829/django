@@ -51,6 +51,7 @@ type ProductDraftForm = {
   price: string
   compare_at_price: string
   baseColor: string
+  baseImageIndex: string
   stock: string
   brand: string
   category: string
@@ -71,6 +72,7 @@ const EMPTY_FORM: ProductDraftForm = {
   price: '',
   compare_at_price: '',
   baseColor: '',
+  baseImageIndex: '',
   stock: '0',
   brand: '',
   category: '',
@@ -388,9 +390,11 @@ export default function SellerProductCreatePage() {
           form.name,
           form.price,
           form.compare_at_price,
+          form.baseImageIndex,
           form.baseColor,
         ),
       )
+      payload.append('primary_image_index', form.baseImageIndex)
       payload.append('status', targetStatus)
 
       Array.from(files ?? []).forEach((file) => payload.append('images', file))
@@ -450,6 +454,22 @@ export default function SellerProductCreatePage() {
             placeholder="例如：白"
           />
           <div className="muted">當沒有顏色變體時，這會作為主要顏色顯示。</div>
+        </label>
+        <label className="field">
+          <span>主商品對應圖片</span>
+          <select
+            disabled={!imageIndexOptions.length}
+            value={form.baseImageIndex}
+            onChange={(event) => setForm((current) => ({ ...current, baseImageIndex: event.target.value }))}
+          >
+            <option value="">未指定</option>
+            {imageIndexOptions.map((option) => (
+              <option key={option} value={option}>
+                第 {option} 張
+              </option>
+            ))}
+          </select>
+          <div className="muted">主商品卡片與沒有顏色變體時的預設圖片會優先使用這個編號。</div>
         </label>
         <label className="field">
           <span>總庫存</span>

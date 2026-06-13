@@ -156,6 +156,8 @@ export type Product = {
   images?: string[]
   /** 首圖。 */
   primary_image?: string
+  /** 主商品預設對應的圖片編號，1 代表第一張。 */
+  primary_image_index?: number | null
   /** 總庫存；若商品完全以變體控庫，可能為 null。 */
   stock?: number | null
   price_compare_enabled?: boolean

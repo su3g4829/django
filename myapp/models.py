@@ -477,6 +477,7 @@ class Product(TimestampedModel):
     stock = models.IntegerField(default=0)
     price_compare_enabled = models.BooleanField(default=False)
     price_compare_query = models.CharField(max_length=255, blank=True)
+    primary_image_index = models.PositiveIntegerField(null=True, blank=True)
     # `JSONField` 用來保存彈性規格資料，例如材質、容量、尺寸摘要。
     specs = models.JSONField(default=dict, blank=True)
     # `choices=ProductStatus.choices` 代表這個欄位只能使用 ProductStatus 定義的列舉值。

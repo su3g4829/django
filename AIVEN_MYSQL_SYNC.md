@@ -1,206 +1,133 @@
 # Aiven MySQL 同步流程
 
-這份文件整理兩個完整方向：
+這份文件整理兩個方向：
 
 1. 本地 MySQL 上傳到 Aiven MySQL
 2. Aiven MySQL 下載回本地 MySQL
 
-適用環境以 Windows + PowerShell 為主，並補上你前面遇到的常見錯誤。
+適用環境以 Windows + PowerShell 為主。
 
-## 使用前提
+## 先決條件
 
-- 本機已安裝 MySQL Client 工具，至少要有 `mysqldump` 與 `mysql`
-- 已取得 Aiven MySQL 的連線資訊
+- 本機已安裝 MySQL Client，至少有 `mysqldump.exe` 與 `mysql.exe`
+- 已取得 Aiven MySQL 連線資訊：
   - Host
   - Port
   - Database name
   - User
   - Password
-- 已從 Aiven 下載 CA certificate，並存成實體檔案，例如：
+- 已下載 Aiven CA certificate，例如：
   - `C:\secrets\aiven-ca.pem`
 
-## 先確認工具可用
+## Windows PowerShell 重要注意
 
-在 PowerShell 執行：
-
-```powershell
-Get-Command mysqldump
-Get-Command mysql
-```
-
-如果找不到，代表 MySQL Client 沒裝好，或 MySQL 的 `bin` 目錄沒有加到 PATH。
-
-常見安裝路徑：
-
-```text
-C:\Program Files\MySQL\MySQL Server 8.0\bin
-```
-
-如果你不想改 PATH，也可以直接用完整路徑：
+先把 MySQL `bin` 加到目前 PowerShell 視窗的 `PATH`：
 
 ```powershell
-& "C:\Program Files\MySQL\MySQL Server 8.0\bin\mysqldump.exe" --version
-& "C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe" --version
+$env:Path += ";C:\Program Files\MySQL\MySQL Server 8.0\bin"
 ```
 
-## 重要原則
-
-- 匯入前先備份
-- 正式同步時，盡量讓來源與目標都用 `utf8mb4`
-- 不要把 `.sql` dump、`.pem` 憑證、密碼寫進 Git
-- 如果你要做的是「完整同步」，目標資料庫最好先清空或重建，避免舊資料殘留
-
----
-
-## 一、本地 MySQL 上傳到 Aiven MySQL
-
-### Step 1：先從本地匯出 SQL dump
-
-以下示範把本地 `store_db` 匯出成 `local_dump.sql`：
+確認可用：
 
 ```powershell
-mysqldump `
-  --default-character-set=utf8mb4 `
-  --single-transaction `
-  --set-gtid-purged=OFF `
-  -u root `
-  -p `
-  store_db > C:\Users\User\local_dump.sql
+mysqldump --version
+mysql --version
 ```
 
-如果 `mysqldump` 不在 PATH，改用完整路徑：
+重點：
+
+- 匯出 dump 時，不要在 PowerShell 直接用 `mysqldump ... > file.sql`
+- PowerShell 的 `>` 可能把檔案存成 UTF-16
+- MySQL 匯入 UTF-16 dump 時，常見錯誤是：
+  - `ERROR 1064 (42000) at line 1`
+- Windows 下建議改用 `cmd /c "mysqldump ... > file.sql"`
+- 不要混用 bash 風格的 `\"`
+- 不要用單引號包整串 `cmd /c` 命令
+
+## 一. 本地 MySQL 上傳到 Aiven MySQL
+
+### Step 1. 匯出本地 dump
+
+以下示範把本地 `store_db` 匯出成 `C:\Users\User\local_dump.sql`：
 
 ```powershell
-& "C:\Program Files\MySQL\MySQL Server 8.0\bin\mysqldump.exe" `
-  --default-character-set=utf8mb4 `
-  --single-transaction `
-  --set-gtid-purged=OFF `
-  -u root `
-  -p `
-  store_db > C:\Users\User\local_dump.sql
+cmd /c "mysqldump --default-character-set=utf8mb4 --single-transaction --set-gtid-purged=OFF -u root -p store_db > C:\Users\User\local_dump.sql"
 ```
 
-### Step 2：確認 Aiven 服務是可連線狀態
+執行後會要求你輸入本地 MySQL `root` 密碼。
 
-到 Aiven 後台確認：
+### Step 2. 確認 Aiven 服務有啟動
+
+在 Aiven 後台確認：
 
 - `Service status` 不是 `Powered off`
-- Host / Port / User / Database name 正確
+- Host / Port / User / Database name 都正確
 
-如果 Aiven 是 `Powered off`，你即使用正確 host 也可能連不上。
+如果 Aiven 是 `Powered off`，通常會出現：
 
-### Step 3：把 dump 匯入 Aiven
+- `Got error: 2005: Unknown MySQL server host ...`
 
-PowerShell 不能直接用 `<` 做這種 MySQL 匯入，所以請改用 `cmd /c`。
+### Step 3. 把本地 dump 匯入 Aiven
 
-```powershell
-cmd /c "mysql --default-character-set=utf8mb4 --binary-mode=1 ^
-  -h YOUR_AIVEN_HOST ^
-  -P YOUR_AIVEN_PORT ^
-  -u YOUR_AIVEN_USER ^
-  -p ^
-  --ssl-ca=C:\secrets\aiven-ca.pem ^
-  YOUR_AIVEN_DB < C:\Users\User\local_dump.sql"
-```
-
-實際範例格式：
+PowerShell 不能直接用 `<` 做這類匯入，所以改用 `cmd /c`：
 
 ```powershell
-cmd /c "mysql --default-character-set=utf8mb4 --binary-mode=1 ^
-  -h mysql-xxxx.aivencloud.com ^
-  -P 24254 ^
-  -u avnadmin ^
-  -p ^
-  --ssl-ca=C:\secrets\aiven-ca.pem ^
-  defaultdb < C:\Users\User\local_dump.sql"
+cmd /c "mysql --default-character-set=utf8mb4 --binary-mode=1 -h YOUR_AIVEN_HOST -P YOUR_AIVEN_PORT -u YOUR_AIVEN_USER -p --ssl-ca=C:\secrets\aiven-ca.pem YOUR_AIVEN_DB < C:\Users\User\local_dump.sql"
 ```
 
-### Step 4：驗證 Aiven 是否真的有資料
+如果你的 Aiven 需要更嚴格的 SSL 驗證，可改成：
 
 ```powershell
-mysql `
-  -h YOUR_AIVEN_HOST `
-  -P YOUR_AIVEN_PORT `
-  -u YOUR_AIVEN_USER `
-  -p `
-  --ssl-ca="C:\secrets\aiven-ca.pem" `
-  -D YOUR_AIVEN_DB `
-  -e "SHOW TABLES;"
+cmd /c "mysql --default-character-set=utf8mb4 --binary-mode=1 -h YOUR_AIVEN_HOST -P YOUR_AIVEN_PORT -u YOUR_AIVEN_USER -p --ssl-mode=VERIFY_CA --ssl-ca=C:\secrets\aiven-ca.pem YOUR_AIVEN_DB < C:\Users\User\local_dump.sql"
 ```
 
-再查幾個關鍵表：
+### Step 4. 驗證 Aiven 是否匯入成功
 
 ```powershell
-mysql `
-  -h YOUR_AIVEN_HOST `
-  -P YOUR_AIVEN_PORT `
-  -u YOUR_AIVEN_USER `
-  -p `
-  --ssl-ca="C:\secrets\aiven-ca.pem" `
-  -D YOUR_AIVEN_DB `
-  -e "SELECT COUNT(*) AS products_count FROM products;"
+mysql -h YOUR_AIVEN_HOST -P YOUR_AIVEN_PORT -u YOUR_AIVEN_USER -p --ssl-ca="C:\secrets\aiven-ca.pem" -D YOUR_AIVEN_DB -e "SHOW TABLES;"
 ```
 
----
-
-## 二、Aiven MySQL 下載回本地 MySQL
-
-### Step 1：先從 Aiven 匯出 dump
+也可以直接檢查筆數：
 
 ```powershell
-mysqldump `
-  --default-character-set=utf8mb4 `
-  --single-transaction `
-  --set-gtid-purged=OFF `
-  -h YOUR_AIVEN_HOST `
-  -P YOUR_AIVEN_PORT `
-  -u YOUR_AIVEN_USER `
-  -p `
-  --ssl-ca="C:\secrets\aiven-ca.pem" `
-  YOUR_AIVEN_DB > C:\Users\User\aiven_dump.sql
+mysql -h YOUR_AIVEN_HOST -P YOUR_AIVEN_PORT -u YOUR_AIVEN_USER -p --ssl-ca="C:\secrets\aiven-ca.pem" -D YOUR_AIVEN_DB -e "SELECT COUNT(*) AS products_count FROM products;"
 ```
 
-如果你的 MySQL Client 對 `--ssl-mode=VERIFY_CA` 有相容性問題，可以先只用 `--ssl-ca`。
+## 二. Aiven MySQL 下載回本地 MySQL
 
-### Step 2：先備份本地資料庫
-
-不要直接覆蓋現有本地資料庫，先備份：
+### Step 1. 從 Aiven 匯出 dump
 
 ```powershell
-mysqldump `
-  --default-character-set=utf8mb4 `
-  --single-transaction `
-  --set-gtid-purged=OFF `
-  -u root `
-  -p `
-  store_db > C:\Users\User\store_db_backup_before_restore.sql
+cmd /c "mysqldump --default-character-set=utf8mb4 --single-transaction --set-gtid-purged=OFF -h YOUR_AIVEN_HOST -P YOUR_AIVEN_PORT -u YOUR_AIVEN_USER -p --ssl-ca=C:\secrets\aiven-ca.pem YOUR_AIVEN_DB > C:\Users\User\aiven_dump.sql"
 ```
 
-### Step 3：建立同步用資料庫，或清空原本資料庫
+### Step 2. 先備份本地資料庫
 
-比較安全的做法是先匯入到另一個資料庫，例如：
+```powershell
+cmd /c "mysqldump --default-character-set=utf8mb4 --single-transaction --set-gtid-purged=OFF -u root -p store_db > C:\Users\User\store_db_backup_before_restore.sql"
+```
+
+### Step 3. 建立匯入用資料庫
+
+建議不要直接覆蓋現有本地資料庫，可以先建立一個新資料庫，例如 `store_db_aiven`：
 
 ```powershell
 mysql -u root -p -e "CREATE DATABASE IF NOT EXISTS store_db_aiven CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
 ```
 
-如果你確定要直接覆蓋原本本地資料庫，先自行確認沒有要保留的舊資料。
-
-### Step 4：把 Aiven dump 匯入本地
+### Step 4. 匯入 Aiven dump 到本地
 
 ```powershell
 cmd /c "mysql --default-character-set=utf8mb4 --binary-mode=1 -u root -p store_db_aiven < C:\Users\User\aiven_dump.sql"
 ```
 
-### Step 5：驗證匯入結果
-
-先看表有沒有進來：
+### Step 5. 驗證本地匯入結果
 
 ```powershell
 mysql -u root -p -D store_db_aiven -e "SHOW TABLES;"
 ```
 
-再看幾個重點筆數：
+檢查主要資料表筆數：
 
 ```powershell
 mysql -u root -p -D store_db_aiven -e "SELECT COUNT(*) AS users_count FROM users;"
@@ -208,17 +135,7 @@ mysql -u root -p -D store_db_aiven -e "SELECT COUNT(*) AS products_count FROM pr
 mysql -u root -p -D store_db_aiven -e "SELECT COUNT(*) AS orders_count FROM orders;"
 ```
 
-如果你要驗證 Django 是否有成功連到同步後的資料庫，改好 `store/.env` 後可執行：
-
-```powershell
-..\Scripts\python.exe manage.py shell -c "from myapp.models import AppUser, Product, Order, Banner; print('users=', AppUser.objects.count(), 'products=', Product.objects.count(), 'orders=', Order.objects.count(), 'banners=', Banner.objects.count())"
-```
-
----
-
-## 三、把同步後的本地資料庫接回 Django
-
-`store/.env` 應該指向你要使用的本地資料庫，例如：
+如果 Django 要改讀這份本地資料庫，`store/.env` 可以設成：
 
 ```env
 STORE_DB_BACKEND=mysql
@@ -229,73 +146,62 @@ MYSQL_HOST=127.0.0.1
 MYSQL_PORT=3306
 ```
 
-修改後重新啟動 Django：
+然後可用 ORM 快速驗證：
 
 ```powershell
-..\Scripts\python.exe manage.py runserver
+..\Scripts\python.exe manage.py shell -c "from myapp.models import AppUser, Product, Order, Banner; print('users=', AppUser.objects.count(), 'products=', Product.objects.count(), 'orders=', Order.objects.count(), 'banners=', Banner.objects.count())"
 ```
 
----
+## 三. 常見錯誤
 
-## 四、常見錯誤與處理方式
-
-### 1. `mysqldump : 無法辨識...`
+### 1. `mysqldump : 無法辨識 ...`
 
 原因：
 
 - MySQL Client 沒安裝
-- `mysqldump.exe` 不在 PATH
+- `mysqldump.exe` 不在 `PATH`
 
 處理：
 
-- 安裝 MySQL Server 或 MySQL Shell / Client
-- 或直接用完整路徑執行 `mysqldump.exe`
+```powershell
+$env:Path += ";C:\Program Files\MySQL\MySQL Server 8.0\bin"
+mysqldump --version
+mysql --version
+```
 
 ### 2. `Got error: 2005: Unknown MySQL server host`
 
 原因：
 
 - Host 打錯
-- DNS 還沒解析到
-- Aiven 服務已關閉
+- DNS 暫時解析不到
+- Aiven 服務處於 `Powered off`
 
 處理：
 
-- 重新比對 Aiven 的 Host
-- 確認不是多打空白或少字
-- 到 Aiven 後台確認 `Service status` 不是 `Powered off`
+- 重新核對 Aiven Host
+- 確認服務狀態是 `Running`
 
 ### 3. `Got error: 2026: SSL connection error`
 
 原因：
 
-- `--ssl-ca` 指到不存在的路徑
-- 你把 `C:\path\to\ca.pem` 當成真的路徑，卻沒有換成自己的檔案
-- 憑證檔內容不完整
+- `--ssl-ca` 路徑錯誤
+- CA certificate 內容或檔案不對
 
 處理：
-
-- 先從 Aiven 下載 CA certificate
-- 存成實體檔，例如 `C:\secrets\aiven-ca.pem`
-- 指令改成：
 
 ```powershell
 --ssl-ca="C:\secrets\aiven-ca.pem"
 ```
 
-注意：
-
-- `C:\path\to\ca.pem` 只是範例字串，不是把憑證內容直接貼進指令
-
 ### 4. PowerShell 出現 `'<' 運算子保留供未來使用`
 
 原因：
 
-- PowerShell 不支援像 cmd 那樣的 `< file.sql` 匯入語法
+- PowerShell 不支援像 `cmd` 那樣直接用 `< file.sql`
 
 處理：
-
-- 改用：
 
 ```powershell
 cmd /c "mysql ... < C:\Users\User\aiven_dump.sql"
@@ -305,8 +211,8 @@ cmd /c "mysql ... < C:\Users\User\aiven_dump.sql"
 
 原因：
 
-- 匯入的 SQL 內含 binary 資料
-- `mysql` 匯入時沒有開 `--binary-mode=1`
+- SQL dump 內含 binary 內容
+- 匯入時沒加 `--binary-mode=1`
 
 處理：
 
@@ -314,72 +220,58 @@ cmd /c "mysql ... < C:\Users\User\aiven_dump.sql"
 cmd /c "mysql --binary-mode=1 -u root -p store_db_aiven < C:\Users\User\aiven_dump.sql"
 ```
 
-### 6. `ERROR 1064 ... near '?-' at line 1`
+### 6. `ERROR 1064 (42000) at line 1`
 
-原因：
+最常見原因：
 
-- dump 檔案編碼被破壞
-- 檔案開啟後又另存成錯誤編碼
-- 原本匯出時就不是用 `utf8mb4`
+- dump 檔案被 PowerShell `>` 存成 UTF-16
+- 檔案編碼被破壞
+
+判斷方式：
+
+- 用十六進位看檔頭，如果開頭是 `FF FE`，通常就是 UTF-16
 
 處理：
 
-- 重新從來源資料庫匯出
-- 匯出時強制加上：
+- 不要直接在 PowerShell 用 `mysqldump ... > file.sql`
+- 重新用 `cmd /c "mysqldump ... > file.sql"` 匯出
+- 匯出時保留：
 
 ```powershell
 --default-character-set=utf8mb4
 ```
 
-- 不要用記事本亂開再另存
+### 7. 匯入後中文亂碼
 
-### 7. 中文內容變亂碼
+原因通常是：
 
-原因通常有兩種：
+1. 匯出不是 `utf8mb4`
+2. 匯入 client 編碼不一致
+3. 目標資料庫不是 `utf8mb4`
 
-1. 匯出時就已經錯
-2. 匯入時 client 編碼不一致
+處理：
 
-建議做法：
-
-- 匯出與匯入都明確指定 `utf8mb4`
-- 本地資料庫建立時也用 `utf8mb4`
-
-例如：
+- 匯出與匯入都使用 `--default-character-set=utf8mb4`
+- 目標資料庫建立時指定：
 
 ```powershell
 mysql -u root -p -e "CREATE DATABASE store_db_aiven CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
 ```
 
----
+## 四. 建議順序
 
-## 五、建議的安全同步順序
+如果你的目標是把本地修正後的資料同步到雲端：
 
-如果你要做正式同步，建議固定照這個順序：
+1. 本地先確認資料正確
+2. 備份本地資料庫
+3. 匯出本地 dump
+4. 匯入 Aiven
+5. 驗證 Aiven 資料是否正確
+6. 再進行 Django / Render 部署
 
-1. 先備份來源資料庫
-2. 先備份目標資料庫
-3. 匯出來源 dump
-4. 在測試用資料庫先匯入驗證
-5. 檢查表數、筆數、中文內容、圖片路徑
-6. 確定沒問題後，再覆蓋正式目標資料庫
-7. 最後用 Django 查 ORM 筆數做驗證
+如果你的目標是把線上資料拉回本地：
 
----
-
-## 六、這個專案的實務建議
-
-對你這個 Django 專案，目前比較合理的用法是：
-
-- 正式遠端資料：Aiven MySQL
-- 本地開發資料：本地 MySQL
-- 需要同步測試資料時：
-  - 從 Aiven dump 下來
-  - 匯入本地測試庫
-  - 修改 `store/.env` 指向該本地測試庫
-
-不要把同步流程做成：
-
-- 平常直接讓本地 Django 連正式 Aiven 當主要開發庫
-
-這樣風險太高，容易把測試資料寫進正式資料庫。
+1. 從 Aiven 匯出 dump
+2. 備份本地資料庫
+3. 匯入新資料庫
+4. 驗證後再切 Django 連線
