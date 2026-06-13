@@ -4826,6 +4826,29 @@ class AuthOrmSyncTests(TestCase):
         self.assertTrue(check_password("secret456", db_user.password_hash))
         self.assertIsNotNone(token.used_at)
 
+    def test_order_user_sync_does_not_downgrade_existing_seller_to_member(self):
+        db_user = AppUserModel.objects.create(
+            username="sellercase",
+            email="sellercase@example.com",
+            password_hash=make_password("demo123"),
+            display_name="Seller Case",
+            role="seller",
+            account_status="active",
+            seller_request_status="approved",
+        )
+
+        resolved = orders_service._ensure_db_user_from_username(
+            "sellercase",
+            display_name="Seller Case",
+            email="sellercase@example.com",
+            role="member",
+        )
+
+        self.assertEqual(resolved.id, db_user.id)
+        db_user.refresh_from_db()
+        self.assertEqual(db_user.role, "seller")
+        self.assertEqual(db_user.seller_request_status, "approved")
+
 
 class ProductManagementOrmSyncTests(TestCase):
     """驗證商品同步 ORM 時會重用既有品牌主檔。"""

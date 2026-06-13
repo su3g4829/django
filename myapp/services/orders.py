@@ -185,19 +185,39 @@ def _ensure_db_user_from_username(
         user = AppUserModel.objects.create(username=clean_username, **create_defaults)
     else:
         dirty = False
-        update_defaults = {
-            "email": email or f"{clean_username}@example.com",
-            "display_name": display_name or clean_username,
-            "role": role or "member",
-            "account_status": "active",
-            "seller_request_status": "none",
-        }
-        for field, value in update_defaults.items():
-            if value and getattr(user, field, "") != value:
-                setattr(user, field, value)
+        next_email = email or f"{clean_username}@example.com"
+        next_display_name = display_name or clean_username
+        next_role = (role or "").strip().lower()
+
+        if next_email and user.email != next_email:
+            user.email = next_email
+            dirty = True
+        if next_display_name and user.display_name != next_display_name:
+            user.display_name = next_display_name
+            dirty = True
+
+        # Preserve existing elevated permissions for real accounts.
+        # Order sync may see the same username as a buyer and would otherwise
+        # incorrectly downgrade a seller/admin back to `member`.
+        if next_role:
+            current_role = str(user.role or "").strip().lower()
+            if next_role in {"seller", "admin", "staff"} and current_role != next_role:
+                user.role = next_role
                 dirty = True
+            elif not current_role:
+                user.role = next_role
+                dirty = True
+
+        # Keep existing account/seller state unless the row is brand new.
+        if not str(user.account_status or "").strip():
+            user.account_status = "active"
+            dirty = True
+        if not str(user.seller_request_status or "").strip():
+            user.seller_request_status = "none"
+            dirty = True
+
         if dirty:
-            user.save(update_fields=[*update_defaults.keys(), "updated_at"])
+            user.save(update_fields=["email", "display_name", "role", "account_status", "seller_request_status", "updated_at"])
     return user
 
 
